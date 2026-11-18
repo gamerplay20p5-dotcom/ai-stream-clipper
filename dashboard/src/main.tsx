@@ -14,6 +14,7 @@ import Infrastructure from "./pages/Infrastructure";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
 import Settings from "./pages/Settings";
+import Storage from "./pages/Storage";
 import Streamers from "./pages/Streamers";
 
 const qc = new QueryClient({
@@ -54,6 +55,7 @@ function App() {
           <Route path="diagnostico" element={<Diagnostics />} />
           <Route path="avaliacao" element={<Evaluation />} />
           <Route path="diretor" element={<Director />} />
+          <Route path="armazenamento" element={<Storage />} />
           <Route path="publicacao" element={<Publishing />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

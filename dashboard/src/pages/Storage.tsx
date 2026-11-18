@@ -1,0 +1,191 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Heart, ShieldCheck, Undo2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { api } from "../api";
+import { ErrorNote, PageHeader } from "../components/ui";
+import { ago, bytes } from "../lib/format";
+
+type Overview = { bytes: Record<string, number>; clips: Record<string, number>; recovered_bytes: number;
+  disk: { total?: number; free?: number }; enabled: boolean; dry_run: boolean; enabled_at: string | null;
+  retro_authorized: boolean; quota_bytes: number };
+type Item = { clip_id: number; status: string; title: string; reason: string; score: number; bytes: number; files: number;
+  created_at: string; protected_by?: string[]; days?: number; note?: string };
+type Plan = { eligible: Item[]; protected: Item[]; waiting_period: Item[]; excluded_existing: number;
+  bytes: Record<string, number>; files: number; total_bytes: number; counts: Record<string, number> };
+type LogRow = { id: number; clip_id: number | null; action: string; reason: string; bytes_freed: number; dry_run: boolean; actor: string; at: string };
+type Settings = Record<string, unknown>;
+
+const FIELDS: [string, string, "num" | "bool", string?][] = [
+  ["cleanup_enabled", "Ativar limpeza automática", "bool"],
+  ["cleanup_dry_run", "Modo simulação (não apaga nada)", "bool"],
+  ["cleanup_keep_min_score", "Nota editorial mínima para manter um corte", "num"],
+  ["review_min_score", "Nota mínima para revisão humana", "num"],
+  ["autopublish_min_score", "Nota mínima para publicação automática", "num"],
+  ["cleanup_below_min_days", "Dias até descartar cortes abaixo da nota mínima", "num"],
+  ["cleanup_rejected_days", "Dias até descartar cortes rejeitados", "num"],
+  ["cleanup_quarantine_days", "Dias de quarentena (recuperável)", "num"],
+  ["cleanup_disposable_quota_gb", "Espaço máximo para arquivos descartáveis (GB)", "num"],
+  ["cleanup_purge_video", "Excluir o MP4 renderizado", "bool"],
+  ["cleanup_purge_source", "Excluir a mídia de origem", "bool"],
+  ["cleanup_purge_thumbnail", "Excluir a miniatura", "bool"],
+];
+
+export default function Storage() {
+  const qc = useQueryClient();
+  const ov = useQuery({ queryKey: ["storage-ov"], queryFn: () => api.get<Overview>("/api/storage/overview"), refetchInterval: 30_000 });
+  const [includeExisting, setIncludeExisting] = useState(false);
+  const sim = useQuery({ queryKey: ["storage-sim", includeExisting], queryFn: () => api.get<Plan>(`/api/storage/simulation?include_existing=${includeExisting}`) });
+  const logq = useQuery({ queryKey: ["storage-log"], queryFn: () => api.get<LogRow[]>("/api/storage/log?limit=50") });
+  const settings = useQuery({ queryKey: ["settings"], queryFn: () => api.get<Settings>("/api/settings") });
+  const [form, setForm] = useState<Settings | null>(null);
+  useEffect(() => { if (settings.data && !form) setForm(settings.data); }, [settings.data]);
+  const save = useMutation({
+    mutationFn: (b: Settings) => api.put<Settings>("/api/settings", b),
+    onSuccess: () => { qc.invalidateQueries(); },
+  });
+  const flag = useMutation({
+    mutationFn: ({ id, what, value }: { id: number; what: "protect" | "favorite"; value: boolean }) => api.post(`/api/storage/clips/${id}/${what}`, { value }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["storage-sim"] }),
+  });
+  const [phrase, setPhrase] = useState("");
+  const retro = useMutation({ mutationFn: () => api.post("/api/storage/authorize-retroactive", { confirm: phrase }), onSuccess: () => qc.invalidateQueries() });
+  const o = ov.data;
+  const s = sim.data;
+  const enabledNow = Boolean(form?.cleanup_enabled) && !form?.cleanup_dry_run;
+  return (
+    <div className="space-y-6">
+      <PageHeader title="Armazenamento" />
+      <ErrorNote error={ov.error ?? sim.error ?? save.error ?? flag.error ?? retro.error} />
+      {o && (
+        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <Card label="Cortes renderizados" value={bytes(o.bytes.video)} />
+          <Card label="Mídias de origem" value={bytes(o.bytes.source)} />
+          <Card label="Miniaturas" value={bytes(o.bytes.thumbnail)} />
+          <Card label="Dataset de avaliação" value={bytes(o.bytes.dataset)} />
+          <Card label="Em quarentena" value={bytes(o.bytes.quarantine)} hint={`${o.clips.quarantined ?? 0} cortes`} />
+          <Card label="Recuperado pela limpeza" value={bytes(o.recovered_bytes)} hint={`${o.clips.purged ?? 0} cortes descartados · ${o.clips.active ?? 0} preservados`} />
+        </div>
+      )}
+      {o && (
+        <p className={`rounded-md border px-3 py-2 text-sm ${o.enabled && !o.dry_run ? "border-tally/50 bg-tally-dim text-[#ffb4b6]" : "border-ok/40 bg-ok/10 text-ok"}`}>
+          {!o.enabled ? "Limpeza automática desligada: nada é apagado. A simulação abaixo mostra o que aconteceria."
+            : o.dry_run ? "Limpeza em modo simulação: as decisões são registradas, mas nenhum arquivo é apagado."
+              : "Limpeza ativa: cortes elegíveis vão para a quarentena e a mídia é apagada depois do prazo. Os registros e as avaliações são sempre mantidos."}
+          {o.disk.total ? ` Disco: ${bytes(o.disk.free ?? 0)} livres de ${bytes(o.disk.total)}.` : ""}
+        </p>
+      )}
+
+      <section className="rounded-lg border border-suite-line p-4">
+        <h2 className="mb-1 font-semibold">Simulação da limpeza</h2>
+        <p className="mb-3 text-xs text-ink-muted">Somente leitura. Mostra o que a limpeza faria com as configurações atuais. Ao mudar as configurações, salve e a simulação é atualizada.</p>
+        <label className="mb-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={includeExisting} onChange={(e) => setIncludeExisting(e.target.checked)} />
+          Incluir os cortes que já existiam (prévia; apagar esses cortes exige autorização retroativa)</label>
+        {s && (
+          <>
+            <div className="mb-3 grid gap-3 sm:grid-cols-4">
+              <Card label="Seriam removidos" value={`${s.counts.eligible} cortes`} hint={`${s.files} arquivos`} />
+              <Card label="Espaço recuperado" value={bytes(s.total_bytes)} hint={`vídeo ${bytes(s.bytes.video)} · origem ${bytes(s.bytes.source)} · miniaturas ${bytes(s.bytes.thumbnail)}`} />
+              <Card label="Protegidos" value={String(s.counts.protected)} hint={s.excluded_existing ? `${s.excluded_existing} por serem anteriores à ativação` : ""} />
+              <Card label="Aguardando o prazo" value={String(s.counts.waiting_period)} />
+            </div>
+            <ClipTable title="Seriam removidos (após a quarentena)" rows={s.eligible} onFlag={(id, what, v) => flag.mutate({ id, what, value: v })} />
+            <ClipTable title="Protegidos e o motivo" rows={s.protected} />
+          </>
+        )}
+      </section>
+
+      {form && (
+        <section className="rounded-lg border border-suite-line p-4">
+          <h2 className="mb-3 font-semibold">Configurações</h2>
+          <div className="grid gap-3 md:grid-cols-2">
+            {FIELDS.map(([k, label, kind]) => (
+              <label key={k} className="flex items-center justify-between gap-3 text-sm">
+                <span>{label}</span>
+                {kind === "bool"
+                  ? <input type="checkbox" checked={Boolean(form[k])} onChange={(e) => setForm({ ...form, [k]: e.target.checked })} />
+                  : <input className="field w-24" type="number" value={Number(form[k] ?? 0)} onChange={(e) => setForm({ ...form, [k]: Number(e.target.value) })} />}
+              </label>
+            ))}
+          </div>
+          {enabledNow && <p className="mt-3 text-xs text-[#ffb4b6]">Atenção: com a simulação desligada, cortes elegíveis entram em quarentena e a mídia é apagada depois de {String(form.cleanup_quarantine_days)} dias. Os cortes que já existiam continuam fora até você autorizar abaixo.</p>}
+          <button className="btn-take mt-3" disabled={save.isPending} onClick={() => save.mutate(form)}>Salvar configurações</button>
+        </section>
+      )}
+
+      {o && (
+        <section className="rounded-lg border border-suite-line p-4 text-sm">
+          <h2 className="mb-1 font-semibold">Limpeza retroativa</h2>
+          {o.retro_authorized ? <p className="text-ok">Autorizada: cortes antigos elegíveis também entram no ciclo.</p> : (
+            <>
+              <p className="mb-2 text-ink-muted">Os cortes existentes antes da ativação nunca são apagados sem sua autorização. Para incluí-los, revise a simulação com "Incluir os cortes que já existiam" marcado e digite <b>AUTORIZO A LIMPEZA RETROATIVA</b>.</p>
+              <div className="flex flex-wrap gap-2"><input className="field max-w-sm" value={phrase} onChange={(e) => setPhrase(e.target.value)} />
+                <button className="btn-danger" disabled={!phrase || retro.isPending} onClick={() => retro.mutate()}>Autorizar</button></div>
+            </>
+          )}
+        </section>
+      )}
+
+      <section className="rounded-lg border border-suite-line p-4">
+        <h2 className="mb-2 font-semibold">Histórico</h2>
+        <ul className="space-y-1 text-xs">
+          {(logq.data ?? []).length === 0 && <li className="text-ink-faint">Nenhuma ação registrada.</li>}
+          {(logq.data ?? []).map((r) => (
+            <li key={r.id}><span className="text-ink-muted">{ago(r.at)}</span> · {r.dry_run ? "simulação" : r.action}{r.clip_id ? <> · <Link className="text-take" to={`/cortes/${r.clip_id}?status=`}>#{r.clip_id}</Link></> : ""} · {r.reason}{r.bytes_freed ? ` · ${bytes(r.bytes_freed)}` : ""}</li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
+
+function Card({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-lg border border-suite-line p-3">
+      <p className="text-xs text-ink-muted">{label}</p>
+      <p className="display mt-1 text-lg">{value}</p>
+      {hint && <p className="mt-1 text-[11px] text-ink-faint">{hint}</p>}
+    </div>
+  );
+}
+
+function ClipTable({ title, rows, onFlag }: { title: string; rows: Item[]; onFlag?: (id: number, what: "protect" | "favorite", v: boolean) => void }) {
+  if (!rows.length) return null;
+  return (
+    <details className="mb-3">
+      <summary className="cursor-pointer text-sm font-medium">{title} ({rows.length})</summary>
+      <table className="mt-2 w-full text-sm">
+        <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Corte</th><th>Motivo</th><th>Nota</th><th>Tamanho</th><th /></tr></thead>
+        <tbody>{rows.slice(0, 150).map((r) => (
+          <tr key={r.clip_id} className="border-t border-suite-line/50">
+            <td className="py-1"><Link className="text-take hover:underline" to={`/cortes/${r.clip_id}?status=`}>#{r.clip_id}</Link> <span className="text-xs text-ink-muted">{r.title}</span></td>
+            <td className="text-xs">{r.protected_by ? r.protected_by.join("; ") : r.reason}</td>
+            <td>{r.score.toFixed(0)}</td><td>{bytes(r.bytes)}</td>
+            <td className="space-x-1 text-right">{onFlag && <>
+              <button className="btn-quiet px-2 py-1 text-xs" title="Proteger contra limpeza" onClick={() => onFlag(r.clip_id, "protect", true)}><ShieldCheck className="h-3 w-3" /></button>
+              <button className="btn-quiet px-2 py-1 text-xs" title="Favoritar" onClick={() => onFlag(r.clip_id, "favorite", true)}><Heart className="h-3 w-3" /></button>
+            </>}</td>
+          </tr>))}</tbody>
+      </table>
+    </details>
+  );
+}
+
+export function StorageFlags({ clipId, protectedFlag, favorite, lifecycle, purgeAfter }: { clipId: number; protectedFlag?: boolean; favorite?: boolean; lifecycle?: string; purgeAfter?: string | null }) {
+  const qc = useQueryClient();
+  const m = useMutation({
+    mutationFn: (p: { path: string; body?: unknown }) => api.post(`/api/storage/clips/${clipId}/${p.path}`, p.body ?? {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["clip", clipId] }),
+  });
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+      <button className={`btn-quiet px-2 py-1 ${protectedFlag ? "text-ok" : ""}`} onClick={() => m.mutate({ path: "protect", body: { value: !protectedFlag } })}>
+        <ShieldCheck className="h-3.5 w-3.5" /> {protectedFlag ? "Protegido" : "Proteger da limpeza"}</button>
+      <button className={`btn-quiet px-2 py-1 ${favorite ? "text-take" : ""}`} onClick={() => m.mutate({ path: "favorite", body: { value: !favorite } })}>
+        <Heart className="h-3.5 w-3.5" /> {favorite ? "Favorito" : "Favoritar"}</button>
+      {lifecycle === "quarantined" && <button className="btn-quiet px-2 py-1 text-take" onClick={() => m.mutate({ path: "restore" })}><Undo2 className="h-3.5 w-3.5" /> Restaurar (exclusão em {purgeAfter ? new Date(purgeAfter).toLocaleDateString("pt-BR") : "breve"})</button>}
+      {lifecycle === "purged" && <span className="text-ink-faint">Mídia removida pela limpeza (registro e avaliações preservados)</span>}
+      <ErrorNote error={m.error} />
+    </div>
+  );
+}

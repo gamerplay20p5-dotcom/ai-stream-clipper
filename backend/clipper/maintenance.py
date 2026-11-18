@@ -48,16 +48,13 @@ def retention() -> dict:
     with session_scope() as db:
         s = load_ai_settings(db)
         now = utcnow()
-        rules = [("rejected", s.retention_rejected_days), ("ready", s.retention_unreviewed_days),
-                 ("failed", s.retention_unreviewed_days), ("approved", s.retention_approved_days)]
+        # Phase 5: clips are never deleted by age any more (history and labels are kept); their media
+        # follows the score-based lifecycle (quarantine -> purge), disabled + dry run by default.
         doomed: list[int] = []
-        for status, days in rules:
-            if days <= 0:
-                continue
-            cutoff = now - timedelta(days=days)
-            for c in db.scalars(select(Clip).where(Clip.status == status, Clip.updated_at < cutoff)):
-                doomed.append(c.id)
-                db.delete(c)
+        from . import storage_lifecycle
+
+        lc = storage_lifecycle.run(db, s)
+        removed["lifecycle"] = lc
         # raw analysis data of sessions that ended more than 30 days ago
         old = [sid for (sid,) in db.execute(select(StreamSession.id).where(
             StreamSession.status != "live", StreamSession.ended_at < now - timedelta(days=30)))]

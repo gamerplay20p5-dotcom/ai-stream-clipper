@@ -82,6 +82,19 @@ class AISettings(BaseModel):
     vision_stale_minutes: int = Field(20, ge=2, le=240)
     # Phase 3 - learned ranker: off | shadow (computed and shown, never decides) | active
     ranker_mode: Literal["off", "shadow", "active"] = "shadow"
+    # Phase 5 - score-based storage lifecycle (media only; rows and labels are always kept)
+    cleanup_enabled: bool = False
+    cleanup_dry_run: bool = True
+    cleanup_keep_min_score: float = Field(50.0, ge=0, le=100, description="editorial score to keep a clip's media")
+    review_min_score: float = Field(55.0, ge=0, le=100, description="score to send a clip to human review")
+    autopublish_min_score: float = Field(75.0, ge=0, le=100, description="score to consider automatic publishing")
+    cleanup_below_min_days: int = Field(3, ge=0, le=365)
+    cleanup_rejected_days: int = Field(7, ge=0, le=365)
+    cleanup_quarantine_days: int = Field(7, ge=1, le=365)
+    cleanup_disposable_quota_gb: float = Field(50.0, ge=1, le=5000)
+    cleanup_purge_video: bool = True
+    cleanup_purge_source: bool = True
+    cleanup_purge_thumbnail: bool = True
     # auto-publish is a future module: always disabled in this build
     auto_publish: Literal[False] = False
     weights: ScoreWeights = Field(default_factory=ScoreWeights)
