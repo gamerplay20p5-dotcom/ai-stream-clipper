@@ -104,13 +104,13 @@ Tempos medidos por etapa (i5-12450H):
 - A análise de chat continua não implementada (critério "chat" = n/d).
 - O rastreamento de rosto usa Haar (OpenCV 4). Rosto de perfil ou webcam muito pequena podem falhar; o enquadramento pode ser forçado por streamer ou no editor.
 
-## Pendente em produção
+## Situação em produção (v0.2.8)
 
-| Item | Como validar |
+| Item | Situação |
 |---|---|
-| Latência, VRAM e estabilidade do Qwen3-VL-2B na **Arc A750** (201 e 210) | `validate-gpu.sh --vlm qwen3-vl-2b-int4` |
-| Qwen3-VL-4B INT4 cabe e compensa na A750? | `validate-gpu.sh --vlm qwen3-vl-4b-int4` |
-| Distribuição entre 201 e 210 (preferência por latência) com carga real | dois workers de visão online e vários cortes na fila; ver Infraestrutura → Modelos de IA |
-| Whisper `small` no 206 (padrão de produção) acompanha a captura em tempo real | página Infraestrutura: análise "em dia" |
-| Imagens Docker da Fase 2 (OpenVINO GenAI 2026.2.0 sobre a imagem base) | `deploy.sh` + `download-models.sh` |
-| Qualidade com lives reais de GTA | anotar trechos reais e rodar os benchmarks |
+| Latência, VRAM e estabilidade do Qwen3-VL-2B na **Arc A750** (201 e 210) | **Validado**: média de 9,4 s (210) e 11,1 s (201), VRAM 2,42 GB, 0 falhas em 20 chamadas. Ver [VISAO_GPU.md](VISAO_GPU.md) |
+| Qwen3-VL-4B INT4 cabe e compensa na A750? | Não testado. O 2B já atende à latência; o 4B fica como opção se a qualidade em lives reais for insuficiente |
+| Distribuição entre 201 e 210 com carga real | **Validado**: 3 análises simultâneas foram divididas entre as duas GPUs, sem fallback |
+| Whisper `small` no 206 acompanha a captura em tempo real | **Validado** na live: 549 análises de áudio e 544 pontuações concluídas, com a fila em dia |
+| Imagens Docker da Fase 2 | **Em produção** (`ai-stream-clipper` e `ai-stream-clipper-vision`, com tags por versão para rollback) |
+| Qualidade com lives reais de GTA | Parcial: cortes reais com resumos coerentes ("Jogador sai de uma área de floresta…"). Falta anotar trechos reais para medir |

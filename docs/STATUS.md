@@ -75,3 +75,33 @@ Veja [FASE2.md](FASE2.md). Resumo:
 - **Benchmark:** falsos positivos de 2 para 0; contexto da perseguição de 68% para 100%; nenhuma regressão no caso da Fase 1.
 - Corrigida uma condição de corrida da Fase 1 (cortes duplicados com dois jobs de pontuação em paralelo).
 - Os itens pendentes da Fase 1 (PostgreSQL real, Docker, Twitch real) continuam pendentes.
+
+---
+
+## Atualização: produção distribuída (v0.2.8, 2026-11-18)
+
+**Em produção:**
+- 210: `asc-postgres`, `asc-api` (HTTPS `https://192.168.1.210:8780`), `asc-worker-scoring` e `asc-worker-vision` (Arc A750).
+- 206: captura, áudio (Whisper small e YAMNet) e renderização.
+- 201: `asc-worker-vision` (Arc A750).
+
+Todos os contêineres são operados pelo `asc-ctl`, sem grupo docker permanente. Os outros projetos dos três servidores foram conferidos contra a linha de base (201: 6/6, 206: 21/21, 210: 8/8 em execução, sem diferenças).
+
+**Por que a live não gerava cortes (resolvido):** o worker de pontuação nunca chegou a rodar. Primeiro falhou por um volume criado com dono root (corrigido na 0.2.3) e depois ficou parado à espera da transferência da imagem, com 46 jobs `score` na fila. Com a 0.2.3 ele processou a fila e a live passou a gerar cortes automaticamente (cortes 5, 6 e 7 em GTA RP real). Em nenhum momento a nota mínima foi reduzida.
+
+**Novidades de 0.2.4 a 0.2.8:**
+- Página **Diagnóstico**, com explicações baseadas nos dados reais e "repetir falhas" idempotente.
+- **Corte de teste manual** (selo TESTE MANUAL, fora das métricas, no máximo 2 em processamento).
+- Transferência direta entre servidores com chave exclusiva e restrita (`asc-send`/`asc-receive`).
+- Fontes `file://` distribuídas.
+- VLM com decodificação restrita por gramática e recuperação sintática.
+
+Benchmarks na Arc em [VISAO_GPU.md](VISAO_GPU.md).
+
+**Testes:** 93 aprovados (`-m "not models"`) e 3 com modelos reais. Corte de teste ponta a ponta em produção: 1080×1920 H.264/AAC, prévia com HTTP 206 e download.
+
+**Pendências:**
+1. O administrador reinstala o asc-ctl 1.0.1 e reemite a CA (ver IMPLANTACAO.md). Até lá, clientes Python 3.13+ precisam relaxar `VERIFY_X509_STRICT`.
+2. Remover `asc` do grupo docker no 201 (`sudo gpasswd -d asc docker`); o asc-ctl já cobre a operação.
+3. Anotar trechos reais de GTA RP para medir a qualidade da visão.
+4. Twitch real, coleta de chat e OIDC continuam como na lista acima.

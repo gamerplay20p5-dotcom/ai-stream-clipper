@@ -1,0 +1,47 @@
+{
+  "analyses": 3,
+  "wall_s": 68,
+  "per_clip": {
+    "8": {
+      "t_done_s": 40,
+      "status": "ready",
+      "worker": "210-vision-gpu",
+      "provider": "openvino-vlm:qwen3-vl-2b-int4@GPU",
+      "fallback": "",
+      "vlm_s": 12.94,
+      "total_s": 21.77
+    },
+    "10": {
+      "t_done_s": 51,
+      "status": "ready",
+      "worker": "201-vision-gpu",
+      "provider": "openvino-vlm:qwen3-vl-2b-int4@GPU",
+      "fallback": "",
+      "vlm_s": 23.33,
+      "total_s": 31.33
+    },
+    "9": {
+      "t_done_s": 68,
+      "status": "ready",
+      "worker": "210-vision-gpu",
+      "provider": "openvino-vlm:qwen3-vl-2b-int4@GPU",
+      "fallback": "",
+      "vlm_s": 14.23,
+      "total_s": 19.29
+    }
+  },
+  "hosts": {
+    "210": {
+      "base_load": 0.18,
+      "max_load": 0.91,
+      "base_mem_mb": 7223.0,
+      "max_mem_mb": 8027.0
+    },
+    "201": {
+      "base_load": 0.79,
+      "max_load": 3.38,
+      "base_mem_mb": 8221.0,
+      "max_mem_mb": 9010.0
+    }
+  }
+}

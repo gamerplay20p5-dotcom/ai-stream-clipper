@@ -9,6 +9,7 @@ not correspond to the frames that were actually shown are discarded.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 
@@ -116,6 +117,26 @@ def _num(v, lo=0.0, hi=10.0, default=0.0) -> float:
         return default
 
 
+_SENT = re.compile(r"(?<=[.!?])\s+")
+
+
+def dedupe_sentences(text: str) -> str:
+    """Drop sentences the model repeated (and a trailing fragment that only restarts an
+    earlier sentence). Only removes the model's own repeated words; nothing is rewritten."""
+    text = " ".join(str(text or "").split())
+    kept: list[str] = []
+    seen: set[str] = set()
+    for sent in _SENT.split(text):
+        key = sent.lower().rstrip(".!?,; ")
+        if not key or key in seen:
+            continue
+        if not sent.endswith((".", "!", "?")) and kept and any(k.startswith(key) for k in seen):
+            continue  # cut-off restart of a sentence already kept
+        seen.add(key)
+        kept.append(sent)
+    return " ".join(kept).rstrip(",; ")
+
+
 def parse_answer(obj: dict, frame_times: list[float], span: float) -> tuple[dict, list[str]]:
     """Map the raw JSON to VisualAnalysis fields, dropping anything not grounded in the
     timestamps that were shown. Returns ``(fields, notes)``."""
@@ -150,8 +171,8 @@ def parse_answer(obj: dict, frame_times: list[float], span: float) -> tuple[dict
     preserve = (ps, pe) if ps is not None and pe is not None and pe > ps else None
     rl = obj.get("reaction_linked")
     return {
-        "summary": str(obj.get("summary") or "")[:600],
-        "key_event": str(obj.get("key_event") or "")[:300],
+        "summary": dedupe_sentences(obj.get("summary"))[:600],
+        "key_event": dedupe_sentences(obj.get("key_event"))[:300],
         "funny": _num(obj.get("funny")), "unexpected": _num(obj.get("unexpected")),
         "important": _num(obj.get("important")), "action": _num(obj.get("action")),
         "events": _dedupe_events(events),

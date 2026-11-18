@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from clipper.ai.jsonparse import extract_json, salvage_truncated
 from clipper.ai.manager import ModelManager
-from clipper.ai.vlm import ANSWER_REGEX, FrameInput, VLMAnalyzer
+from clipper.ai.vlm import ANSWER_REGEX, FrameInput, VLMAnalyzer, dedupe_sentences
 
 import re
 
@@ -58,3 +58,11 @@ def test_answer_grammar_bounds_texts_and_requires_scores():
     assert not re.fullmatch(ANSWER_REGEX, ok.replace("um carro é atingido", "e o carro " * 25))  # > 200 chars
     five = ", ".join(['{"t": 1.0, "label": "x", "importance": 1}'] * 5)
     assert not re.fullmatch(ANSWER_REGEX, ok.replace('{"t": 12.0, "label": "batida forte", "importance": 9}', five))
+
+
+def test_dedupe_sentences_removes_only_model_repetition():
+    loop = ("Um carro é acidentado, o grupo se esconde. O grupo se esconde e evita a polícia. "
+            "O grupo se esconde e evita a polícia. O grupo se esconde e evita,")
+    assert dedupe_sentences(loop) == "Um carro é acidentado, o grupo se esconde. O grupo se esconde e evita a polícia."
+    assert dedupe_sentences("Frase única sem ponto") == "Frase única sem ponto"
+    assert dedupe_sentences(None) == ""

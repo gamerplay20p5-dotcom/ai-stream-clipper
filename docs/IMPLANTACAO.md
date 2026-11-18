@@ -65,6 +65,40 @@ sudo asc-ctl compose up --gpu                         # 210; no 201: sudo asc-ct
 - `sudo asc-ctl compose ps` e `sudo asc-ctl compose logs <serviço> --tail 200`.
 - No painel, a página **Infraestrutura** mostra workers, filas, modelos e latências.
 
+## Transferência direta de imagens (asc-send / asc-receive)
+
+As imagens são compiladas no 206 e enviadas direto ao 210 e ao 201, sem passar pelo notebook (de 5 a 13 s por imagem na rede local):
+
+```bash
+sudo asc-ctl image-save app <tag> && sudo asc-ctl image-save vision <tag>
+~/bin/asc-send 210 ~/images/ai-stream-clipper_<tag>.tar.gz
+~/bin/asc-send 210 ~/images/ai-stream-clipper-vision_<tag>.tar.gz
+~/bin/asc-send 201 ~/images/ai-stream-clipper-vision_<tag>.tar.gz
+```
+
+A chave `~/.ssh/id_ed25519_transfer` só é aceita no destino com `command="asc-receive"` e `from=` restrito ao 206. O `asc-receive` aceita apenas nomes `ai-stream-clipper(-vision)_<tag>.tar.gz`, grava só em `~/images`, confere o SHA-256 e limita o tamanho a 4 GB. Não há shell, root nem acesso a outros diretórios.
+
+## Corte de teste e diagnóstico
+
+- **Gerar corte de teste** (ícone de frasco na linha do streamer): últimos 30, 60 ou 90 s, ou um intervalo do buffer. Passa pelo pipeline real (visão, diretor e renderização) sem depender da nota, aparece com o selo **TESTE MANUAL** e fica fora das métricas. No máximo 2 testes em processamento ao mesmo tempo; o intervalo é validado contra o buffer.
+- **Diagnóstico** (menu lateral): etapa e estado por streamer, com explicação baseada nos dados reais (fila, rejeições do scoring por motivo, melhor nota rejeitada, fallback da visão), e o botão **Repetir falhas**, que é idempotente.
+
+## Reemissão da CA (asc-ctl 1.0.1)
+
+A CA emitida pelo asc-ctl 1.0.0 não tem `keyUsage` e é recusada por verificadores estritos (Python 3.13+, alguns navegadores). Para corrigir, como administrador:
+
+```bash
+# nos 3 servidores (atualiza o asc-ctl para 1.0.1)
+sudo bash /home/asc/ai-stream-clipper/infrastructure/admin/install-asc-ctl.sh <201|206|210> <sha256 do asc-ctl>
+# no 210: nova CA e novo certificado do servidor
+sudo asc-ctl tls-init --new-ca
+# copiar /etc/asc/tls/ca.crt do 210 para ~/asc-ca.crt no 206 e no 201, e em cada um:
+sudo asc-ctl tls-install-ca ~/asc-ca.crt
+# reiniciar os contêineres asc nos 3: sudo asc-ctl compose restart   (210: sudo asc-ctl compose restart --gpu)
+```
+
+Depois, importe o novo `ca.crt` no navegador (Windows: `certutil -user -addstore Root asc-ca.crt`).
+
 ## Atualização
 
 1. Copiar o novo código para `~/ai-stream-clipper` e compilar e distribuir as imagens com a nova tag.

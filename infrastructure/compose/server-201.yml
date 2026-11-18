@@ -7,7 +7,7 @@ name: asc
 
 services:
   worker-vision:
-    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.7}
+    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.8}
     container_name: asc-worker-vision
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
