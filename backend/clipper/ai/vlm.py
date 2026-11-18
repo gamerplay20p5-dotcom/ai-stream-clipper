@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .jsonparse import extract_json
+from .jsonparse import extract_json, salvage_truncated
 from .manager import ModelManager, ModelUnavailable
 from .registry import MODELS
 from .schemas import NarrativeArc, VisualAnalysis, VisualEvent
@@ -189,12 +189,20 @@ class VLMAnalyzer:
                                transcript=_fmt_transcript(words), audio=", ".join(audio_cues) or "nenhum destaque")
         tensors = [_to_tensor(f.image, self.spec.image_side) for f in chosen]
         t0 = time.monotonic()
+        salvaged = False
         try:
             raw = self._generate(pipe, prompt, tensors)
             obj = extract_json(raw)
             if obj is None or not _has_core(obj):
                 raw2 = self._generate(pipe, prompt + "\n\n" + REPAIR, tensors)
                 obj = extract_json(raw2) or obj
+                if obj is None or not _has_core(obj):
+                    # both answers hit the token limit (small VLMs loop on event lists)
+                    for cand in (raw, raw2):
+                        rec = salvage_truncated(cand)
+                        if rec is not None and _has_core(rec):
+                            obj, salvaged = rec, True
+                            break
                 raw = raw + "\n---retry---\n" + raw2
         except Exception as exc:
             st.record(time.monotonic() - t0, ok=False)
@@ -202,11 +210,14 @@ class VLMAnalyzer:
         latency = time.monotonic() - t0
         if obj is None:
             st.record(latency, ok=False)
-            raise ModelUnavailable(f"model did not return valid JSON: {raw[:200]!r}")
+            raise ModelUnavailable(f"model did not return valid JSON ({len(raw)} chars): "
+                                   f"{raw[:160]!r} ... {raw[-160:]!r}")
         if not _has_core(obj):
             st.record(latency, ok=False)
             raise ModelUnavailable(f"incomplete model answer: {raw[-300:]!r}")
         fields, notes = parse_answer(obj, times, span)
+        if salvaged:
+            notes.append("resposta do modelo truncada no limite de tokens; usados apenas os campos completos")
         st.record(latency, ok=True)
         return VisualAnalysis(
             provider=f"openvino-vlm:{self.key}@{device}", model=self.key, device=device,
