@@ -78,7 +78,7 @@ Veja [FASE2.md](FASE2.md). Resumo:
 
 ---
 
-## Atualização: produção distribuída (v0.2.8, 2026-11-18)
+## Atualização: produção distribuída (v0.2.9, 2026-11-18)
 
 **Em produção:**
 - 210: `asc-postgres`, `asc-api` (HTTPS `https://192.168.1.210:8780`), `asc-worker-scoring` e `asc-worker-vision` (Arc A750).
@@ -89,7 +89,7 @@ Todos os contêineres são operados pelo `asc-ctl`, sem grupo docker permanente.
 
 **Por que a live não gerava cortes (resolvido):** o worker de pontuação nunca chegou a rodar. Primeiro falhou por um volume criado com dono root (corrigido na 0.2.3) e depois ficou parado à espera da transferência da imagem, com 46 jobs `score` na fila. Com a 0.2.3 ele processou a fila e a live passou a gerar cortes automaticamente (cortes 5, 6 e 7 em GTA RP real). Em nenhum momento a nota mínima foi reduzida.
 
-**Novidades de 0.2.4 a 0.2.8:**
+**Novidades de 0.2.4 a 0.2.9:**
 - Página **Diagnóstico**, com explicações baseadas nos dados reais e "repetir falhas" idempotente.
 - **Corte de teste manual** (selo TESTE MANUAL, fora das métricas, no máximo 2 em processamento).
 - Transferência direta entre servidores com chave exclusiva e restrita (`asc-send`/`asc-receive`).
@@ -98,7 +98,7 @@ Todos os contêineres são operados pelo `asc-ctl`, sem grupo docker permanente.
 
 Benchmarks na Arc em [VISAO_GPU.md](VISAO_GPU.md).
 
-**Testes:** 93 aprovados (`-m "not models"`) e 3 com modelos reais. Corte de teste ponta a ponta em produção: 1080×1920 H.264/AAC, prévia com HTTP 206 e download.
+**Testes:** 94 aprovados (`-m "not models"`) e 3 com modelos reais. Corte de teste ponta a ponta em produção: 1080×1920 H.264/AAC, prévia com HTTP 206 e download.
 
 **Pendências:**
 1. O administrador reinstala o asc-ctl 1.0.1 e reemite a CA (ver IMPLANTACAO.md). Até lá, clientes Python 3.13+ precisam relaxar `VERIFY_X509_STRICT`.

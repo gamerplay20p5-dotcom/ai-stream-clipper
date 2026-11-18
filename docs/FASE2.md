@@ -104,7 +104,7 @@ Tempos medidos por etapa (i5-12450H):
 - A análise de chat continua não implementada (critério "chat" = n/d).
 - O rastreamento de rosto usa Haar (OpenCV 4). Rosto de perfil ou webcam muito pequena podem falhar; o enquadramento pode ser forçado por streamer ou no editor.
 
-## Situação em produção (v0.2.8)
+## Situação em produção (v0.2.9)
 
 | Item | Situação |
 |---|---|

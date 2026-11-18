@@ -49,9 +49,10 @@ _N10 = r"(10|[0-9])(\.[0-9])?"
 _T = r"[0-9]{1,3}(\.[0-9]{1,2})?"
 _TN = rf"({_T}|null)"
 _B = "(true|false)"
-_EV = rf'\{{"t": {_T}, "label": "{_CH}{{1,80}}", "importance": {_N10}\}}'
+MAX_SUMMARY, MAX_KEY_EVENT, MAX_LABEL = 300, 160, 140  # well above what the prompt asks for
+_EV = rf'\{{"t": {_T}, "label": "{_CH}{{1,{MAX_LABEL}}}", "importance": {_N10}\}}'
 ANSWER_REGEX = (
-    rf'\{{"summary": "{_CH}{{1,200}}", "key_event": "{_CH}{{1,100}}", '
+    rf'\{{"summary": "{_CH}{{1,{MAX_SUMMARY}}}", "key_event": "{_CH}{{1,{MAX_KEY_EVENT}}}", '
     rf'"funny": {_N10}, "unexpected": {_N10}, "important": {_N10}, "action": {_N10}, '
     rf'"events": \[({_EV}(, {_EV}){{0,3}})?\], '
     rf'"setup_start": {_TN}, "climax": {_TN}, "resolution_end": {_TN}, "complete": {_B}, '
@@ -137,6 +138,13 @@ def dedupe_sentences(text: str) -> str:
     return " ".join(kept).rstrip(",; ")
 
 
+def drop_cut_word(text: str, cap: int) -> str:
+    """A text that reached the grammar's length cap may end in a word cut in half: drop it."""
+    if len(text) < cap or " " not in text:
+        return text
+    return text.rsplit(" ", 1)[0].rstrip(",;: ")
+
+
 def parse_answer(obj: dict, frame_times: list[float], span: float) -> tuple[dict, list[str]]:
     """Map the raw JSON to VisualAnalysis fields, dropping anything not grounded in the
     timestamps that were shown. Returns ``(fields, notes)``."""
@@ -157,7 +165,7 @@ def parse_answer(obj: dict, frame_times: list[float], span: float) -> tuple[dict
         if not isinstance(e, dict):
             continue
         t = ts(e.get("t"))
-        label = str(e.get("label") or "").strip()
+        label = drop_cut_word(str(e.get("label") or "").strip(), MAX_LABEL)
         if t is None or not label:
             notes.append(f"evento descartado (fora dos quadros analisados): {str(e)[:80]}")
             continue
@@ -171,8 +179,8 @@ def parse_answer(obj: dict, frame_times: list[float], span: float) -> tuple[dict
     preserve = (ps, pe) if ps is not None and pe is not None and pe > ps else None
     rl = obj.get("reaction_linked")
     return {
-        "summary": dedupe_sentences(obj.get("summary"))[:600],
-        "key_event": dedupe_sentences(obj.get("key_event"))[:300],
+        "summary": dedupe_sentences(drop_cut_word(str(obj.get("summary") or ""), MAX_SUMMARY))[:600],
+        "key_event": dedupe_sentences(drop_cut_word(str(obj.get("key_event") or ""), MAX_KEY_EVENT))[:300],
         "funny": _num(obj.get("funny")), "unexpected": _num(obj.get("unexpected")),
         "important": _num(obj.get("important")), "action": _num(obj.get("action")),
         "events": _dedupe_events(events),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from clipper.ai.jsonparse import extract_json, salvage_truncated
 from clipper.ai.manager import ModelManager
-from clipper.ai.vlm import ANSWER_REGEX, FrameInput, VLMAnalyzer, dedupe_sentences
+from clipper.ai.vlm import ANSWER_REGEX, MAX_LABEL, FrameInput, VLMAnalyzer, dedupe_sentences, drop_cut_word
 
 import re
 
@@ -55,7 +55,7 @@ def test_answer_grammar_bounds_texts_and_requires_scores():
           '"preserve_start": 0.0, "preserve_end": 39.3, "reaction_linked": false, "confidence": 0.8}')
     assert re.fullmatch(ANSWER_REGEX, ok)
     assert extract_json(ok)["unexpected"] == 7.5
-    assert not re.fullmatch(ANSWER_REGEX, ok.replace("um carro é atingido", "e o carro " * 25))  # > 200 chars
+    assert not re.fullmatch(ANSWER_REGEX, ok.replace("um carro é atingido", "e o carro " * 31))  # > 200 chars
     five = ", ".join(['{"t": 1.0, "label": "x", "importance": 1}'] * 5)
     assert not re.fullmatch(ANSWER_REGEX, ok.replace('{"t": 12.0, "label": "batida forte", "importance": 9}', five))
 
@@ -66,3 +66,9 @@ def test_dedupe_sentences_removes_only_model_repetition():
     assert dedupe_sentences(loop) == "Um carro é acidentado, o grupo se esconde. O grupo se esconde e evita a polícia."
     assert dedupe_sentences("Frase única sem ponto") == "Frase única sem ponto"
     assert dedupe_sentences(None) == ""
+
+
+def test_text_at_grammar_cap_loses_its_cut_last_word():
+    cut = ("início da cena, grupo de pessoas se esconde em um carro quebrado, evita a polí" + "x" * 200)[:MAX_LABEL]
+    assert not drop_cut_word(cut, MAX_LABEL).endswith("x")
+    assert drop_cut_word("rótulo curto", MAX_LABEL) == "rótulo curto"

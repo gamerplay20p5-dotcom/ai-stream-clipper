@@ -49,7 +49,7 @@ A Arc é cerca de 5× mais rápida que a CPU de desenvolvimento (48 s em média)
 
 Observação: nos vídeos sintéticos o modelo descreve corretamente "tela de teste de cores". A qualidade visual só pode ser julgada com trechos reais de gameplay anotados.
 
-## Produção (v0.2.8, 2026-11-18)
+## Produção (v0.2.9, 2026-11-18)
 
 - **Cortes automáticos da live:** os cortes 5, 6 e 7 (GTA RP real) foram analisados pelo Qwen3-VL-2B na GPU do 210, com VLM entre 5,5 e 10,4 s e de 20 a 28 s no total por corte, sem fallback. Os títulos vieram do Qwen3-1.7B, também na GPU.
 - **Concorrência** (`docs/benchmarks/concurrency-prod-arc.json`): 3 análises disparadas ao mesmo tempo foram divididas pela fila entre as duas GPUs (210: 2, 201: 1), todas sem fallback, em 68 s no total. Carga máxima de 0,91 no 210 e 3,38 no 201; RAM +0,8 GB em cada. Cada GPU processa uma análise por vez (`concurrency_vision=1`), porque o `VLMPipeline` não aceita gerações paralelas na mesma instância. A vazão cresce com o número de GPUs, não com paralelismo dentro de uma GPU.
@@ -57,7 +57,7 @@ Observação: nos vídeos sintéticos o modelo descreve corretamente "tela de te
 
 ### Decodificação restrita (v0.2.7)
 
-No Arc, o Qwen3-VL-2B às vezes entrava em laço dentro do primeiro texto ("o carro… e o carro…"), até o limite de tokens. Foram 6.645 caracteres no `summary`, e o modelo nunca chegou a escrever as notas. Desde a v0.2.7, a primeira geração usa a saída estruturada do OpenVINO GenAI (`StructuredOutputConfig.regex`, em `ANSWER_REGEX` no `vlm.py`). A gramática impõe JSON válido, resumo com até 200 caracteres, evento-chave com até 100, no máximo 4 eventos com rótulos de até 80 caracteres, e notas e instantes numéricos.
+No Arc, o Qwen3-VL-2B às vezes entrava em laço dentro do primeiro texto ("o carro… e o carro…"), até o limite de tokens. Foram 6.645 caracteres no `summary`, e o modelo nunca chegou a escrever as notas. Desde a v0.2.7, a primeira geração usa a saída estruturada do OpenVINO GenAI (`StructuredOutputConfig.regex`, em `ANSWER_REGEX` no `vlm.py`). A gramática impõe JSON válido, resumo com até 300 caracteres, evento-chave com até 160, no máximo 4 eventos com rótulos de até 140 caracteres, e notas e instantes numéricos. Se um texto atinge exatamente o limite, a última palavra, que pode ter sido cortada, é descartada (v0.2.9; com rótulos de 80 caracteres apareceu "políça").
 
 A gramática controla só a sintaxe e o tamanho; o conteúdo continua sendo do modelo. O custo é de cerca de 4 s por análise. Como reserva, existem três camadas:
 - uma segunda tentativa sem gramática;
