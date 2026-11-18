@@ -85,6 +85,8 @@ def clip(c: Clip, streamer_obj: Streamer | None = None) -> dict:
         "lifecycle": c.lifecycle, "purge_after": iso(c.purge_after), "purge_reason": c.purge_reason,
         "heuristic_bounds": [c.heuristic_start, c.heuristic_end] if c.heuristic_start is not None else None,
         "version": c.version,
+        "gate": c.gate or "",
+        "gate_detail": (c.decision or {}).get("gate"),
         "has_video": bool(c.video_path),
         "has_thumbnail": bool(c.thumb_path),
         "file_size": c.file_size,

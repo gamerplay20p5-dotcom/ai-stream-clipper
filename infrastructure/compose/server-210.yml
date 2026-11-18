@@ -55,7 +55,7 @@ services:
       options: { max-size: "20m", max-file: "5" }
 
   api:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.5.7}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.6.0}
     container_name: asc-api
     <<: *hardening
     command: ["api", "--host", "0.0.0.0", "--port", "8780"]
@@ -88,7 +88,7 @@ services:
         limits: { cpus: "2", memory: 2g }
 
   worker-scoring:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.5.7}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.6.0}
     container_name: asc-worker-scoring
     <<: *hardening
     command: ["worker", "--roles", "scoring"]
@@ -111,7 +111,7 @@ services:
   # Phase 4 auto publisher: own service, DB access (tokens never cross the worker API), rendered
   # videos read-only, outbound HTTPS to the official YouTube / TikTok / Instagram APIs.
   worker-publisher:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.5.7}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.6.0}
     container_name: asc-worker-publisher
     <<: *hardening
     command: ["publisher"]
@@ -156,7 +156,7 @@ services:
   # GPU vision/AI worker (Intel Arc A750). Only the render node is passed through.
   worker-vision:
     profiles: ["gpu"]
-    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.5.7}
+    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.6.0}
     container_name: asc-worker-vision
     <<: *hardening
     command: ["worker", "--roles", "vision"]

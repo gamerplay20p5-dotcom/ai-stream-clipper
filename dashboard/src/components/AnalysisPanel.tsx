@@ -66,6 +66,7 @@ export default function AnalysisPanel({ clip, onReanalyze, busy }: { clip: Clip;
 
   return (
     <>
+    {clip.gate_detail && <GateBlock g={clip.gate_detail} />}
     {d?.editorial && <EditorialBlock e={d.editorial} />}
     <section className="mt-6 border-t border-suite-line pt-5" aria-label="Análise da IA">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -243,6 +244,34 @@ function EditorialBlock({ e }: { e: Editorial }) {
           ))}
         </ul>
       </details>
+    </section>
+  );
+}
+
+const GATE_TONE: Record<string, string> = { READY: "text-ok", REWORK: "text-take", CONTEXT_PENDING: "text-take",
+  HUMAN_REVIEW: "text-tally", REJECTED: "text-ink-muted" };
+
+function GateBlock({ g }: { g: import("../api").GateDetail }) {
+  const dims: [string, import("../api").GateDim][] = [["Acontecimento", g.event], ["Narrativa do corte", g.narrative],
+    ["Potencial de reedição", g.recovery], ["Técnica", g.technical]];
+  return (
+    <section className="mt-4 rounded-md border border-suite-line p-3">
+      <h4 className="mb-1 text-sm font-semibold">Quality Gate: <span className={GATE_TONE[g.outcome] ?? ""}>{g.outcome_label}</span>
+        {g.rework_runs > 0 && <span className="ml-2 text-xs font-normal text-ink-muted">{g.rework_runs} reedição(ões)</span>}
+        {g.conflict && <span className="ml-2 text-xs font-normal text-tally">modelos em conflito</span>}</h4>
+      <ul className="mb-2 text-xs text-ink/90">{g.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {dims.map(([label, d]) => (
+          <div key={label} className="rounded bg-suite-panel p-2">
+            <div className="flex justify-between text-xs"><span className="font-medium">{label}</span>
+              <span>{d.score == null ? "n/d" : `${d.score.toFixed(1)}/10`}</span></div>
+            <ul className="mt-1 text-[11px] leading-snug text-ink-muted">{d.evidence.slice(0, 4).map((e, i) => <li key={i}>{e}</li>)}</ul>
+          </div>
+        ))}
+      </div>
+      {g.fixes.length > 0 && (
+        <p className="mt-2 text-xs text-ink-muted">Correções de edição: {g.fixes.map((f) => f.detail + (f.applicable ? "" : " (editor estrutural)")).join("; ")}</p>
+      )}
     </section>
   );
 }

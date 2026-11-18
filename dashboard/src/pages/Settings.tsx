@@ -156,6 +156,23 @@ export default function Settings() {
           <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.show_title_overlay} onChange={bool("show_title_overlay")} />
         </Row>
       </Section>
+      <Section title="Quality Gate (seleção em 4 dimensões)">
+        <Row label="Usar o Quality Gate" hint="Separa a qualidade do acontecimento da qualidade do corte: um bom momento mal cortado é reeditado antes de ser descartado.">
+          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.gate_enabled} onChange={bool("gate_enabled")} />
+        </Row>
+        <Row label="Acontecimento mínimo (0–10)" hint="Abaixo disso (e fora da margem de dúvida) o momento é rejeitado.">
+          <input type="number" step={0.1} min={0} max={10} className="field" value={s.gate_event_min} onChange={num("gate_event_min")} />
+        </Row>
+        <Row label="Narrativa mínima para 'pronto' (0–10)">
+          <input type="number" step={0.1} min={0} max={10} className="field" value={s.gate_narrative_min} onChange={num("gate_narrative_min")} />
+        </Row>
+        <Row label="Potencial mínimo para reeditar (0–10)">
+          <input type="number" step={0.1} min={0} max={10} className="field" value={s.gate_recovery_min} onChange={num("gate_recovery_min")} />
+        </Row>
+        <Row label="Reedições automáticas por corte" hint="Limite para não processar sem fim.">
+          <input type="number" min={0} max={5} className="field" value={s.gate_max_rework} onChange={num("gate_max_rework")} />
+        </Row>
+      </Section>
       <Section title="Legendas inteligentes">
         <Row label="Reconhecer quem está falando" hint="Separa a voz do streamer das outras (rádio, personagens). Confirme a voz na página Streamers.">
           <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.speakers_enabled} onChange={bool("speakers_enabled")} />

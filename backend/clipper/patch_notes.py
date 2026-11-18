@@ -6,6 +6,13 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.6.0", "date": "2026-11-18", "title": "Quality Gate 2.0", "items": [
+        "Cada corte recebe 4 notas separadas: acontecimento, narrativa do corte, potencial de reedição e técnica.",
+        "Bom momento mal cortado é reeditado automaticamente (começar antes, incluir o desfecho, aproximar do ponto alto) antes de ser descartado; no máximo 2 vezes.",
+        "Novos resultados: pronto, reeditar, aguardando contexto, revisão humana e rejeitado.",
+        "Aba 'Revisão humana' na Central de Cortes para os casos de dúvida ou de decisões em conflito.",
+        "Limiares ajustáveis em Configurações da IA.",
+    ]},
     {"version": "0.5.7", "date": "2026-11-18", "title": "Correção do reconhecimento de voz", "items": [
         "Sons avulsos (música, efeitos do jogo) não ocupam mais todas as vagas de vozes: novas vozes, inclusive a do streamer, voltam a ser reconhecidas.",
     ]},

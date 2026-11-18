@@ -13,6 +13,7 @@ import { dimensionLabel, platformName, seconds, timecode } from "../lib/format";
 
 const tabs = [
   { key: "ready", label: "Para revisar" },
+  { key: "gate:HUMAN_REVIEW", label: "Revisão humana" },
   { key: "approved", label: "Aprovados" },
   { key: "candidate,analyzing,rendering,waiting", label: "Em processamento" },
   { key: "rejected", label: "Rejeitados" },
@@ -28,7 +29,8 @@ export default function Clips() {
   const sort = params.get("sort") ?? "score";
   const streamer = params.get("streamer") ?? "";
   const qs = new URLSearchParams({ sort, limit: "120" });
-  if (status) qs.set("status", status);
+  if (status.startsWith("gate:")) { qs.set("gate", status.slice(5)); qs.set("status", "ready"); }
+  else if (status) qs.set("status", status);
   if (streamer) qs.set("streamer_id", streamer);
 
   const list = useQuery({

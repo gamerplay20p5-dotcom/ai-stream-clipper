@@ -101,6 +101,8 @@ export type Clip = {
   is_test: boolean;
   prelim_score?: number | null;
   editorial_score?: number | null;
+  gate?: string;
+  gate_detail?: GateDetail | null;
   confidence?: number | null;
   situation_id?: number | null;
   protected?: boolean;
@@ -333,6 +335,11 @@ export type AISettings = {
   default_layout: string;
   show_title_overlay: boolean;
   speakers_enabled: boolean;
+  gate_enabled: boolean;
+  gate_event_min: number;
+  gate_narrative_min: number;
+  gate_recovery_min: number;
+  gate_max_rework: number;
   caption_mode: "streamer_highlight" | "streamer_only" | "all";
   caption_font: string;
   caption_size_pct: number;
@@ -438,4 +445,11 @@ export type Taxonomy = {
   categories: Record<string, string>;
   strata: Record<string, string>;
   providers: Record<string, string>;
+};
+
+export type GateDim = { score: number | null; evidence: string[] };
+export type GateDetail = {
+  outcome: string; outcome_label: string; event: GateDim; narrative: GateDim; recovery: GateDim; technical: GateDim;
+  fixes: { kind: string; detail: string; applicable: boolean; start: number | null; end: number | null }[];
+  reasons: string[]; blocking: string[]; rework_runs: number; conflict: boolean; version: string;
 };

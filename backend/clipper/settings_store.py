@@ -88,6 +88,12 @@ class AISettings(BaseModel):
     deep_review_max_frames: int = Field(12, ge=6, le=16)
     retrospective_enabled: bool = True
     retrospective_max_per_session: int = Field(5, ge=0, le=30)
+    # Phase 6A - quality gate 2.0 (four dimensions, REWORK before rejecting)
+    gate_enabled: bool = True
+    gate_event_min: float = Field(5.5, ge=0, le=10, description="happening quality to keep (0-10)")
+    gate_narrative_min: float = Field(5.0, ge=0, le=10, description="cut quality to be READY (0-10)")
+    gate_recovery_min: float = Field(4.0, ge=0, le=10, description="editing potential to try a REWORK")
+    gate_max_rework: int = Field(2, ge=0, le=5, description="automatic re-edits per clip")
     # Phase 5 stage E - who is talking (voice embeddings on the audio worker)
     speakers_enabled: bool = True
     # Phase 5 stage E - smart captions
