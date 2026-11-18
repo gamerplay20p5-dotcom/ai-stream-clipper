@@ -256,3 +256,35 @@ def reset_captions(cid: int, request: Request, db: Session = Depends(get_db),
             enqueue_render(db, c)
     db.commit()
     return ser.clip(c)
+
+
+# --- Phase 5 stage F: batch approval ----------------------------------------------------------
+class BatchIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=100)
+    action: Literal["approve", "reject"]
+
+
+@router.post("/batch")
+def batch(body: BatchIn, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
+    """Approve or reject many clips at once; each one is still a human label for the learning."""
+    done, skipped = [], {}
+    for cid in dict.fromkeys(body.ids):
+        c = db.get(Clip, cid)
+        if c is None:
+            skipped[cid] = "não encontrado"
+            continue
+        if body.action == "approve" and c.status not in ("ready", "rejected", "approved"):
+            skipped[cid] = f"ainda não está pronto ({c.status})"
+            continue
+        if body.action == "reject" and c.status in ("rendering", "analyzing"):
+            skipped[cid] = "em processamento"
+            continue
+        if c.status == ("approved" if body.action == "approve" else "rejected"):
+            done.append(cid)
+            continue
+        c.status = "approved" if body.action == "approve" else "rejected"
+        _human_label(db, c, user.email, body.action)
+        done.append(cid)
+    audit(db, request, user, f"clip.batch_{body.action}", "clips", {"ids": done, "skipped": list(skipped)})
+    db.commit()
+    return {"done": done, "skipped": skipped}

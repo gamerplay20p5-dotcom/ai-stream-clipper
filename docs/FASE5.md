@@ -91,6 +91,22 @@ A situação da história vira hashtag (#perseguicao, #tiroteio…).
 
 **Espaço.** Cada fala guarda a impressão de voz (cerca de 2 a 5 kB em JSON), o que dá uns 2 a 5 MB por hora de live no Postgres.
 
+## Etapa F (v0.5.6): operação editorial
+
+- **Aprovação em lote:** na Central de Cortes, selecione cortes e aprove ou rejeite todos de uma vez. Cada decisão continua sendo um rótulo humano para o aprendizado.
+- **Agendamento em lote:** os cortes selecionados entram nos próximos horários livres da conta, o de maior nota primeiro. Os horários respeitam a regra da conta (ou 12h, 18h e 21h, até 3 por dia) e o envio é sempre **privado**.
+- **Modo semiautomático** (regra "Semiautomático"):
+  - a IA cria **propostas** com os melhores cortes elegíveis, nos horários da regra;
+  - nada é enviado sem confirmação humana, que pode ser de uma em uma ou em lote;
+  - proposta não confirmada expira no horário e pode voltar no próximo horário livre;
+  - proposta recusada não volta.
+
+  Proposta pública é permitida porque cada uma é confirmada por uma pessoa; a publicação pública **automática** continua exigindo ativação explícita. O TikTok continua só manual.
+- **Pausa de emergência:** enquanto ativa, nada novo é enfileirado nem iniciado, e as regras não geram propostas. Um envio que já estava em andamento termina. Fica registrado na auditoria.
+- **Calendário editorial:** próximos 14 dias no horário de Brasília, com mudança de horário de itens ainda não enviados.
+- **Relatórios:** publicações, views e curtidas por plataforma, por categoria da história, por horário e por título; também a taxa de propostas confirmadas, recusadas e expiradas. São métricas oficiais das plataformas; amostras pequenas são só indício.
+- **Correção:** o reenvio administrativo de uma publicação com falha reutilizava a chave da fila e não era executado. Agora cada rodada tem chave própria.
+
 ## Riscos
 
 - **Poucos rótulos:** com 31 decisões humanas no início, qualquer conclusão é um indício. O painel mostra o tamanho de cada amostra e os intervalos de confiança.
@@ -104,3 +120,4 @@ A situação da história vira hashtag (#perseguicao, #tiroteio…).
 - **v0.5.0:** clip approvals and rejections become human labels, and a low-priority learning job keeps the preference profile and the shadow ranker up to date.
 - **Defaults:** destructive features start disabled or in dry-run.
 - **v0.5.5 (stage E):** speaker diarization (WeSpeaker ONNX on CPU; streamer voice is a hypothesis until the owner confirms it; uncertain speech stays `unknown`), speaker-aware captions with manual correction, per-platform metadata from the streamer's own speech and the story memory, and optional branding (watermark, end card, hashtags, footer).
+- **v0.5.6 (stage F):** batch approve/reject/schedule, editorial calendar with rescheduling, semi-automatic rules (the AI proposes, a human confirms; proposals expire), emergency pause, reports by platform/category/hour/title; fix: admin retry of a failed publication now really re-queues it.

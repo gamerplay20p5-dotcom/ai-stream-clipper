@@ -122,7 +122,8 @@ def run_publish(job_id: int, pub_id: int) -> None:
         clip = db.get(Clip, pub.clip_id) if pub.clip_id else None
         rule = db.get(PublishRule, pub.rule_id) if pub.rule_id else None
         problems = ["o corte foi excluído"] if clip is None else service.eligibility(
-            db, clip, acct, auto=pub.origin == "auto", rule=rule, privacy=pub.privacy, rights_confirmed=True)
+            db, clip, acct, auto=pub.origin in ("auto", "semi"), rule=rule, privacy=pub.privacy, rights_confirmed=True,
+            semi=pub.origin == "semi")
         if problems:  # conditions changed since scheduling (rejected, reviewed as bad, account revoked...)
             pub.status, pub.last_error = "failed", "; ".join(problems)
             service.log_event(pub, "refused", pub.last_error)
@@ -270,16 +271,22 @@ def tick(state: dict) -> None:
             if made:
                 log.info("automatic publications scheduled", extra={"count": made})
             state["scan"] = now
+        from .editorial import expire_proposals, is_paused
+
+        expire_proposals(db)
         service.enqueue_due(db)
+        paused = is_paused(db)
     if now - state.get("poll", 0) > POLL_EVERY_S:
         poll_processing()
         state["poll"] = now
     if now - state.get("metrics", 0) > 900:
         refresh_metrics()
         state["metrics"] = now
-    with session_scope() as db:
-        jobs = queue.claim(db, worker_id(), ["publish"], has_gpu=False, limit=1, lease_seconds=3600)
-        todo = [(j.id, int(j.payload["publication_id"])) for j in jobs]
+    todo = []
+    if not paused:  # emergency pause: queued uploads stay queued until it is lifted
+        with session_scope() as db:
+            jobs = queue.claim(db, worker_id(), ["publish"], has_gpu=False, limit=1, lease_seconds=3600)
+            todo = [(j.id, int(j.payload["publication_id"])) for j in jobs]
     for jid, pid in todo:
         run_publish(jid, pid)
     if not todo:  # learning only when no upload is waiting (lowest priority)

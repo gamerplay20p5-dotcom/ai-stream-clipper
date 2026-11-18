@@ -196,7 +196,9 @@ def _review_of_clip(db: Session, clip_id: int) -> Review | None:
 
 
 def eligibility(db: Session, clip: Clip, acct: PublishAccount, *, auto: bool, rule: PublishRule | None = None,
-                privacy: str = "private", rights_confirmed: bool = False) -> list[str]:
+                privacy: str = "private", rights_confirmed: bool = False, semi: bool = False) -> list[str]:
+    """``semi``: a semi-automatic proposal - a human confirms each one, so the public-auto opt-in
+    does not apply (every other automatic safeguard does)."""
     """Return the reasons why this clip must NOT be published to this account (empty = OK)."""
     p: list[str] = []
     streamer = db.get(Streamer, clip.streamer_id)
@@ -244,7 +246,7 @@ def eligibility(db: Session, clip: Clip, acct: PublishAccount, *, auto: bool, ru
                 p.append("a regra exige aprovação humana e o corte não foi aprovado")
             if clip.score < rule.min_score:
                 p.append(f"nota {clip.score:.0f} abaixo do mínimo da regra ({rule.min_score:.0f})")
-            if privacy == "public" and not rule.allow_public_auto:
+            if privacy == "public" and not rule.allow_public_auto and not semi:
                 p.append("postagem PÚBLICA automática exige ativação explícita na regra")
         if acct.platform == "tiktok":
             p.append("TikTok exige consentimento do criador a cada postagem: só publicação manual")
@@ -353,10 +355,10 @@ def create_publication(db: Session, clip: Clip, acct: PublishAccount, *, origin:
                        privacy: str = "private", rights_confirmed: bool = False) -> Publication:
     """Idempotent: an existing publication of this clip on this account is returned, never duplicated."""
     existing = db.scalar(select(Publication).where(Publication.clip_id == clip.id, Publication.account_id == acct.id))
-    if existing is not None and existing.status not in ("cancelled", "failed"):
+    if existing is not None and existing.status not in ("cancelled", "failed", "expired"):
         return existing
-    problems = eligibility(db, clip, acct, auto=origin == "auto", rule=rule, privacy=privacy,
-                           rights_confirmed=rights_confirmed)
+    problems = eligibility(db, clip, acct, auto=origin in ("auto", "semi"), rule=rule, privacy=privacy,
+                           rights_confirmed=rights_confirmed, semi=origin == "semi")
     if problems:
         raise PublishRefused(problems)
     max_day = rule.max_per_day if rule else 20
@@ -371,7 +373,8 @@ def create_publication(db: Session, clip: Clip, acct: PublishAccount, *, origin:
     pub.tags = tags if tags is not None else meta["tags"]
     pub.privacy = privacy
     pub.scheduled_at = scheduled_at
-    pub.status, pub.last_error, pub.upload_state, pub.attempts = "scheduled", "", {}, 0
+    pub.status = "proposed" if origin == "semi" else "scheduled"  # a proposal waits for a human
+    pub.last_error, pub.upload_state, pub.attempts = "", {}, 0
     pub.remote_id = pub.remote_url = ""
     pub.video_sha256, pub.video_bytes = clip.sha256, clip.file_size
     if existing is None:
@@ -386,11 +389,19 @@ def create_publication(db: Session, clip: Clip, acct: PublishAccount, *, origin:
 
 def enqueue_due(db: Session) -> int:
     """Queue the upload job of publications whose time has come (idempotent per publication+attempt)."""
+    from .editorial import is_paused
+
+    if is_paused(db):
+        return 0
     now = utcnow()
     n = 0
     for pub in db.scalars(select(Publication).where(Publication.status == "scheduled",
                                                     (Publication.scheduled_at.is_(None)) | (Publication.scheduled_at <= now))):
-        queue.enqueue(db, "publish", {"publication_id": pub.id}, idempotency_key=f"publish:{pub.id}:{pub.attempts}",
+        # a new round (re-created, admin retry) must get a new key: the queue keeps finished jobs forever
+        # (the log is bounded, so the round is identified by its start time, not by counting events)
+        rnd = next((e.get("at", "") for e in reversed(pub.log or []) if e.get("event") in ("created", "retry_admin")), "")
+        queue.enqueue(db, "publish", {"publication_id": pub.id},
+                      idempotency_key=f"publish:{pub.id}:{rnd[:26]}:{pub.attempts}",
                       priority=50, max_attempts=6)
         n += 1
     return n
@@ -398,6 +409,10 @@ def enqueue_due(db: Session) -> int:
 
 def auto_scan(db: Session, lookback_hours: int = 48) -> int:
     """Create publications for eligible clips under automatic rules (never for test clips)."""
+    from .editorial import is_paused
+
+    if is_paused(db):
+        return 0
     made = 0
     since = utcnow() - timedelta(hours=lookback_hours)
     for rule in db.scalars(select(PublishRule).where(PublishRule.enabled.is_(True), PublishRule.mode != "manual")):
@@ -409,15 +424,16 @@ def auto_scan(db: Session, lookback_hours: int = 48) -> int:
         if rule.streamer_id:
             q = q.where(Clip.streamer_id == rule.streamer_id)
         for clip in db.scalars(q.order_by(Clip.score.desc())):
-            if db.scalar(select(Publication.id).where(Publication.clip_id == clip.id, Publication.account_id == acct.id)):
+            if db.scalar(select(Publication.id).where(Publication.clip_id == clip.id, Publication.account_id == acct.id,
+                                                      Publication.status != "expired")):
                 continue
             try:
                 when = None if rule.mode == "immediate" else next_slot(db, acct, rule)
                 if rule.mode == "immediate" and published_today(db, acct, rule.timezone) >= rule.max_per_day:
                     when = next_slot(db, acct, rule)
                 with db.begin_nested():
-                    create_publication(db, clip, acct, origin="auto", user="auto", rule=rule, scheduled_at=when,
-                                       privacy=rule.privacy)
+                    create_publication(db, clip, acct, origin="semi" if rule.mode == "semi" else "auto",
+                                       user="auto", rule=rule, scheduled_at=when, privacy=rule.privacy)
                 made += 1
             except PublishRefused:
                 continue

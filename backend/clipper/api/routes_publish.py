@@ -202,7 +202,7 @@ class RuleIn(BaseModel):
     account_id: int
     streamer_id: int | None = None
     enabled: bool = True
-    mode: str = Field("manual", pattern="^(manual|scheduled|immediate)$")
+    mode: str = Field("manual", pattern="^(manual|semi|scheduled|immediate)$")
     require_approval: bool = True
     min_score: float = Field(70.0, ge=0, le=100)
     privacy: str = Field("private", pattern="^(private|unlisted|public|SELF_ONLY|MUTUAL_FOLLOW_FRIENDS|FOLLOWER_OF_CREATOR|PUBLIC_TO_EVERYONE)$")
@@ -227,7 +227,7 @@ def _check_rule(db: Session, body: RuleIn) -> PublishAccount:
         raise HTTPException(404, "account not found")
     if body.mode != "manual" and acct.platform == "tiktok":
         raise HTTPException(422, "TikTok exige consentimento do criador a cada postagem: use o modo manual")
-    if body.mode != "manual" and acct.platform == "instagram" and not body.allow_public_auto:
+    if body.mode not in ("manual", "semi") and acct.platform == "instagram" and not body.allow_public_auto:
         raise HTTPException(422, "Reels são públicos: postagem automática no Instagram exige ativar 'permitir público automático'")
     if body.streamer_id is not None and db.get(Streamer, body.streamer_id) is None:
         raise HTTPException(404, "streamer not found")
@@ -375,3 +375,104 @@ def refresh_metrics(pid: int, db: Session = Depends(get_db), _: CurrentUser = De
 
     with session_scope() as s2:
         return _pub(s2, s2.get(Publication, pid))
+
+
+# --- Phase 5 stage F: pause, batch, proposals, calendar, reports -----------------------------
+from ..publish import editorial as ed  # noqa: E402
+
+PRIVACY_RE = "^(private|unlisted|public|SELF_ONLY|MUTUAL_FOLLOW_FRIENDS|FOLLOWER_OF_CREATOR|PUBLIC_TO_EVERYONE)$"
+
+
+class ControlIn(BaseModel):
+    paused: bool
+    reason: str = Field("", max_length=300)
+
+
+@router.get("/control")
+def get_control(db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+    return ed.control(db)
+
+
+@router.post("/control")
+def set_control(body: ControlIn, request: Request, db: Session = Depends(get_db),
+                user: CurrentUser = Depends(require_admin)):
+    out = ed.set_paused(db, body.paused, body.reason, user.email)
+    audit(db, request, user, "publish.pause" if body.paused else "publish.resume", "publishing", {"reason": body.reason})
+    db.commit()
+    return out
+
+
+class BatchIn(BaseModel):
+    clip_ids: list[int] = Field(min_length=1, max_length=50)
+    account_id: int
+    privacy: str = Field("private", pattern=PRIVACY_RE)
+    rights_confirmed: bool = False
+
+
+@router.post("/batch")
+def batch(body: BatchIn, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
+    acct = db.get(PublishAccount, body.account_id)
+    if acct is None:
+        raise HTTPException(404, "account not found")
+    out = ed.batch_schedule(db, list(dict.fromkeys(body.clip_ids)), acct, privacy=body.privacy, user=user.email,
+                            rights_confirmed=body.rights_confirmed)
+    audit(db, request, user, "publish.batch", f"account:{acct.id}",
+          {"clips": body.clip_ids, "privacy": body.privacy, "scheduled": len(out["scheduled"])})
+    db.commit()
+    return out
+
+
+class IdsIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=100)
+
+
+@router.post("/proposals/confirm")
+def confirm_proposals(body: IdsIn, request: Request, db: Session = Depends(get_db),
+                      user: CurrentUser = Depends(require_admin)):
+    out = ed.confirm(db, body.ids, user.email)
+    audit(db, request, user, "publish.proposals_confirm", "publishing", {"ids": out["confirmed"]})
+    service.enqueue_due(db)
+    db.commit()
+    return out
+
+
+@router.post("/proposals/dismiss")
+def dismiss_proposals(body: IdsIn, request: Request, db: Session = Depends(get_db),
+                      user: CurrentUser = Depends(require_admin)):
+    out = ed.dismiss(db, body.ids, user.email)
+    audit(db, request, user, "publish.proposals_dismiss", "publishing", {"ids": out})
+    db.commit()
+    return {"dismissed": out}
+
+
+@router.get("/calendar")
+def calendar(days: int = 14, db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+    return ed.calendar(db, days)
+
+
+class RescheduleIn(BaseModel):
+    scheduled_at: datetime | None = None
+
+
+@router.patch("/publications/{pid}")
+def reschedule(pid: int, body: RescheduleIn, request: Request, db: Session = Depends(get_db),
+               user: CurrentUser = Depends(require_admin)):
+    when = body.scheduled_at
+    if when is not None and when.tzinfo:
+        when = when.astimezone(timezone.utc).replace(tzinfo=None)
+    try:
+        p = ed.reschedule(db, pid, when, user.email)
+    except LookupError as exc:
+        raise HTTPException(404, "publication not found") from exc
+    except PublishRefused as exc:
+        db.rollback()
+        raise _refused(exc) from exc
+    audit(db, request, user, "publish.reschedule", f"publication:{pid}", {"at": when.isoformat() if when else None})
+    service.enqueue_due(db)
+    db.commit()
+    return _pub(db, p)
+
+
+@router.get("/report")
+def report(days: int = 30, db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+    return ed.report(db, days)

@@ -6,6 +6,14 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.5.6", "date": "2026-11-18", "title": "Operação editorial", "items": [
+        "Aprovar, rejeitar e agendar vários cortes de uma vez na Central de Cortes.",
+        "Calendário editorial dos próximos 14 dias, com troca de horário.",
+        "Modo semiautomático: a IA propõe os melhores cortes nos horários e você confirma com um clique.",
+        "Pausa de emergência de todas as publicações.",
+        "Relatórios por plataforma, categoria da história, horário e título.",
+        "Correção: reenvio de publicação com falha agora volta de fato para a fila.",
+    ]},
     {"version": "0.5.5", "date": "2026-11-18", "title": "Quem está falando + legendas inteligentes", "items": [
         "Reconhece a voz do streamer e separa das outras (rádio, personagens); na dúvida fica 'não identificado'.",
         "Confirme a voz do streamer em Streamers (ouvindo trechos); até lá é só hipótese.",

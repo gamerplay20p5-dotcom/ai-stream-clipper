@@ -6,6 +6,7 @@ import { api, type Clip, type Streamer } from "../api";
 import AnalysisPanel, { AnalysisStatus } from "../components/AnalysisPanel";
 import PublishPanel from "../components/PublishPanel";
 import CaptionEditor from "../components/CaptionEditor";
+import BatchBar from "../components/BatchBar";
 import { StorageFlags } from "./Storage";
 import { ClipFrame, ClipStatus, Empty, ErrorNote, Meter, PageHeader, ScoreMark } from "../components/ui";
 import { dimensionLabel, platformName, seconds, timecode } from "../lib/format";
@@ -38,6 +39,8 @@ export default function Clips() {
   const streamers = useQuery({ queryKey: ["streamers"], queryFn: () => api.get<Streamer[]>("/api/streamers") });
   const items = list.data?.items ?? [];
   const selectedId = id ? Number(id) : null;
+  const [picked, setPicked] = useState<number[]>([]);
+  const toggle = (cid: number) => setPicked((p) => (p.includes(cid) ? p.filter((x) => x !== cid) : [...p, cid]));
 
   function setParam(k: string, v: string) {
     const p = new URLSearchParams(params);
@@ -83,11 +86,18 @@ export default function Clips() {
               <ClipFrame clip={c} selected={c.id === selectedId} onOpen={() => open(c.id)} />
               <div className="mt-1.5 flex items-center justify-between text-xs">
                 <ClipStatus status={c.status} />
-                <span className="text-ink-faint">#{c.id}</span>
+                <label className="flex cursor-pointer items-center gap-1 text-ink-faint">
+                  <input type="checkbox" className="accent-[#F2B33D]" checked={picked.includes(c.id)} onChange={() => toggle(c.id)}
+                    aria-label={`Selecionar corte ${c.id}`} />#{c.id}
+                </label>
               </div>
             </div>
           ))}
         </div>
+        {items.length > 0 && picked.length === 0 && (
+          <button className="btn-quiet mt-3 px-2 py-1 text-xs" onClick={() => setPicked(items.map((c) => c.id))}>Selecionar todos desta lista</button>
+        )}
+        {picked.length > 0 && <BatchBar ids={picked} onClear={() => setPicked([])} />}
       </div>
       {selectedId && <ReviewBench key={selectedId} clipId={selectedId} items={items} onNavigate={open} />}
     </div>

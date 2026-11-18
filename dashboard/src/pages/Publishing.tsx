@@ -3,6 +3,7 @@ import { ExternalLink, Link2, RotateCcw, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { api, type Streamer } from "../api";
 import { Empty, ErrorNote, PageHeader } from "../components/ui";
+import { EditorialCalendar, PauseBanner, Reports } from "../components/EditorialOps";
 
 export type PubApp = { platform: string; name: string; configured: boolean; client_id: string; has_secret: boolean; redirect_uri: string; validated: boolean; config_id: string; callback_url: string; flow: string };
 export type PubAccount = { id: number; platform: string; platform_name: string; name: string; handle: string; status: string;
@@ -20,7 +21,7 @@ type Overview = { apps: Record<string, PubApp>; accounts: PubAccount[]; rules: R
 export const pubStatus: Record<string, [string, string]> = {
   draft: ["Rascunho", "text-ink-muted"], scheduled: ["Agendado", "text-take"], uploading: ["Enviando", "text-take"],
   processing: ["Processando na plataforma", "text-take"], published: ["Publicado", "text-ok"], failed: ["Falhou", "text-tally"],
-  cancelled: ["Cancelado", "text-ink-faint"],
+  cancelled: ["Cancelado", "text-ink-faint"], proposed: ["Proposta", "text-take"], expired: ["Expirou", "text-ink-faint"],
 };
 const privacyLabel: Record<string, string> = {
   private: "Privado", unlisted: "Não listado", public: "Público", SELF_ONLY: "Só eu (TikTok)",
@@ -40,6 +41,7 @@ export default function Publishing() {
   return (
     <div className="space-y-8">
       <PageHeader title="Publicação automática" />
+      <PauseBanner />
       <p className="max-w-3xl text-sm text-ink-muted">
         Envio pelas APIs oficiais. Por padrão as regras automáticas exigem aprovação humana e usam <b>privado</b> (público
         automático só com ativação explícita); na publicação manual você escolhe Privado, Não listado ou Público. Cortes de teste manual e
@@ -52,7 +54,13 @@ export default function Publishing() {
       {ov.data && <Accounts ov={ov.data} />}
       <Rights />
       {ov.data && <Rules ov={ov.data} />}
+      <Section title="5. Calendário editorial" hint="Próximos 14 dias no horário de Brasília. Propostas do modo semiautomático só são enviadas depois que você confirma; você pode mudar o horário de qualquer item ainda não enviado.">
+        <EditorialCalendar />
+      </Section>
       {ov.data && <Calendar accounts={ov.data.accounts} />}
+      <Section title="7. Relatórios" hint="Métricas oficiais das plataformas, agrupadas por categoria da história, horário e título.">
+        <Reports />
+      </Section>
     </div>
   );
 }
@@ -209,7 +217,7 @@ function Rules({ ov }: { ov: Overview }) {
   const st = useQuery({ queryKey: ["streamers"], queryFn: () => api.get<Streamer[]>("/api/streamers") });
   const acctName = (id: number) => ov.accounts.find((a) => a.id === id);
   return (
-    <Section title="4. Regras de publicação" hint="Modo manual: você escolhe cada corte. Agendado: cortes elegíveis entram nos horários do calendário. Imediato: publica assim que elegível. Público automático só com ativação explícita.">
+    <Section title="4. Regras de publicação" hint="Modo manual: você escolhe cada corte. Semiautomático: a IA propõe os melhores cortes nos horários e você confirma com um clique. Agendado: cortes elegíveis entram nos horários do calendário. Imediato: publica assim que elegível. Público automático só com ativação explícita.">
       {ov.accounts.filter((a) => a.status === "connected").map((a) => (
         <button key={a.id} className="btn-quiet mb-3 mr-2" onClick={() => setEditing(emptyRule(a.id))}>Nova regra para {a.name}</button>
       ))}
@@ -220,7 +228,7 @@ function Rules({ ov }: { ov: Overview }) {
             <tr key={r.id} className={`border-t border-suite-line/50 ${r.enabled ? "" : "opacity-50"}`}>
               <td className="py-1">{acctName(r.account_id)?.name}</td>
               <td>{r.streamer_id ? st.data?.find((s) => s.id === r.streamer_id)?.display_name : "todos"}</td>
-              <td>{{ manual: "manual", scheduled: "agendado", immediate: "imediato" }[r.mode]}</td>
+              <td>{({ manual: "manual", semi: "semiautomático", scheduled: "agendado", immediate: "imediato" } as Record<string, string>)[r.mode]}</td>
               <td>{r.min_score}</td><td>{r.require_approval ? "exigida" : "não"}</td>
               <td>{privacyLabel[r.privacy] ?? r.privacy}{r.allow_public_auto && " · público automático"}</td>
               <td>{r.max_per_day}</td><td className="text-xs">{r.slots.join(", ")}</td>
@@ -254,7 +262,9 @@ function RuleForm({ rule, accounts, streamers, onClose }: { rule: Omit<Rule, "id
           </select></label>
         <label><span className="text-xs text-ink-muted">Modo</span>
           <select className="field" value={r.mode} onChange={(e) => setR({ ...r, mode: e.target.value })}>
-            <option value="manual">Manual</option><option value="scheduled" disabled={acct?.platform === "tiktok"}>Automático agendado</option>
+            <option value="manual">Manual</option>
+            <option value="semi" disabled={acct?.platform === "tiktok"}>Semiautomático (a IA propõe, você confirma)</option>
+            <option value="scheduled" disabled={acct?.platform === "tiktok"}>Automático agendado</option>
             <option value="immediate" disabled={acct?.platform === "tiktok"}>Automático imediato</option>
           </select></label>
         <label><span className="text-xs text-ink-muted">Privacidade</span>
@@ -305,7 +315,7 @@ function Calendar({ accounts }: { accounts: PubAccount[] }) {
   }
   const acct = (id: number) => accounts.find((a) => a.id === id);
   return (
-    <Section title="5. Calendário e acompanhamento" hint="Estados, IDs e links das publicações, erros e reenvio administrativo. Métricas oficiais quando a plataforma fornece.">
+    <Section title="6. Acompanhamento" hint="Estados, IDs e links das publicações, erros e reenvio administrativo. Métricas oficiais quando a plataforma fornece.">
       <ErrorNote error={pubs.error ?? act.error} />
       {(pubs.data ?? []).length === 0 && <Empty title="Nenhuma publicação ainda">Publique um corte pela Central de cortes (botão Publicar) ou crie uma regra automática.</Empty>}
       <div className="space-y-4">
