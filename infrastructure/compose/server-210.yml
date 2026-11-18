@@ -1,0 +1,140 @@
+# Server 210 (2htswebserver) - API, dashboard, scheduler, PostgreSQL, scoring and GPU vision.
+#
+#   docker compose -p asc -f infrastructure/compose/server-210.yml --env-file .env.210 up -d --build
+#
+# Does NOT touch the existing Caddy / Authentik / PostgreSQL / Redis on this host:
+# own project name (asc), own network, own volumes, own PostgreSQL container that is
+# not published on any port. Ports 80/443/8088/9000 are left alone; the API listens on
+# ${ASC_BIND_IP}:8780 (private LAN IP) only.
+
+name: asc
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  read_only: true
+  tmpfs: ["/tmp:size=512m"]
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+x-app-env: &app-env
+  ASC_ENV: production
+  ASC_LOG_JSON: "true"
+  ASC_DATABASE_URL: postgresql+psycopg://asc:${ASC_DB_PASSWORD:?set ASC_DB_PASSWORD}@${ASC_DB_HOST:-postgres}:5432/asc
+  ASC_INTERNAL_SECRET: ${ASC_INTERNAL_SECRET:?set ASC_INTERNAL_SECRET}
+  ASC_API_URL: http://api:8780
+  ASC_WORKER_HOST_LABEL: "210"
+
+services:
+  postgres:
+    image: postgres:16.4-bookworm
+    container_name: asc-postgres
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      POSTGRES_DB: asc
+      POSTGRES_USER: asc
+      POSTGRES_PASSWORD: ${ASC_DB_PASSWORD:?set ASC_DB_PASSWORD}
+    volumes: ["asc_pgdata:/var/lib/postgresql/data"]
+    networks: [asc_net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asc -d asc"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 4g }
+    shm_size: 256m
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  api:
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    build: { context: ../.., dockerfile: infrastructure/docker/app.Dockerfile }
+    container_name: asc-api
+    <<: *hardening
+    command: ["api", "--host", "0.0.0.0", "--port", "8780"]
+    environment:
+      <<: *app-env
+      ASC_JWT_SECRET: ${ASC_JWT_SECRET:?set ASC_JWT_SECRET}
+      ASC_ADMIN_EMAIL: ${ASC_ADMIN_EMAIL:-}
+      ASC_ADMIN_PASSWORD: ${ASC_ADMIN_PASSWORD:-}
+      ASC_COOKIE_SECURE: ${ASC_COOKIE_SECURE:-false}
+      ASC_STORAGE_MAX_GB: ${ASC_STORAGE_MAX_GB:-300}
+      ASC_METRICS_TOKEN: ${ASC_METRICS_TOKEN:-}
+      ASC_OIDC_ISSUER: ${ASC_OIDC_ISSUER:-}
+      ASC_OIDC_CLIENT_ID: ${ASC_OIDC_CLIENT_ID:-}
+    ports: ["${ASC_BIND_IP:?set ASC_BIND_IP (e.g. 192.168.1.210)}:8780:8780"]
+    volumes: ["asc_storage:/data/storage"]
+    networks: [asc_net]
+    depends_on: { postgres: { condition: service_healthy } }
+    healthcheck:
+      test: ["CMD", "clipper", "healthcheck", "api"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2g }
+
+  worker-scoring:
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    container_name: asc-worker-scoring
+    <<: *hardening
+    command: ["worker", "--roles", "scoring"]
+    environment:
+      <<: *app-env
+      ASC_WORKER_ID: "210-scoring"
+    volumes: ["asc_work:/data/work"]
+    networks: [asc_net]
+    depends_on: { api: { condition: service_healthy } }
+    healthcheck: &worker-health
+      test: ["CMD", "clipper", "healthcheck", "worker"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2g }
+
+  # GPU vision worker (Intel Arc A750). Only the render node is passed through.
+  # Enable with:  --profile gpu   (after infrastructure/scripts/validate-gpu.sh passes)
+  worker-vision:
+    profiles: ["gpu"]
+    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.1.0}
+    build: { context: ../.., dockerfile: infrastructure/docker/vision-openvino.Dockerfile,
+             args: { OPENVINO_IMAGE: "${ASC_OPENVINO_IMAGE:-openvino/ubuntu24_runtime:2026.2.0}" } }
+    container_name: asc-worker-vision
+    <<: *hardening
+    command: ["worker", "--roles", "vision"]
+    environment:
+      <<: *app-env
+      ASC_WORKER_ID: "210-vision-gpu"
+      ASC_GPU_DEVICE: /dev/dri/renderD128
+      ASC_VISION_PROVIDER: ${ASC_VISION_PROVIDER:-heuristic}
+      ASC_OPENVINO_MODEL_DIR: /models/vlm
+      ASC_OPENVINO_DEVICE: GPU
+    devices: ["/dev/dri/renderD128:/dev/dri/renderD128"]
+    group_add: ["${ASC_RENDER_GID:?set ASC_RENDER_GID (getent group render)}"]
+    volumes: ["asc_work:/data/work", "${ASC_MODELS_DIR:-/opt/asc/models}:/models:ro"]
+    networks: [asc_net]
+    depends_on: { api: { condition: service_healthy } }
+    healthcheck: *worker-health
+    deploy:
+      resources:
+        limits: { cpus: "4", memory: 12g }
+
+networks:
+  asc_net:
+    name: asc_net_210
+
+volumes:
+  asc_pgdata:
+  asc_storage:
+  asc_work:

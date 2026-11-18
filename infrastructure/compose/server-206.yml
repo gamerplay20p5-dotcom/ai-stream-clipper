@@ -1,0 +1,102 @@
+# Server 206 (website-applications) - monitor, capture + segment server, audio/transcription, render.
+# CPU only: no worker here declares GPU capability, so GPU-only jobs are never routed here.
+#
+#   docker compose -p asc -f infrastructure/compose/server-206.yml --env-file .env.206 up -d --build
+#
+# Limits keep the ~20 existing web containers responsive. Totals: 14 CPUs / 22 GiB max.
+
+name: asc
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  read_only: true
+  tmpfs: ["/tmp:size=1g"]
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+x-worker-env: &worker-env
+  ASC_ENV: production
+  ASC_LOG_JSON: "true"
+  ASC_API_URL: ${ASC_API_URL:?set ASC_API_URL (e.g. http://192.168.1.210:8780)}
+  ASC_INTERNAL_SECRET: ${ASC_INTERNAL_SECRET:?set ASC_INTERNAL_SECRET}
+  ASC_WORKER_HOST_LABEL: "206"
+
+x-health: &worker-health
+  test: ["CMD", "clipper", "healthcheck", "worker"]
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 90s
+
+services:
+  worker-capture:
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    build: { context: ../.., dockerfile: infrastructure/docker/app.Dockerfile }
+    container_name: asc-worker-capture
+    <<: *hardening
+    command: ["worker", "--roles", "monitor,capture"]
+    environment:
+      <<: *worker-env
+      ASC_WORKER_ID: "206-capture"
+      ASC_SEGMENT_SERVER_PUBLIC_URL: http://${ASC_BIND_IP:?set ASC_BIND_IP (e.g. 192.168.1.206)}:8781
+      ASC_MAX_CONCURRENT_CAPTURES: ${ASC_MAX_CONCURRENT_CAPTURES:-3}
+      ASC_BUFFER_SECONDS: ${ASC_BUFFER_SECONDS:-1800}
+      ASC_MAX_SESSION_HOURS: ${ASC_MAX_SESSION_HOURS:-12}
+      ASC_MAX_CAPTURE_DISK_GB: ${ASC_MAX_CAPTURE_DISK_GB:-80}
+      ASC_CAPTURE_QUALITY: ${ASC_CAPTURE_QUALITY:-1080p60,1080p,936p60,720p60,720p,best}
+      ASC_ALLOW_FILE_SOURCES: ${ASC_ALLOW_FILE_SOURCES:-false}
+    ports: ["${ASC_BIND_IP}:8781:8781"]
+    volumes: ["asc_capture:/data/capture", "asc_work:/data/work", "${ASC_TEST_MEDIA_HOST_DIR:-./test-media}:/data/test-media:ro"]
+    networks: [asc_net]
+    healthcheck: *worker-health
+    deploy:
+      resources:
+        limits: { cpus: "3", memory: 3g }
+
+  worker-audio:
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    container_name: asc-worker-audio
+    <<: *hardening
+    command: ["worker", "--roles", "audio"]
+    environment:
+      <<: *worker-env
+      ASC_WORKER_ID: "206-audio"
+      ASC_WHISPER_MODEL: ${ASC_WHISPER_MODEL:-small}
+      ASC_WHISPER_CPU_THREADS: ${ASC_WHISPER_CPU_THREADS:-4}
+      ASC_CONCURRENCY_AUDIO: ${ASC_CONCURRENCY_AUDIO:-2}
+      HF_HOME: /models/hf
+    volumes: ["asc_work:/data/work", "asc_models:/models"]
+    networks: [asc_net]
+    healthcheck: *worker-health
+    deploy:
+      resources:
+        limits: { cpus: "8", memory: 12g }
+
+  worker-render:
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    container_name: asc-worker-render
+    <<: *hardening
+    command: ["worker", "--roles", "render"]
+    environment:
+      <<: *worker-env
+      ASC_WORKER_ID: "206-render"
+      ASC_CONCURRENCY_RENDER: ${ASC_CONCURRENCY_RENDER:-1}
+      ASC_FFMPEG_THREADS: ${ASC_FFMPEG_THREADS:-3}
+    volumes: ["asc_work:/data/work"]
+    networks: [asc_net]
+    healthcheck: *worker-health
+    deploy:
+      resources:
+        limits: { cpus: "3", memory: 6g }
+
+networks:
+  asc_net:
+    name: asc_net_206
+
+volumes:
+  asc_capture:
+  asc_work:
+  asc_models:

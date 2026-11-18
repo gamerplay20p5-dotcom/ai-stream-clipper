@@ -1,0 +1,56 @@
+# Server 201 (1htsserver) - secondary GPU vision worker (Intel Arc A750).
+# This host runs six game-server containers: the worker is capped hard (4 CPUs / 8 GiB)
+# and given a low CPU weight so game servers always win contention.
+#
+#   docker compose -p asc -f infrastructure/compose/server-201.yml --env-file .env.201 up -d --build
+
+name: asc
+
+services:
+  worker-vision:
+    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.1.0}
+    build: { context: ../.., dockerfile: infrastructure/docker/vision-openvino.Dockerfile,
+             args: { OPENVINO_IMAGE: "${ASC_OPENVINO_IMAGE:-openvino/ubuntu24_runtime:2026.2.0}" } }
+    container_name: asc-worker-vision
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    tmpfs: ["/tmp:size=512m"]
+    command: ["worker", "--roles", "vision"]
+    environment:
+      ASC_ENV: production
+      ASC_LOG_JSON: "true"
+      ASC_API_URL: ${ASC_API_URL:?set ASC_API_URL (e.g. http://192.168.1.210:8780)}
+      ASC_INTERNAL_SECRET: ${ASC_INTERNAL_SECRET:?set ASC_INTERNAL_SECRET}
+      ASC_WORKER_HOST_LABEL: "201"
+      ASC_WORKER_ID: "201-vision-gpu"
+      ASC_GPU_DEVICE: /dev/dri/renderD128
+      ASC_VISION_PROVIDER: ${ASC_VISION_PROVIDER:-heuristic}
+      ASC_OPENVINO_MODEL_DIR: /models/vlm
+      ASC_OPENVINO_DEVICE: GPU
+      ASC_CONCURRENCY_VISION: "1"
+    devices: ["/dev/dri/renderD128:/dev/dri/renderD128"]
+    group_add: ["${ASC_RENDER_GID:?set ASC_RENDER_GID (getent group render)}"]
+    volumes: ["asc_work:/data/work", "${ASC_MODELS_DIR:-/opt/asc/models}:/models:ro"]
+    networks: [asc_net]
+    cpu_shares: 256
+    healthcheck:
+      test: ["CMD", "clipper", "healthcheck", "worker"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    deploy:
+      resources:
+        limits: { cpus: "4", memory: 8g }
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+networks:
+  asc_net:
+    name: asc_net_201
+
+volumes:
+  asc_work:

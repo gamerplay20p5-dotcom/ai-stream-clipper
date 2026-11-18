@@ -1,0 +1,69 @@
+# Single-host stack for development / evaluation (no GPU, no dependency on existing services).
+#
+#   cp .env.example .env   # fill in the secrets
+#   docker compose -p asc-local -f infrastructure/compose/local.yml --env-file .env up -d --build
+#   open http://127.0.0.1:8780
+#
+# Put controlled test videos in ./data/test-media and add them as file://name.mp4
+
+name: asc-local
+
+x-env: &env
+  ASC_ENV: production
+  ASC_LOG_JSON: "true"
+  ASC_DATABASE_URL: postgresql+psycopg://asc:${ASC_DB_PASSWORD:?set ASC_DB_PASSWORD}@postgres:5432/asc
+  ASC_INTERNAL_SECRET: ${ASC_INTERNAL_SECRET:?set ASC_INTERNAL_SECRET}
+  ASC_API_URL: http://api:8780
+
+services:
+  postgres:
+    image: postgres:16.4-bookworm
+    restart: unless-stopped
+    environment: { POSTGRES_DB: asc, POSTGRES_USER: asc, POSTGRES_PASSWORD: "${ASC_DB_PASSWORD}" }
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asc -d asc"]
+      interval: 5s
+      retries: 20
+
+  api:
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    build: { context: ../.., dockerfile: infrastructure/docker/app.Dockerfile }
+    restart: unless-stopped
+    command: ["api", "--host", "0.0.0.0", "--port", "8780"]
+    environment:
+      <<: *env
+      ASC_JWT_SECRET: ${ASC_JWT_SECRET:?set ASC_JWT_SECRET}
+      ASC_ADMIN_EMAIL: ${ASC_ADMIN_EMAIL:-}
+      ASC_ADMIN_PASSWORD: ${ASC_ADMIN_PASSWORD:-}
+      ASC_ALLOW_FILE_SOURCES: "true"
+    ports: ["127.0.0.1:8780:8780"]
+    volumes: ["storage:/data/storage"]
+    depends_on: { postgres: { condition: service_healthy } }
+    healthcheck: { test: ["CMD", "clipper", "healthcheck", "api"], interval: 15s, start_period: 30s }
+
+  worker:
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    restart: unless-stopped
+    command: ["worker", "--roles", "monitor,capture,audio,scoring,vision,render"]
+    environment:
+      <<: *env
+      ASC_WORKER_ID: local-all
+      ASC_WORKER_HOST_LABEL: local
+      ASC_SEGMENT_SERVER_PUBLIC_URL: http://worker:8781
+      ASC_ALLOW_FILE_SOURCES: "true"
+      ASC_WHISPER_MODEL: ${ASC_WHISPER_MODEL:-small}
+      HF_HOME: /models/hf
+    volumes: ["capture:/data/capture", "work:/data/work", "models:/models", "../../data/test-media:/data/test-media:ro"]
+    depends_on: { api: { condition: service_healthy } }
+    healthcheck: { test: ["CMD", "clipper", "healthcheck", "worker"], interval: 30s, start_period: 90s }
+    deploy:
+      resources:
+        limits: { cpus: "6", memory: 8g }
+
+volumes:
+  pgdata:
+  storage:
+  capture:
+  work:
+  models:
