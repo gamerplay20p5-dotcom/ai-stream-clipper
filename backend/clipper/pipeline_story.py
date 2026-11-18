@@ -161,3 +161,63 @@ def story_context(db: Session, clip: Clip, window: float = 240.0) -> dict:
             "uncertain": (main.data or {}).get("uncertain", [])[:4]},
         "before": [r.summary for r in rows if main is None or r.id != main.id][-4:],
     }
+
+
+def run_retrospectives(db: Session, settings) -> int:
+    """After a live ends: look again for confirmed stories without a clip and near-threshold moments,
+    while their media still exists. Bounded per session, lowest priority."""
+    from datetime import timedelta
+
+    from . import pipeline_ai
+    from .db import utcnow
+    from .models import Candidate, Segment
+
+    if not settings.retrospective_enabled:
+        return 0
+    made = 0
+    since = utcnow() - timedelta(hours=6)
+    for sess in db.scalars(select(StreamSession).where(StreamSession.status != "live", StreamSession.ended_at >= since)):
+        st = dict(sess.stats or {})
+        if st.get("retro_done") or sess.scored_until < sess.covered_until - 15:
+            continue
+        tracker = update_story(db, sess, sess.covered_until + 300)  # closes what was still open
+        segs = db.execute(select(Segment.start, Segment.duration).where(Segment.session_id == sess.id,
+                                                                        Segment.available.is_(True))).all()
+
+        def available(a: float, b: float) -> bool:
+            covered = sum(max(0.0, min(b, s0 + d) - max(a, s0)) for s0, d in segs)
+            return covered >= 0.9 * (b - a)
+
+        budget = settings.retrospective_max_per_session
+        picks: list[tuple[float, float, float, str, int | None, list]] = []
+        for sit in tracker.situations:
+            if budget <= len(picks) or not sit.confirmed or sit.climax_t is None or sit.id is None:
+                continue
+            if db.query(Clip).filter(Clip.situation_id == sit.id).count():
+                continue
+            a = max(0.0, sit.start - 1.0)
+            b = min(sit.last + 3.0, a + settings.max_story_seconds)
+            if available(a, b):
+                picks.append((a, b, sit.climax_t, f"Revisão pós-live: {sit.summary()[:120]}", sit.id, ["story"]))
+        for c in db.scalars(select(Candidate).where(Candidate.session_id == sess.id, Candidate.clip_id.is_(None),
+                                                    Candidate.decision == "below_min_score",
+                                                    Candidate.score >= settings.min_score - 8)
+                            .order_by(Candidate.score.desc()).limit(20)):
+            if len(picks) >= budget or c.start is None or c.end is None:
+                break
+            if any(min(c.end, p[1]) - max(c.start, p[0]) > 0 for p in picks) or not available(c.start, c.end):
+                continue
+            picks.append((c.start, c.end, c.peak, f"Revisão pós-live: quase atingiu a nota ({c.score:.0f})",
+                          None, list(c.kinds or [])))
+        for a, b, peak, why, sid, kinds in picks:
+            clip = Clip(session_id=sess.id, streamer_id=sess.streamer_id, start=round(a, 2), end=round(b, 2),
+                        peak=round(peak, 2), score=0.0, reasons=[why], kinds=kinds, situation_id=sid,
+                        title="", version=1, provenance={"origin": "retrospective"})
+            db.add(clip)
+            db.flush()
+            pipeline_ai.enqueue_analysis(db, clip, settings, priority=95)
+            made += 1
+        st["retro_done"] = True
+        st["retro_created"] = len(picks)
+        sess.stats = st
+    return made

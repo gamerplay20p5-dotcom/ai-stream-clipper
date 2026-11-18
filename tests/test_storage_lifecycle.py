@@ -19,7 +19,7 @@ def store(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _clip(store, tag, *, status="ready", score=30.0, age_days=10, files=("video_v1.mp4", "source.mp4", "thumb_v1.jpg"),
+def _clip(store, tag, *, status="ready", score=30.0, age_days=10, files=("clip_v1.mp4", "source.mp4", "thumb_v1.jpg"),
           **kw) -> int:
     with session_scope() as db:
         s = Streamer(platform="twitch", channel=f"lc_{tag}", url=f"https://www.twitch.tv/lc_{tag}", display_name=tag)
@@ -60,7 +60,7 @@ def test_simulation_never_changes_anything(store, client):
         assert any(i["clip_id"] == cid for i in p["eligible"]) and p["total_bytes"] >= 3000
         out = lc.run(db, _settings(cleanup_dry_run=True))
         assert out["dry_run"] and out["quarantined"] == 0
-    assert (store / "clips" / str(cid) / "video_v1.mp4").exists()
+    assert (store / "clips" / str(cid) / "clip_v1.mp4").exists()
     with session_scope() as db:
         assert db.get(Clip, cid).lifecycle == "active"
 
@@ -81,7 +81,7 @@ def test_below_min_score_goes_to_quarantine_then_purge_keeping_the_row(store, cl
         assert lc.run(db, _settings())["quarantined"] >= 1
         c = db.get(Clip, cid)
         assert c.lifecycle == "quarantined" and c.purge_after > utcnow()
-    assert (store / "clips" / str(cid) / "video_v1.mp4").exists()  # still recoverable
+    assert (store / "clips" / str(cid) / "clip_v1.mp4").exists()  # still recoverable
     with session_scope() as db:
         db.get(Clip, cid).purge_after = utcnow() - timedelta(seconds=1)
     with session_scope() as db:
@@ -91,7 +91,7 @@ def test_below_min_score_goes_to_quarantine_then_purge_keeping_the_row(store, cl
         c = db.get(Clip, cid)
         assert c is not None and c.lifecycle == "purged" and c.video_path == ""  # row kept
         assert db.query(CleanupLog).filter(CleanupLog.clip_id == cid, CleanupLog.action == "purge_video").count() == 1
-    assert not (store / "clips" / str(cid) / "video_v1.mp4").exists()
+    assert not (store / "clips" / str(cid) / "clip_v1.mp4").exists()
 
 
 def test_protected_favorite_approved_published_and_busy_are_never_touched(store, client):
@@ -136,7 +136,7 @@ def test_restore_from_quarantine_and_approval_during_quarantine_cancels_purge(st
     with session_scope() as db:
         assert lc.purge(db, b, _settings()) == 0
         assert db.get(Clip, b).lifecycle == "active"  # approved meanwhile: nothing deleted
-    assert (store / "clips" / str(b) / "video_v1.mp4").exists()
+    assert (store / "clips" / str(b) / "clip_v1.mp4").exists()
 
 
 def test_purge_interrupted_by_restart_is_idempotent(store, client):
@@ -145,7 +145,7 @@ def test_purge_interrupted_by_restart_is_idempotent(store, client):
         _authorize_all(db)
         lc.run(db, _settings())
         db.get(Clip, cid).purge_after = utcnow() - timedelta(seconds=1)
-    (store / "clips" / str(cid) / "video_v1.mp4").unlink()  # crash after deleting one file
+    (store / "clips" / str(cid) / "clip_v1.mp4").unlink()  # crash after deleting one file
     with session_scope() as db:
         freed = lc.purge(db, cid, _settings())
         assert freed == 2000 and db.get(Clip, cid).lifecycle == "purged"

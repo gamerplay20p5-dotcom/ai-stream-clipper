@@ -176,8 +176,9 @@ async def handle_vision(ctx: JobContext) -> dict:
 
     # 1. heuristic vision over the whole window (scene cuts, motion centroid, face track)
     t0 = time.monotonic()
+    interval = float(ctx.payload.get("frame_interval", 1.0)) * (0.5 if spec.get("deep") else 1.0)
     frames = await asyncio.to_thread(sample_frames, src, w0 - src_start, w1 - src_start, peak_rel + (w0 - src_start),
-                                     float(ctx.payload.get("frame_interval", 1.0)), 90)
+                                     interval, 180 if spec.get("deep") else 90)
     for f in frames:  # sample_frames returns times relative to its start argument (= window start)
         f.t = round(f.t, 3)
     heur = await asyncio.to_thread(HeuristicVisionProvider().analyze, frames, peak_rel, spec.get("transcript", ""))
@@ -197,7 +198,9 @@ async def handle_vision(ctx: JobContext) -> dict:
             analyzer = VLMAnalyzer(manager, model)
             visual = await asyncio.to_thread(
                 analyzer.analyze, [FrameInput(f.t, f.image) for f in frames], peak_rel, span, (w0, w1), words_rel, cues,
-                _story_text(spec.get("story") or {}, w0))
+                _story_text(spec.get("story") or {}, w0), spec.get("max_frames"),
+                (float(spec["setup_t"]) - w0) if spec.get("setup_t") is not None else None)
+            timings["deep"] = 1.0 if spec.get("deep") else 0.0
         except ModelUnavailable as exc:
             fallback_reason = str(exc)[:300]
         timings["vlm_s"] = round(time.monotonic() - t0, 2)

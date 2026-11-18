@@ -40,6 +40,14 @@ def tick() -> dict:
         out["offline"] = pipeline.mark_stale_workers(db)
         out["vision_fallback"] = pipeline.vision_timeouts(db)
         out["revisited"] = pipeline.revisit_waiting_all(db)
+        from . import pipeline_story
+        from .settings_store import load_ai_settings as _load
+
+        try:
+            with db.begin_nested():
+                out["retrospective"] = pipeline_story.run_retrospectives(db, _load(db))
+        except Exception:
+            log.exception("post-live retrospective failed")
     return out
 
 

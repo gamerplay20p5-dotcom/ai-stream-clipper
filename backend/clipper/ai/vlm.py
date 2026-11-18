@@ -248,10 +248,17 @@ class VLMAnalyzer:
         return texts[0] if texts else str(out)
 
     def analyze(self, frames: list[FrameInput], peak_t: float, span: float, window_abs: tuple[float, float],
-                words: list[tuple[float, float, str]], audio_cues: list[str], story: str = "") -> VisualAnalysis:
+                words: list[tuple[float, float, str]], audio_cues: list[str], story: str = "",
+                max_frames: int | None = None, setup_t: float | None = None) -> VisualAnalysis:
         pipe, device = self.manager.acquire(self.key)
         st = self.manager.stat(self.key)
-        chosen = select_frames(frames, peak_t, self.spec.max_frames)
+        budget = min(16, max_frames or self.spec.max_frames)
+        chosen = select_frames(frames, peak_t, budget)
+        if setup_t is not None and frames:  # deep review: always show where the situation begins
+            first = min(frames, key=lambda f: abs(f.t - setup_t))
+            if first not in chosen:
+                chosen = sorted(chosen[1:] + [first], key=lambda f: f.t) if len(chosen) >= budget else \
+                    sorted(chosen + [first], key=lambda f: f.t)
         times = [round(f.t, 1) for f in chosen]
         prompt = PROMPT.format(n=len(chosen), span=span, times=", ".join(f"{t:.1f}s" for t in times),
                                transcript=_fmt_transcript(words), audio=", ".join(audio_cues) or "nenhum destaque",

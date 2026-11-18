@@ -82,6 +82,12 @@ class AISettings(BaseModel):
     vision_stale_minutes: int = Field(20, ge=2, le=240)
     # Phase 3 - learned ranker: off | shadow (computed and shown, never decides) | active
     ranker_mode: Literal["off", "shadow", "active"] = "shadow"
+    # Phase 5 stage B - re-watch: deep second analysis of uncertain clips, post-live retrospective
+    deep_review_enabled: bool = True
+    deep_review_margin: float = Field(10.0, ge=0, le=50, description="score distance to min_score that triggers it")
+    deep_review_max_frames: int = Field(12, ge=6, le=16)
+    retrospective_enabled: bool = True
+    retrospective_max_per_session: int = Field(5, ge=0, le=30)
     # Phase 5 - score-based storage lifecycle (media only; rows and labels are always kept)
     cleanup_enabled: bool = False
     cleanup_dry_run: bool = True

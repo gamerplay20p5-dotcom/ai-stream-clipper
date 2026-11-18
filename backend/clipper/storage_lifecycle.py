@@ -57,7 +57,7 @@ def artefacts(clip: Clip) -> dict[str, list[Path]]:
     for p in d.iterdir():
         if not p.is_file():
             continue
-        if p.name.startswith("video") and p.suffix == ".mp4":
+        if p.name.startswith(("clip_v", "video")) and p.suffix == ".mp4":  # renders are clip_v<N>.mp4
             out["video"].append(p)
         elif p.name.startswith("source"):
             out["source"].append(p)

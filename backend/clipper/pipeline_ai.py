@@ -36,7 +36,7 @@ def vision_key(clip: Clip) -> str:
 # ---------------------------------------------------------------------------
 
 
-def enqueue_analysis(db: Session, clip: Clip, settings: AISettings) -> None:
+def enqueue_analysis(db: Session, clip: Clip, settings: AISettings, priority: int = 60) -> None:
     sess = db.get(StreamSession, clip.session_id)
     clip.status = "analyzing"
     clip.vision_state = "pending"
@@ -47,7 +47,7 @@ def enqueue_analysis(db: Session, clip: Clip, settings: AISettings) -> None:
          "model": model, "narrative_model": settings.narrative_model,
          "frame_interval": settings.vision_frame_interval,
          "segment_base_url": sess.segment_base_url if sess else ""},
-        idempotency_key=vision_key(clip), priority=60, max_attempts=2,
+        idempotency_key=vision_key(clip), priority=priority, max_attempts=2,
     )
 
 
@@ -116,6 +116,14 @@ def ai_spec(db: Session, clip: Clip, source_location: dict) -> dict:
     lo, hi = media_bounds(db, clip)
     ctxs = settings.analysis_context_seconds
     w0, w1 = max(lo, base_start - ctxs), min(hi, base_end + ctxs)
+    deep = (clip.provenance or {}).get("review", {}).get("pending") == "deep"
+    story = _story(db, clip)
+    sit = story.get("situation") or {}
+    if deep:  # re-watch: the whole situation (bounded), denser frames
+        if sit.get("start") is not None:
+            w0 = max(lo, min(w0, float(sit["start"]) - 3.0))
+            w1 = min(hi, max(w1, float(sit.get("last") or base_end) + 5.0))
+        w0 = max(w0, w1 - (settings.max_story_seconds + 40.0))
     streamer = db.get(Streamer, clip.streamer_id)
     return {
         **source_location,
@@ -135,7 +143,10 @@ def ai_spec(db: Session, clip: Clip, source_location: dict) -> dict:
         "title": clip.title, "title_suggestions": clip.title_suggestions or [],
         "layout": clip.layout, "caption_style": clip.caption_style, "webcam_region": clip.webcam_region,
         "analysis_runs": clip.analysis_runs,
-        "story": _story(db, clip),
+        "story": story,
+        "deep": deep,
+        "max_frames": settings.deep_review_max_frames if deep else None,
+        "setup_t": (float(sit["start"]) if deep and sit.get("start") is not None else None),
     }
 
 
@@ -224,6 +235,24 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
 
     _editorial_final(db, clip, decision, visual, settings)
     judgement = (clip.decision or {}).get("editorial") or {}
+    prov = dict(clip.provenance or {})
+    review = dict(prov.get("review") or {})
+    if review.get("pending") == "deep":  # this IS the deep review result
+        review = {"done": "deep", "first_score": review.get("first_score"), "score": decision.score,
+                  "bounds_change_s": [round(decision.start_abs - (review.get("first_bounds") or [0, 0])[0], 1),
+                                      round(decision.end_abs - (review.get("first_bounds") or [0, 0])[1], 1)]}
+        prov["review"] = review
+        clip.provenance = prov
+        clip.reasons = list(dict.fromkeys(list(clip.reasons or []) + [
+            f"Revisão aprofundada: nota {review['first_score']} → {decision.score:.0f}"]))[:14]
+    elif visual is not None and not visual.fallback and not judgement.get("waiting_context")             and _needs_deep(db, clip, decision, judgement, settings):
+        prov["review"] = {"pending": "deep", "first_score": round(decision.score, 1),
+                          "first_bounds": [decision.start_abs, decision.end_abs],
+                          "reason": _deep_reason(decision, judgement, settings)}
+        clip.provenance = prov
+        enqueue_analysis(db, clip, settings, priority=85)  # below live analysis (60)
+        log.info("deep review requested", extra={"clip_id": clip.id, "reason": prov["review"]["reason"]})
+        return
     if settings.director_enabled and not decision.keep and not clip.is_test and judgement.get("waiting_context")             and clip.analysis_runs < 3:  # bounded: never waits forever
         clip.status = "waiting"  # low preliminary score but the story is still unfolding: decide later
         clip.error = "Aguardando o desfecho da situação para decidir"
@@ -244,6 +273,29 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
 
     clip.version += 0 if first else 1
     enqueue_render(db, clip)
+
+
+def _needs_deep(db: Session, clip: Clip, decision: DirectorDecision, judgement: dict, settings: AISettings) -> bool:
+    if not settings.deep_review_enabled or clip.is_test or "review" in (clip.provenance or {}):
+        return False
+    from .models import Job
+
+    queued = db.query(Job).filter(Job.type == "vision_analyze", Job.status == "queued").count()
+    if queued >= settings.vision_queue_max:
+        return False  # under load the live analysis has priority
+    near = abs(decision.score - settings.min_score) <= settings.deep_review_margin
+    weak_evidence = (judgement.get("confidence") or 1.0) < 0.5 and         abs(decision.score - settings.min_score) <= 2 * settings.deep_review_margin  # only in the doubtful band
+    story = judgement.get("story") or {}
+    cut_story = bool(story) and story.get("start") is not None and float(story["start"]) < decision.start_abs - 2
+    return near or weak_evidence or cut_story
+
+
+def _deep_reason(decision: DirectorDecision, judgement: dict, settings: AISettings) -> str:
+    if abs(decision.score - settings.min_score) <= settings.deep_review_margin:
+        return f"nota {decision.score:.0f} perto do mínimo {settings.min_score:.0f}"
+    if (judgement.get("confidence") or 1.0) < 0.5:
+        return "poucas evidências independentes"
+    return "a situação começa antes do corte"
 
 
 def _editorial_final(db: Session, clip: Clip, decision: DirectorDecision, visual: VisualAnalysis | None,
