@@ -72,6 +72,34 @@ PHRASES: dict[str, tuple[str, float]] = {
     "i'm dead": ("humor", 2.0),
 }
 
+# Tension / build-up cues: they do NOT create clips (not in PHRASES); the director uses them
+# to find where the situation that leads to the peak starts (narrative context).
+TENSION: dict[str, float] = {
+    "policia": 2.0, "a policia": 2.0, "police": 2.0, "cops": 2.0, "viatura": 1.5, "helicoptero": 1.5,
+    "helicopter": 1.5, "perseguicao": 2.0, "chase": 1.5, "atras de nos": 2.0, "atras da gente": 2.0,
+    "behind us": 2.0, "seguindo a gente": 2.0, "following us": 2.0, "vai vai vai": 1.5, "go go go": 1.5,
+    "acelera": 1.0, "faster": 1.0, "corre": 1.0, "foge": 1.0, "run": 0.8, "cuidado": 1.0, "watch out": 1.0,
+    "keep going": 1.0, "lose them": 1.5, "continua": 1.0, "despista": 1.5, "nao para": 1.0,
+    "assalto": 1.5, "heist": 1.5, "tiroteio": 1.5, "shootout": 1.5, "emboscada": 1.5, "ambush": 1.5,
+}
+_MAX_T = max(len(p.split()) for p in TENSION)
+
+
+def find_tension(tokens: list[str]) -> list[tuple[int, str, float]]:
+    """``(token_index, phrase, weight)`` of tension cues (longest phrase first)."""
+    out = []
+    i = 0
+    while i < len(tokens):
+        for n in range(min(_MAX_T, len(tokens) - i), 0, -1):
+            phrase = " ".join(t for t in tokens[i:i + n] if t)
+            if phrase in TENSION:
+                out.append((i, phrase, TENSION[phrase]))
+                i += n - 1
+                break
+        i += 1
+    return out
+
+
 LAUGH_RE = re.compile(r"^(?:(?:ha){2,}h?|(?:he){2,}|(?:hi){2,}|k{3,}|(?:rs){2,}|lol|lmao|risos|laughs?|laughter)$")
 
 

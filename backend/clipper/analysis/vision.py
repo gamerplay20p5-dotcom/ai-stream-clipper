@@ -114,6 +114,14 @@ class HeuristicVisionProvider:
         changes = np.array([1.0 - cv2.compareHist(hists[i - 1], hists[i], cv2.HISTCMP_CORREL)
                             for i in range(1, len(frames))])
         motion = np.array([float(np.mean(np.abs(grays[i] - grays[i - 1]))) for i in range(1, len(frames))])
+        # horizontal centroid of the motion (for action-oriented vertical reframing)
+        xs = np.linspace(0.0, 1.0, grays[0].shape[1])
+        centroids = []
+        for i in range(1, len(frames)):
+            d = np.abs(grays[i] - grays[i - 1])
+            d = np.where(d > max(8.0, float(d.mean()) * 2), d, 0.0)
+            col = d.sum(axis=0)
+            centroids.append(float((col * xs).sum() / col.sum()) if col.sum() > 0 else 0.5)
         dt = np.array([max(0.05, frames[i].t - frames[i - 1].t) for i in range(1, len(frames))])
         motion_rate = motion / dt
         ts = np.array([frames[i].t for i in range(1, len(frames))])
@@ -143,16 +151,51 @@ class HeuristicVisionProvider:
         if not reasons:
             reasons.append("Pouca variação visual")
         mpt = float(ts[int(np.argmax(motion_rate))]) if len(ts) else None
+        track = self.face_track(frames)
+        webcam = self._find_webcam(frames)
         return VisionResult(
             provider=self.name,
             visual_score=round(min(10.0, score), 2),
             scene_changes=cuts,
             motion_peak_t=round(mpt, 2) if mpt is not None else None,
-            webcam_region=self._find_webcam(frames),
+            webcam_region=webcam,
             reasons=reasons,
             frames_analyzed=len(frames),
-            extra={"motion_ratio": round(motion_ratio, 2), "flash": round(flash, 1)},
+            extra={"motion_ratio": round(motion_ratio, 2), "flash": round(flash, 1),
+                   "motion": [[round(float(t), 2), round(float(m), 2), round(c, 3)]
+                              for t, m, c in zip(ts, motion_rate, centroids)],
+                   "face_track": track},
         )
+
+    def face_track(self, frames: list[Frame], max_frames: int = 24) -> list[dict]:
+        """Per-frame face boxes (normalised), temporally smoothed: the largest face whose
+        centre stays close to the previous one is kept, jumps are rejected."""
+        if self._face is None:
+            return []
+        cv2 = self._cv2
+        picks = frames[:: max(1, len(frames) // max_frames)][:max_frames]
+        out: list[dict] = []
+        prev = None
+        for f in picks:
+            g = cv2.cvtColor(f.image, cv2.COLOR_BGR2GRAY)
+            h, w = g.shape
+            faces = self._face.detectMultiScale(g, scaleFactor=1.15, minNeighbors=6, minSize=(max(24, h // 20),) * 2)
+            boxes = [(x / w, y / h, fw / w, fh / h) for (x, y, fw, fh) in faces]
+            if prev is not None and boxes:
+                boxes.sort(key=lambda b: abs(b[0] + b[2] / 2 - prev[0] - prev[2] / 2) + abs(b[1] + b[3] / 2 - prev[1] - prev[3] / 2))
+                cand = boxes[0]
+                if abs(cand[0] - prev[0]) > 0.15 or abs(cand[1] - prev[1]) > 0.15:
+                    continue  # implausible jump between samples
+            elif boxes:
+                cand = max(boxes, key=lambda b: b[2] * b[3])
+            else:
+                continue
+            if prev is not None:  # exponential smoothing
+                cand = tuple(0.6 * c + 0.4 * p for c, p in zip(cand, prev))
+            prev = cand
+            out.append({"t": round(f.t, 2), "x": round(cand[0], 4), "y": round(cand[1], 4),
+                        "w": round(cand[2], 4), "h": round(cand[3], 4)})
+        return out
 
     def _find_webcam(self, frames: list[Frame]) -> dict | None:
         cv2 = self._cv2
