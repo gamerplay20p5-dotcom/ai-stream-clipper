@@ -38,6 +38,21 @@ async def run(args: list[str], *, cwd: Path | None = None, timeout: float = 1800
     return out.decode(errors="replace")
 
 
+async def run_stderr(args: list[str], *, cwd: Path | None = None, timeout: float = 600) -> str:
+    """Run and return stderr (ffmpeg analysis filters such as loudnorm print there)."""
+    proc = await asyncio.create_subprocess_exec(*args, cwd=str(cwd) if cwd else None,
+                                                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise MediaError(f"{Path(args[0]).name} timed out after {timeout}s")
+    if proc.returncode != 0:
+        raise MediaError(f"{Path(args[0]).name} exited {proc.returncode}: {err.decode(errors='replace')[-1500:]}")
+    return err.decode(errors="replace")
+
+
 def run_sync(args: list[str], *, cwd: Path | None = None, timeout: float = 1800) -> str:
     p = subprocess.run(args, cwd=str(cwd) if cwd else None, capture_output=True, timeout=timeout)
     if p.returncode != 0:

@@ -75,7 +75,9 @@ def build_ass(
     title: str = "",
     title_margin_v: int = 260,
     duration: float = 0.0,
+    emphasis: set[str] | None = None,
 ) -> str:
+    emph_set = {e.lower().strip(".,!?") for e in (emphasis or set())}
     fs, prim, outc, back, bstyle, outline, shadow, active, emph = STYLES.get(style, STYLES["bold"])
     header = (
         "[Script Info]\nScriptType: v4.00+\n"
@@ -114,7 +116,7 @@ def build_ass(
                     txt = _esc(x.text.upper())
                     if k == wi:
                         parts.append(f"{{\\1c{_ovc(active)}\\fscx112\\fscy112}}{txt}{{\\r}}")
-                    elif is_emphasis(x.text):
+                    elif is_emphasis(x.text) or x.text.lower().strip(".,!?") in emph_set:
                         parts.append(f"{{\\1c{_ovc(emph)}}}{txt}{{\\r}}")
                     else:
                         parts.append(txt)
