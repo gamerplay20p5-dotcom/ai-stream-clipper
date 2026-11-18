@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "note": "synthetic ground truth; times in seconds",
+  "videos": [
+    {
+      "video": "gameplay_event.mp4",
+      "duration": 40.91,
+      "language": "en",
+      "events": [
+        {
+          "label": "silêncio, grito e reação verbal",
+          "clip_worthy": true,
+          "context_start": 14.239999999999998,
+          "peak": 24.04,
+          "reaction_end": 29.24,
+          "must_include": [
+            21.24,
+            28.24
+          ]
+        }
+      ]
+    },
+    {
+      "video": "chase_crash.mp4",
+      "duration": 48.3,
+      "language": "en",
+      "events": [
+        {
+          "label": "perseguição termina em batida e o streamer reage",
+          "clip_worthy": true,
+          "context_start": 14.39,
+          "peak": 35.36,
+          "reaction_end": 39.98,
+          "must_include": [
+            16.39,
+            39.98
+          ]
+        }
+      ]
+    },
+    {
+      "video": "loud_game_noise.mp4",
+      "duration": 44.92,
+      "language": "en",
+      "events": [],
+      "distractors": [
+        {
+          "label": "explosão do jogo",
+          "t": 12.0
+        },
+        {
+          "label": "tiros do jogo",
+          "t": 24.0
+        },
+        {
+          "label": "explosão do jogo",
+          "t": 33.0
+        }
+      ]
+    }
+  ]
+}
