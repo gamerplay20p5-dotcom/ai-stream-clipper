@@ -55,7 +55,7 @@ services:
       options: { max-size: "20m", max-file: "5" }
 
   api:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.4}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.5}
     container_name: asc-api
     <<: *hardening
     command: ["api", "--host", "0.0.0.0", "--port", "8780"]
@@ -65,6 +65,8 @@ services:
       ASC_ADMIN_EMAIL: ${ASC_ADMIN_EMAIL:-}
       ASC_ADMIN_PASSWORD: ${ASC_ADMIN_PASSWORD:-}
       ASC_COOKIE_SECURE: "true"
+      ASC_ALLOW_FILE_SOURCES: ${ASC_ALLOW_FILE_SOURCES:-false}
+      ASC_TEST_MEDIA_DIR: /nonexistent  # test videos live on 206; the API validates names only
       ASC_TLS_CERT: /tls/server.crt
       ASC_TLS_KEY: /tls/server.key
       ASC_STORAGE_MAX_GB: ${ASC_STORAGE_MAX_GB:-300}
@@ -86,7 +88,7 @@ services:
         limits: { cpus: "2", memory: 2g }
 
   worker-scoring:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.4}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.5}
     container_name: asc-worker-scoring
     <<: *hardening
     command: ["worker", "--roles", "scoring"]
@@ -109,7 +111,7 @@ services:
   # GPU vision/AI worker (Intel Arc A750). Only the render node is passed through.
   worker-vision:
     profiles: ["gpu"]
-    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.4}
+    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.5}
     container_name: asc-worker-vision
     <<: *hardening
     command: ["worker", "--roles", "vision"]

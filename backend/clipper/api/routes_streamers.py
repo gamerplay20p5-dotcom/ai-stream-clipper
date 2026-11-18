@@ -64,7 +64,7 @@ async def add_streamer(body: StreamerIn, request: Request, db: Session = Depends
         if raw.startswith("file://"):
             if not cfg.allow_file_sources:
                 raise InvalidStreamURL("file sources are disabled (ASC_ALLOW_FILE_SOURCES)")
-            ref = parse_file_source(raw, cfg.test_media_dir)
+            ref = parse_file_source(raw, cfg.test_media_dir, must_exist=cfg.test_media_dir.is_dir())
         else:
             ref = await asyncio.to_thread(parse_stream_url, raw)
     except InvalidStreamURL as exc:

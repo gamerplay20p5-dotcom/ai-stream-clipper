@@ -72,3 +72,11 @@ def test_signature_roundtrip_and_tampering():
     old["X-ASC-Timestamp"] = str(int(time.time()) - 3600)
     assert not verify_signature(secret, old, "POST", "/internal/jobs/claim", sha).ok  # replay window
     assert not verify_signature("", h, "POST", "/internal/jobs/claim", sha).ok  # no secret configured
+
+
+def test_file_source_name_only_mode_still_rejects_traversal(tmp_path):
+    # distributed deployment: the API (210) validates names, the capture worker (206) has the files
+    assert parse_file_source("file://chase_crash.mp4", tmp_path, must_exist=False).channel == "chase_crash.mp4"
+    for bad in ("../secret.mp4", "/etc/passwd", "a/../../b.mp4"):
+        with pytest.raises(InvalidStreamURL):
+            parse_file_source(bad, tmp_path, must_exist=False)

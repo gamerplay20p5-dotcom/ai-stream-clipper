@@ -79,7 +79,7 @@ def test_diagnostics_explains_no_clip_with_min_score(admin):
     _workers("capture", "audio", "scoring", "render")
     r = _report_for(admin, sid)
     assert r["state"] == "ok"
-    assert "Nenhum candidato atingiu a nota mínima de 55" in r["explanation"]
+    assert "Nenhum candidato atual atingiu a nota mínima de 55" in r["explanation"]
     assert "48.2" in r["explanation"] and "3 abaixo da nota mínima" in r["explanation"]
 
 

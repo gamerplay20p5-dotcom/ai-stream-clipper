@@ -30,7 +30,7 @@ Responda SOMENTE com um objeto JSON, sem texto extra, no formato:
 {{"summary": "o que acontece no gameplay, em português, no máximo 25 palavras",
  "key_event": "o acontecimento que merece atenção, no máximo 12 palavras",
  "funny": 0-10, "unexpected": 0-10, "important": 0-10, "action": 0-10,
- "events": [{{"t": segundos, "label": "descrição curta", "importance": 0-10}}],
+ "events": [{{"t": segundos, "label": "no máximo 10 palavras", "importance": 0-10}}] (no máximo 4 eventos, os mais importantes),
  "setup_start": segundos ou null, "climax": segundos ou null, "resolution_end": segundos ou null,
  "complete": true se começo, desenvolvimento e desfecho aparecem,
  "preserve_start": segundos, "preserve_end": segundos,

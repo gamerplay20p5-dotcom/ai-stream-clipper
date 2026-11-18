@@ -31,11 +31,11 @@ MODELS: dict[str, ModelSpec] = {
     # --- vision-language -------------------------------------------------------------------
     "qwen3-vl-2b-int4": ModelSpec(
         "qwen3-vl-2b-int4", "vlm", "qwen3-vl-2b-int4", "helenai/Qwen3-VL-2B-Instruct-int4", "qwen3-vl",
-        1.8, 3.5, max_frames=8, max_new_tokens=600,
+        1.8, 3.5, max_frames=8, max_new_tokens=900,
         notes="community OpenVINO export (helenai); tokenizer converted locally with openvino-tokenizers"),
     "qwen3-vl-4b-int4": ModelSpec(
         "qwen3-vl-4b-int4", "vlm", "qwen3-vl-4b-int4", "OpenVINO/Qwen3-VL-4B-Instruct-int4-ov", "qwen3-vl",
-        3.1, 5.5, max_frames=8, max_new_tokens=600, notes="official OpenVINO export"),
+        3.1, 5.5, max_frames=8, max_new_tokens=900, notes="official OpenVINO export"),
     "internvl2-1b-int4": ModelSpec(
         "internvl2-1b-int4", "vlm", "internvl2-1b-int4", "OpenVINO/InternVL2-1B-int4-ov", "internvl2",
         0.8, 2.0, max_frames=4, notes="official OpenVINO export; lightest option / CPU fallback"),

@@ -193,10 +193,12 @@ def _derive(sess, s, by, oldest, roles, seg_age, real, rejected_clips, counts, s
                     "Nenhum momento com reação detectado até agora (sem picos de volume, gritos, risadas ou falas de "
                     "reação fortes).")
         parts = ", ".join(f"{n} {REASON_PT.get(r, r)}" for r, n in sorted(counts.items(), key=lambda x: -x[1]))
+        removed = int(stats.get("candidates_total", 0))
+        prefix = (f"{removed} candidato(s) desta sessão já foram gerados e removidos do painel. " if removed else "")
         best = stats.get("best_rejected_score")
         best_txt = f" A melhor nota foi {best:.1f}." if best is not None else ""
         return ("Capturando" if live else "Concluído", "ok",
-                f"Nenhum candidato atingiu a nota mínima de {settings.min_score:.0f}.{best_txt} "
+                f"{prefix}Nenhum candidato atual atingiu a nota mínima de {settings.min_score:.0f}.{best_txt} "
                 f"Momentos avaliados: {parts}.")
     ready = sum(1 for c in real if c.status in ("ready", "approved"))
     disc = len(rejected_clips)

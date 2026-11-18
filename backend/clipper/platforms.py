@@ -129,13 +129,16 @@ def parse_stream_url(raw: str, *, resolve_dns: bool = True) -> StreamRef:
     raise InvalidStreamURL("only Twitch and YouTube URLs are supported")
 
 
-def parse_file_source(name: str, media_dir: Path) -> StreamRef:
-    """Admin-only controlled test video, confined to ``media_dir`` (no traversal)."""
+def parse_file_source(name: str, media_dir: Path, must_exist: bool = True) -> StreamRef:
+    """Admin-only controlled test video, confined to ``media_dir`` (no traversal).
+    ``must_exist=False`` when the media lives on another host (the capture worker checks it)."""
     name = (name or "").strip()
     if name.startswith("file://"):
         name = name[len("file://"):]
     if not re.match(r"^[A-Za-z0-9._ -]{1,200}$", name) or ".." in name:
         raise InvalidStreamURL("invalid test media name (plain file name inside the test media directory)")
+    if not must_exist:
+        return StreamRef("file", name, f"file://{name}", Path(name).stem)
     root = media_dir.resolve()
     path = (root / name).resolve()
     if root not in path.parents or not path.is_file():
