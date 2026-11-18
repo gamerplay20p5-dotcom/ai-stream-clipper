@@ -37,6 +37,7 @@ Responda SOMENTE com um objeto JSON, sem texto extra, no formato:
  "preserve_start": segundos, "preserve_end": segundos,
  "reaction_linked": true se a reação do streamer tem relação com o que aparece na tela,
  "confidence": 0-1}}
+Memória da live (contexto anterior, pode estar incompleta): {story}
 Use apenas instantes da lista acima. Não invente acontecimentos que não estejam visíveis nas imagens ou na fala."""
 
 # Constrained decoding (OpenVINO GenAI structured output): the answer must match this regex,
@@ -247,13 +248,14 @@ class VLMAnalyzer:
         return texts[0] if texts else str(out)
 
     def analyze(self, frames: list[FrameInput], peak_t: float, span: float, window_abs: tuple[float, float],
-                words: list[tuple[float, float, str]], audio_cues: list[str]) -> VisualAnalysis:
+                words: list[tuple[float, float, str]], audio_cues: list[str], story: str = "") -> VisualAnalysis:
         pipe, device = self.manager.acquire(self.key)
         st = self.manager.stat(self.key)
         chosen = select_frames(frames, peak_t, self.spec.max_frames)
         times = [round(f.t, 1) for f in chosen]
         prompt = PROMPT.format(n=len(chosen), span=span, times=", ".join(f"{t:.1f}s" for t in times),
-                               transcript=_fmt_transcript(words), audio=", ".join(audio_cues) or "nenhum destaque")
+                               transcript=_fmt_transcript(words), audio=", ".join(audio_cues) or "nenhum destaque",
+                               story=story or "nenhuma situação registrada")
         tensors = [_to_tensor(f.image, self.spec.image_side) for f in chosen]
         t0 = time.monotonic()
         salvaged = False

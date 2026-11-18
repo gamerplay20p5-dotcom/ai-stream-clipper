@@ -384,6 +384,18 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
     prov = scoring_provenance(settings, scoring_version)
     created = []
     new_cands: list[Candidate] = []
+    tracker = None
+    if settings.memory_enabled:
+        try:
+            from .pipeline_story import update_story
+
+            with db.begin_nested():
+                tracker = update_story(db, sess, new_until)
+        except Exception:
+            log.exception("story memory update failed (scoring unaffected)")
+            tracker = None
+    if tracker is not None:
+        _revisit_waiting(db, session_id, settings)
     for r in result.get("rejected", []):
         d = r.get("detail") or {}
         row = Candidate(session_id=session_id, streamer_id=sess.streamer_id, peak=float(r["peak"]),
@@ -392,6 +404,8 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
                         decision=str(r.get("reason", "other"))[:24], kinds=list(r.get("kinds") or []),
                         breakdown=d.get("breakdown") or {}, features=d.get("features") or {},
                         transcript=str(d.get("transcript", ""))[:1500], scoring_version=scoring_version)
+        sit = tracker.at(row.peak) if tracker is not None else None
+        row.situation = sit.kind if sit is not None else ""
         db.add(row)
         new_cands.append(row)
     ranker = None
@@ -410,6 +424,27 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
     for row in new_cands:
         rank(row)
     for c in result.get("candidates", []):
+        sit = tracker.at(float(c["peak"])) if tracker is not None else None
+        story_action, c_start, c_end, other = "isolated", float(c["start"]), float(c["end"]), None
+        if sit is not None:
+            from .pipeline_story import plan_cut
+
+            story_action, c_start, c_end, other = plan_cut(db, session_id, sit, c_start, c_end, float(c["peak"]),
+                                                           settings.max_story_seconds)
+        if story_action in ("merge", "duplicate"):
+            if story_action == "merge" and other is not None:
+                other.start, other.end = c_start, c_end
+                other.reasons = list(dict.fromkeys(list(other.reasons or []) + [
+                    f"Sequência unida: novo momento da mesma situação em {float(c['peak']):.0f}s"]))[:14]
+            db.add(Candidate(session_id=session_id, streamer_id=sess.streamer_id, peak=float(c["peak"]),
+                             start=float(c["start"]), end=float(c["end"]), score=float(c["score"]),
+                             decision="story_merged" if story_action == "merge" else "story_duplicate",
+                             kinds=list(c.get("kinds") or []), breakdown=c.get("breakdown") or {},
+                             features=c.get("features") or {}, transcript=str(c.get("transcript", ""))[:1500],
+                             clip_id=other.id if other is not None else None, scoring_version=scoring_version,
+                             situation=sit.kind if sit else ""))
+            continue
+        c = {**c, "start": c_start, "end": c_end}
         clip = Clip(
             session_id=session_id, streamer_id=sess.streamer_id, start=float(c["start"]), end=float(c["end"]),
             peak=float(c["peak"]), score=float(c["score"]), score_breakdown=c.get("breakdown") or {},
@@ -420,10 +455,23 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
             caption_style=prefs.get("caption_style") or settings.caption_style,
             layout=prefs.get("layout") or settings.default_layout,
             webcam_region=prefs.get("webcam_region"),
-            version=1, provenance=prov,
+            version=1, provenance={**prov, "story": {"action": story_action, "situation": sit.kind if sit else None,
+                                                     "related_clip": other.id if other is not None else None}},
+            situation_id=sit.id if sit is not None else None,
         )
         db.add(clip)
         db.flush()
+        try:
+            from .ai.editorial import judge
+            from .pipeline_story import story_context
+
+            j = judge(start=clip.start, end=clip.end, peak=clip.peak, breakdown=clip.score_breakdown,
+                      kinds=clip.kinds, story=story_context(db, clip)["situation"],
+                      noise=tracker.noise_near(clip.peak) if tracker is not None else [],
+                      same_story_clips=1 if story_action == "second_cut" else 0, min_score=settings.min_score)
+            clip.prelim_score, clip.confidence = j.preliminary, j.confidence
+        except Exception:
+            log.exception("preliminary editorial judgement failed")
         row = Candidate(session_id=session_id, streamer_id=sess.streamer_id, peak=clip.peak, start=clip.start,
                         end=clip.end, score=clip.score, decision="accepted", kinds=clip.kinds,
                         breakdown=clip.score_breakdown, features=c.get("features") or {},
@@ -451,6 +499,40 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
 
         _dataset_safely(db, pick)
     return created
+
+
+def _revisit_waiting(db: Session, session_id: int, settings: AISettings) -> None:
+    """Clips held because their story was unfolding get a new analysis when it ends."""
+    from datetime import timedelta
+
+    from . import pipeline_ai
+    from .models import SituationRow
+
+    for clip in db.scalars(select(Clip).where(Clip.session_id == session_id, Clip.status == "waiting")):
+        sit = db.get(SituationRow, clip.situation_id) if clip.situation_id else None
+        stale = clip.updated_at is not None and utcnow() - clip.updated_at > timedelta(minutes=15)
+        if sit is None or sit.status != "ongoing" or stale:
+            clip.error = ""
+            clip.reasons = list(dict.fromkeys(list(clip.reasons or []) + [
+                "Reanalisado após o fim da situação (contexto completo)"]))[:14]
+            pipeline_ai.enqueue_analysis(db, clip, settings)
+
+
+def revisit_waiting_all(db: Session) -> int:
+    """Maintenance: waiting clips of sessions that already ended (no more scoring runs) or held too long."""
+    from datetime import timedelta
+
+    settings = load_ai_settings(db)
+    n = 0
+    for clip in db.scalars(select(Clip).where(Clip.status == "waiting")):
+        sess = db.get(StreamSession, clip.session_id)
+        if (sess is None or sess.status != "live") or utcnow() - clip.updated_at > timedelta(minutes=20):
+            from . import pipeline_ai
+
+            clip.error = ""
+            pipeline_ai.enqueue_analysis(db, clip, settings)
+            n += 1
+    return n
 
 
 def _dataset_safely(db: Session, fn) -> None:

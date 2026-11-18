@@ -39,6 +39,7 @@ def tick() -> dict:
         out["expired"] = len(expired)
         out["offline"] = pipeline.mark_stale_workers(db)
         out["vision_fallback"] = pipeline.vision_timeouts(db)
+        out["revisited"] = pipeline.revisit_waiting_all(db)
     return out
 
 

@@ -196,7 +196,8 @@ async def handle_vision(ctx: JobContext) -> dict:
         try:
             analyzer = VLMAnalyzer(manager, model)
             visual = await asyncio.to_thread(
-                analyzer.analyze, [FrameInput(f.t, f.image) for f in frames], peak_rel, span, (w0, w1), words_rel, cues)
+                analyzer.analyze, [FrameInput(f.t, f.image) for f in frames], peak_rel, span, (w0, w1), words_rel, cues,
+                _story_text(spec.get("story") or {}, w0))
         except ModelUnavailable as exc:
             fallback_reason = str(exc)[:300]
         timings["vlm_s"] = round(time.monotonic() - t0, 2)
@@ -222,7 +223,12 @@ async def handle_vision(ctx: JobContext) -> dict:
     ac = spec.get("acoustic") or {}
     track = director.AcousticTrack([(t, c) for t, c in ac.get("frames", [])], [(t, p) for t, p in ac.get("pitch", [])])
     motion = [(w0 + m[0], m[1]) for m in (heur.extra or {}).get("motion", [])]
-    decision = director.decide(cand, spec["words"], track, visual, director.Limits(**spec["limits"]), motion=motion)
+    hint = None
+    sit = (spec.get("story") or {}).get("situation") or {}
+    if sit.get("start") is not None and sit["start"] < float(spec["start"]) - 1.0:
+        hint = (float(sit["start"]), f"{sit.get('kind', 'situação')}: {sit.get('summary', '')[:60]}")
+    decision = director.decide(cand, spec["words"], track, visual, director.Limits(**spec["limits"]), motion=motion,
+                               context_hint=hint)
     if visual.fallback:
         decision.reasons.append("Análise multimodal indisponível: decisão com áudio + visão heurística")
 
@@ -265,6 +271,17 @@ async def handle_vision(ctx: JobContext) -> dict:
     })
     return {"mode": decision.mode, "keep": decision.keep, "score": decision.score, "vision": visual.provider,
             "narrative": narr.provider, "timings": timings}
+
+
+def _story_text(story: dict, w0: float) -> str:
+    """Bounded story memory for the VLM (session times converted to the analysed window)."""
+    sit = story.get("situation") or {}
+    lines = []
+    for b in (story.get("before") or [])[-2:]:
+        lines.append(f"antes: {b[:160]}")
+    if sit:
+        lines.append(f"situação em andamento: {sit.get('summary', '')[:200]} (confiança {sit.get('confidence', 0):.1f})")
+    return " | ".join(lines)[:500]
 
 
 def _prompt_version() -> str:

@@ -99,6 +99,15 @@ export type Clip = {
   analysis_meta: AnalysisMeta | null;
   analysis_runs: number;
   is_test: boolean;
+  prelim_score?: number | null;
+  editorial_score?: number | null;
+  confidence?: number | null;
+  situation_id?: number | null;
+  protected?: boolean;
+  favorite?: boolean;
+  lifecycle?: string;
+  purge_after?: string | null;
+  purge_reason?: string;
   heuristic_bounds: [number, number] | null;
   version: number;
   has_video: boolean;
@@ -150,6 +159,15 @@ export type Decision = {
   reasons: string[];
   evidence: { source: string; t_abs: number | null; detail: string }[];
   adjustments: string[];
+  editorial?: Editorial;
+};
+
+export type Editorial = {
+  criteria: Record<string, { label: string; value: number | null; evidence: string[] }>;
+  preliminary: number; final: number | null; confidence: number; stage: string;
+  why_selected: string; best_part: string; needed_context: string; weaknesses: string[];
+  edit_suggestions: string[]; rejection_reason: string; waiting_context: boolean;
+  story: { kind: string; summary: string; complete?: boolean; status: string } | null;
 };
 
 export type EditPlanT = {

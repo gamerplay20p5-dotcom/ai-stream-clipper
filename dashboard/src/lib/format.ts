@@ -46,6 +46,7 @@ export const dimensionLabel: Record<string, string> = {
 export const statusLabel: Record<string, string> = {
   candidate: "Candidato",
   analyzing: "Análise visual",
+  waiting: "Aguardando contexto",
   rendering: "Renderizando",
   ready: "Para revisar",
   approved: "Aprovado",

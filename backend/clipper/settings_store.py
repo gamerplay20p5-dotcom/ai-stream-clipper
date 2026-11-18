@@ -72,8 +72,9 @@ class AISettings(BaseModel):
     dataset_retention_days: int = Field(21, ge=0, description="media of unreviewed examples; 0 = keep")
     dataset_reviewed_retention_days: int = Field(0, ge=0, description="media of reviewed examples; 0 = keep")
     dataset_quota_gb: float = Field(20.0, ge=0.5, le=2000)
-    # Phase 3 - temporal memory and narrative continuity
+    # Phase 3/5 - temporal memory and narrative continuity
     memory_enabled: bool = True
+    max_story_seconds: float = Field(90.0, ge=20, le=180, description="longest clip for a multi-minute story")
     memory_window_seconds: float = Field(180.0, ge=30, le=900)
     merge_gap_seconds: float = Field(20.0, ge=0, le=120)
     # Phase 3 - queue pressure: when the vision queue is this deep, weak candidates skip the VLM

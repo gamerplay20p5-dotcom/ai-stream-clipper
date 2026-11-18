@@ -11,7 +11,7 @@ import { dimensionLabel, platformName, seconds, timecode } from "../lib/format";
 const tabs = [
   { key: "ready", label: "Para revisar" },
   { key: "approved", label: "Aprovados" },
-  { key: "candidate,analyzing,rendering", label: "Em processamento" },
+  { key: "candidate,analyzing,rendering,waiting", label: "Em processamento" },
   { key: "rejected", label: "Rejeitados" },
   { key: "failed", label: "Com falha" },
   { key: "", label: "Todos" },

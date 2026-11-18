@@ -1,5 +1,6 @@
 import { AudioLines, Clapperboard, Eye, FileText, Sparkles } from "lucide-react";
-import type { Clip } from "../api";
+import type { Clip, Editorial } from "../api";
+import { Meter } from "./ui";
 import { seconds, timecode } from "../lib/format";
 
 const sourceIcon: Record<string, typeof Eye> = {
@@ -64,6 +65,8 @@ export default function AnalysisPanel({ clip, onReanalyze, busy }: { clip: Clip;
   const canReanalyze = !["rendering", "analyzing", "candidate"].includes(clip.status);
 
   return (
+    <>
+    {d?.editorial && <EditorialBlock e={d.editorial} />}
     <section className="mt-6 border-t border-suite-line pt-5" aria-label="Análise da IA">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">Análise da IA</h3>
@@ -194,6 +197,52 @@ export default function AnalysisPanel({ clip, onReanalyze, busy }: { clip: Clip;
           {clip.analysis_runs > 0 ? `${clip.analysis_runs} análise(s). ` : ""}Editar e renderizar de novo não repete a análise.
         </span>
       </div>
+    </section>
+    </>
+  );
+}
+
+function EditorialBlock({ e }: { e: Editorial }) {
+  const crit = Object.entries(e.criteria);
+  return (
+    <section className="mt-6 border-t border-suite-line pt-5" aria-label="Julgamento editorial">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Julgamento editorial</h3>
+        <span className="text-xs text-ink-muted">
+          preliminar {e.preliminary.toFixed(0)}
+          {e.final !== null && <> · final <b className="text-ink">{e.final.toFixed(0)}</b></>} · confiança {(e.confidence * 100).toFixed(0)}%
+        </span>
+      </div>
+      <p className="mb-2 text-[11px] text-ink-faint">A confiança mede quantas evidências independentes existem, não a chance de viralizar.</p>
+      {e.waiting_context && (
+        <p className="mb-2 rounded border border-take/50 bg-take-dim px-2 py-1 text-xs text-take">
+          A situação ainda estava em andamento: o corte aguarda o desfecho antes da decisão final.
+        </p>
+      )}
+      {e.story && <p className="mb-2 text-sm"><span className="text-ink-muted">História: </span>{e.story.summary}</p>}
+      <dl className="mb-3 space-y-1 text-sm">
+        {e.why_selected && <div><dt className="inline text-ink-muted">Por que foi selecionado: </dt><dd className="inline">{e.why_selected}</dd></div>}
+        {e.best_part && <div><dt className="inline text-ink-muted">Parte mais interessante: </dt><dd className="inline">{e.best_part}</dd></div>}
+        {e.needed_context && <div><dt className="inline text-ink-muted">Contexto: </dt><dd className="inline">{e.needed_context}</dd></div>}
+        {e.weaknesses.length > 0 && <div><dt className="inline text-ink-muted">O que enfraquece: </dt><dd className="inline">{e.weaknesses.join("; ")}</dd></div>}
+        {e.edit_suggestions.length > 0 && <div><dt className="inline text-ink-muted">Sugestões de edição: </dt><dd className="inline">{e.edit_suggestions.join("; ")}</dd></div>}
+        {e.rejection_reason && <div><dt className="inline text-ink-muted">Motivo de rejeição: </dt><dd className="inline">{e.rejection_reason}</dd></div>}
+      </dl>
+      <details>
+        <summary className="cursor-pointer text-xs text-ink-muted">Os 14 critérios e suas evidências</summary>
+        <ul className="mt-2 space-y-2">
+          {crit.map(([k, c]) => (
+            <li key={k} className="text-xs">
+              <div className="flex items-center gap-2">
+                <span className="w-40 shrink-0 sm:w-56">{c.label}</span>
+                <div className="flex-1"><Meter value={c.value} /></div>
+                <span className="w-8 text-right">{c.value === null ? "n/d" : c.value.toFixed(0)}</span>
+              </div>
+              {c.evidence.length > 0 && <p className="mt-0.5 text-[11px] text-ink-faint">{c.evidence.join(" · ")}</p>}
+            </li>
+          ))}
+        </ul>
+      </details>
     </section>
   );
 }

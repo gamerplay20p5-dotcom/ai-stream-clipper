@@ -101,7 +101,10 @@ def _limits(db: Session, clip: Clip, settings: AISettings) -> dict:
     streamer = db.get(Streamer, clip.streamer_id)
     prefs = (streamer.preferences or {}) if streamer else {}
     min_score = float(prefs["min_score"]) if isinstance(prefs.get("min_score"), (int, float)) else settings.min_score
-    return {"min_len": settings.min_clip_seconds, "max_len": settings.max_clip_seconds, "avail_start": lo,
+    max_len = settings.max_clip_seconds
+    if clip.situation_id and (clip.provenance or {}).get("story", {}).get("action") in ("story", "merge"):
+        max_len = max(max_len, settings.max_story_seconds)  # a multi-minute story may need a longer cut
+    return {"min_len": settings.min_clip_seconds, "max_len": max_len, "avail_start": lo,
             "avail_end": hi, "min_score": min_score}
 
 
@@ -132,7 +135,18 @@ def ai_spec(db: Session, clip: Clip, source_location: dict) -> dict:
         "title": clip.title, "title_suggestions": clip.title_suggestions or [],
         "layout": clip.layout, "caption_style": clip.caption_style, "webcam_region": clip.webcam_region,
         "analysis_runs": clip.analysis_runs,
+        "story": _story(db, clip),
     }
+
+
+def _story(db: Session, clip: Clip) -> dict:
+    try:
+        from .pipeline_story import story_context
+
+        return story_context(db, clip)
+    except Exception:
+        log.exception("story context unavailable")
+        return {"situation": None, "before": []}
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +222,18 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
     except Exception:
         log.exception("dataset snapshot refresh failed (clip unaffected)")
 
+    _editorial_final(db, clip, decision, visual, settings)
+    judgement = (clip.decision or {}).get("editorial") or {}
+    if settings.director_enabled and not decision.keep and not clip.is_test and judgement.get("waiting_context")             and clip.analysis_runs < 3:  # bounded: never waits forever
+        clip.status = "waiting"  # low preliminary score but the story is still unfolding: decide later
+        clip.error = "Aguardando o desfecho da situação para decidir"
+        log.info("clip waiting for story context", extra={"clip_id": clip.id})
+        return
+    if settings.director_enabled and not decision.keep and not clip.is_test and \
+            (judgement.get("final") or 0) >= settings.min_score and (judgement.get("story") or {}).get("complete"):
+        decision.keep = True  # complete story with good editorial criteria: keep despite the acoustic score
+        clip.reasons = list(dict.fromkeys(list(clip.reasons or []) + [
+            "Mantido pelo julgamento editorial: história completa com boas evidências"]))[:14]
     if settings.director_enabled and not decision.keep and not clip.is_test:
         clip.status = "rejected"
         clip.error = "Descartado automaticamente pelo diretor: " + "; ".join(decision.adjustments[:2] or
@@ -218,6 +244,29 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
 
     clip.version += 0 if first else 1
     enqueue_render(db, clip)
+
+
+def _editorial_final(db: Session, clip: Clip, decision: DirectorDecision, visual: VisualAnalysis | None,
+                     settings: AISettings) -> None:
+    try:
+        from .ai.editorial import judge
+        from .pipeline_story import story_context
+
+        ctx = story_context(db, clip)
+        sib = 0
+        if clip.situation_id:
+            sib = db.query(Clip).filter(Clip.situation_id == clip.situation_id, Clip.id != clip.id,
+                                        Clip.status.in_(("ready", "approved"))).count()
+        j = judge(start=decision.start_abs, end=decision.end_abs, peak=decision.peak_abs,
+                  breakdown=clip.score_breakdown or {}, kinds=clip.kinds or [], story=ctx["situation"],
+                  visual=visual.model_dump() if visual is not None else None, director=decision.model_dump(),
+                  same_story_clips=sib, min_score=settings.min_score)
+        clip.editorial_score, clip.confidence = j.final, j.confidence
+        d = dict(clip.decision or {})
+        d["editorial"] = j.as_dict()
+        clip.decision = d
+    except Exception:
+        log.exception("final editorial judgement failed (clip unaffected)")
 
 
 def direct_without_vision(db: Session, clip: Clip, reason: str) -> None:

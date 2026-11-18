@@ -387,8 +387,12 @@ class StoryTracker:
 
         # --- scare: scream/surprise with context (surprise words or a silence before)
         if f.surprise and f.voice >= 0.35:
-            sc = self._open("scare") or self._start("scare", _first(f.surprise))
-            sc.add(StoryEvent(_first(f.surprise), "climax", "susto com reação", "acoustic", 2.0))
+            host = next((x for x in (chase, shoot, conflict) if x is not None), None)
+            if host is not None:  # a reaction inside an unfolding story belongs to that story
+                host.add(StoryEvent(_first(f.surprise), "climax", "reação forte do streamer", "acoustic", 2.2))
+            else:
+                sc = self._open("scare") or self._start("scare", _first(f.surprise))
+                sc.add(StoryEvent(_first(f.surprise), "climax", "susto com reação", "acoustic", 2.0))
         elif f.voice >= 0.5 and not f.surprise and not f.laughs and not police_win and conflict is None:
             self.noise.append((mid, "grito sem contexto"))
 

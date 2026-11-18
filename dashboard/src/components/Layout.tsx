@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Clapperboard, ClipboardCheck, Gauge, LogOut, Radio, Send, Server, SlidersHorizontal } from "lucide-react";
+import { Activity, Brain, Clapperboard, ClipboardCheck, Gauge, LogOut, Radio, Send, Server, SlidersHorizontal } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api, type Stats } from "../api";
 
 const nav = [
   { to: "/", label: "Visão geral", icon: Gauge, end: true },
+  { to: "/diretor", label: "Diretor IA", icon: Brain },
   { to: "/cortes", label: "Cortes", icon: Clapperboard },
   { to: "/avaliacao", label: "Avaliação", icon: ClipboardCheck },
   { to: "/publicacao", label: "Publicação", icon: Send },
