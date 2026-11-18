@@ -7,7 +7,7 @@ name: asc
 
 services:
   worker-vision:
-    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.2}
+    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.3}
     container_name: asc-worker-vision
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
@@ -32,7 +32,7 @@ services:
       ASC_CONCURRENCY_VISION: "1"
     devices: ["/dev/dri/renderD128:/dev/dri/renderD128"]
     group_add: ["${ASC_RENDER_GID:?set ASC_RENDER_GID}"]
-    volumes: ["asc_work:/data/work", "/opt/asc/models:/models:ro", "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
+    volumes: ["asc_workdir:/data/work", "/opt/asc/models:/models:ro", "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
     networks: [asc_net]
     cpu_shares: 256
     healthcheck:
@@ -53,4 +53,4 @@ networks:
     name: asc_net_201
 
 volumes:
-  asc_work:
+  asc_workdir:

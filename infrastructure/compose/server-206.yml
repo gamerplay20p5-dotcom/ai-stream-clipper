@@ -35,7 +35,7 @@ x-health: &worker-health
 
 services:
   worker-capture:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.2}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.3}
     container_name: asc-worker-capture
     <<: *hardening
     command: ["worker", "--roles", "monitor,capture"]
@@ -50,7 +50,7 @@ services:
       ASC_CAPTURE_QUALITY: ${ASC_CAPTURE_QUALITY:-1080p60,1080p,936p60,720p60,720p,best}
       ASC_ALLOW_FILE_SOURCES: ${ASC_ALLOW_FILE_SOURCES:-false}
     ports: ["192.168.1.206:8781:8781"]
-    volumes: ["asc_capture:/data/capture", "asc_work:/data/work", "/opt/asc/test-media:/data/test-media:ro",
+    volumes: ["asc_segments:/data/capture", "asc_workdir:/data/work", "/opt/asc/test-media:/data/test-media:ro",
               "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
     networks: [asc_net]
     healthcheck: *worker-health
@@ -59,7 +59,7 @@ services:
         limits: { cpus: "3", memory: 3g }
 
   worker-audio:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.2}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.3}
     container_name: asc-worker-audio
     <<: *hardening
     command: ["worker", "--roles", "audio"]
@@ -70,7 +70,7 @@ services:
       ASC_WHISPER_CPU_THREADS: ${ASC_WHISPER_CPU_THREADS:-4}
       ASC_CONCURRENCY_AUDIO: ${ASC_CONCURRENCY_AUDIO:-2}
       ASC_YAMNET_ENABLED: "true"
-    volumes: ["asc_work:/data/work", "/opt/asc/models:/models", "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
+    volumes: ["asc_workdir:/data/work", "/opt/asc/models:/models", "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
     networks: [asc_net]
     healthcheck: *worker-health
     deploy:
@@ -78,7 +78,7 @@ services:
         limits: { cpus: "8", memory: 12g }
 
   worker-render:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.2}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.3}
     container_name: asc-worker-render
     <<: *hardening
     command: ["worker", "--roles", "render"]
@@ -87,7 +87,7 @@ services:
       ASC_WORKER_ID: "206-render"
       ASC_CONCURRENCY_RENDER: ${ASC_CONCURRENCY_RENDER:-1}
       ASC_FFMPEG_THREADS: ${ASC_FFMPEG_THREADS:-3}
-    volumes: ["asc_work:/data/work", "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
+    volumes: ["asc_workdir:/data/work", "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
     networks: [asc_net]
     healthcheck: *worker-health
     deploy:
@@ -99,5 +99,5 @@ networks:
     name: asc_net_206
 
 volumes:
-  asc_capture:
-  asc_work:
+  asc_segments:
+  asc_workdir:

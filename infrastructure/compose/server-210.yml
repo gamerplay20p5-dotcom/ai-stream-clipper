@@ -55,7 +55,7 @@ services:
       options: { max-size: "20m", max-file: "5" }
 
   api:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.2}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.3}
     container_name: asc-api
     <<: *hardening
     command: ["api", "--host", "0.0.0.0", "--port", "8780"]
@@ -72,7 +72,7 @@ services:
       ASC_OIDC_ISSUER: ${ASC_OIDC_ISSUER:-}
       ASC_OIDC_CLIENT_ID: ${ASC_OIDC_CLIENT_ID:-}
     ports: ["192.168.1.210:8780:8780"]
-    volumes: ["asc_storage:/data/storage", "/etc/asc/tls:/tls:ro"]
+    volumes: ["asc_clips:/data/storage", "/etc/asc/tls:/tls:ro"]
     networks: [asc_net]
     depends_on: { postgres: { condition: service_healthy } }
     healthcheck:
@@ -86,14 +86,14 @@ services:
         limits: { cpus: "2", memory: 2g }
 
   worker-scoring:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.2}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.3}
     container_name: asc-worker-scoring
     <<: *hardening
     command: ["worker", "--roles", "scoring"]
     environment:
       <<: *app-env
       ASC_WORKER_ID: "210-scoring"
-    volumes: ["asc_work:/data/work", "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
+    volumes: ["asc_workdir:/data/work", "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
     networks: [asc_net]
     depends_on: { api: { condition: service_healthy } }
     healthcheck: &worker-health
@@ -109,7 +109,7 @@ services:
   # GPU vision/AI worker (Intel Arc A750). Only the render node is passed through.
   worker-vision:
     profiles: ["gpu"]
-    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.2}
+    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.3}
     container_name: asc-worker-vision
     <<: *hardening
     command: ["worker", "--roles", "vision"]
@@ -125,7 +125,7 @@ services:
       ASC_CONCURRENCY_VISION: "1"
     devices: ["/dev/dri/renderD128:/dev/dri/renderD128"]
     group_add: ["${ASC_RENDER_GID:?set ASC_RENDER_GID}"]
-    volumes: ["asc_work:/data/work", "/opt/asc/models:/models:ro", "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
+    volumes: ["asc_workdir:/data/work", "/opt/asc/models:/models:ro", "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
     networks: [asc_net]
     depends_on: { api: { condition: service_healthy } }
     healthcheck: *worker-health
@@ -139,5 +139,5 @@ networks:
 
 volumes:
   asc_pgdata:
-  asc_storage:
-  asc_work:
+  asc_clips:
+  asc_workdir:

@@ -40,7 +40,8 @@ ARG EXTRAS=capture,audio,vision
 RUN pip install "./backend[${EXTRAS}]" && rm -rf /root/.cache
 
 COPY --from=dashboard /src/dist /app/dashboard
-RUN mkdir -p /data /models && chown -R asc:asc /data /models
+# volume mount points must exist (owned by the container user) so new named volumes inherit it
+RUN mkdir -p /data/work /data/storage /data/capture /data/test-media /models && chown -R asc:asc /data /models
 
 USER asc
 EXPOSE 8780 8781

@@ -35,7 +35,7 @@ ENV ASC_MODELS_DIR=/models
 
 RUN (getent group 10001 || groupadd --gid 10001 asc) \
  && (id -u 10001 >/dev/null 2>&1 || useradd --uid 10001 --gid 10001 --home /app --shell /usr/sbin/nologin asc) \
- && mkdir -p /data /models && chown -R 10001:10001 /data /models
+ && mkdir -p /data/work /models && chown -R 10001:10001 /data /models
 USER 10001
 ENTRYPOINT ["/usr/bin/tini", "--", "clipper"]
 CMD ["worker", "--roles", "vision"]
