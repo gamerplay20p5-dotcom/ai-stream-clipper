@@ -29,7 +29,7 @@ def _public_base() -> str:
     import os
 
     # public hostname served by the Cloudflare Tunnel (only the OAuth callbacks are routed there)
-    return os.environ.get("ASC_PUBLIC_URL", "https://clipper.friendhost.com.br").rstrip("/")
+    return os.environ.get("ASC_PUBLIC_URL", "https://clipper.howto.software").rstrip("/")
 
 
 def _refused(exc: PublishRefused) -> HTTPException:
@@ -157,7 +157,7 @@ def oauth_finish(platform: str, body: FinishIn, request: Request, db: Session = 
 
 @router.get("/oauth/{platform}/callback")
 def oauth_callback(platform: str, request: Request, db: Session = Depends(get_db)):
-    """Redirect URI served by this API (e.g. https://192.168.1.210:8780/api/publish/oauth/instagram/callback).
+    """Redirect URI served by this API: https://clipper.howto.software/api/publish/oauth/<platform>/callback.
 
     The panel cookie is SameSite=strict, so a redirect coming from facebook.com/google.com does not
     carry it. Authentication is the OAuth ``state``: random, single use, 15 minutes, created by a

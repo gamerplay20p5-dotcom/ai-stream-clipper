@@ -57,6 +57,7 @@ sudo asc-ctl compose up --gpu                         # 210; no 201: sudo asc-ct
 
 ## Acesso ao painel
 
+Público: `https://clipper.howto.software` (Caddy do servidor, Let's Encrypt; ver [TUNEL_CLOUDFLARE.md](TUNEL_CLOUDFLARE.md)). Rede local: 
 `https://192.168.1.210:8780`. O certificado é emitido pela CA do projeto. Para o navegador confiar nele, importe o `asc-ca.crt` como autoridade confiável. A alternativa é um túnel SSH: `ssh -L 8780:192.168.1.210:8780 asc@192.168.1.210` e depois abrir `https://localhost:8780`.
 
 ## Monitoramento

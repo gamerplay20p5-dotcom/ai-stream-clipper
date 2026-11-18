@@ -100,7 +100,7 @@ Em modo "Em teste", o Google expira o refresh token em 7 dias: reconecte quando 
   - Cadastre um Redirect URI `https` e use o mesmo no painel.
   - Até a auditoria do TikTok, só é possível postar como "Só eu".
 - **Instagram (Login Unificado da Meta, apps novos):** em Meta for Developers → app → "API do Instagram (login unificado)":
-  - **URL de redirecionamento:** `https://192.168.1.210:8780/api/publish/oauth/instagram/callback` (HTTPS, exatamente igual).
+  - **URL de redirecionamento:** `https://clipper.howto.software/api/publish/oauth/instagram/callback` (HTTPS, exatamente igual).
   - Copie o **config_id** da configuração (Login do Facebook para Empresas → Configurações).
   - Copie o **ID do app** e a **chave secreta** em Configurações do app → Básico.
   - No painel (Publicação → Instagram): ID do app, chave secreta, a mesma URL de redirecionamento e o config_id.

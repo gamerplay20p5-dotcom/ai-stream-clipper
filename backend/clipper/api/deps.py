@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+
 import logging
 import secrets
 import time
@@ -72,8 +74,31 @@ def require_admin(user: CurrentUser = Depends(current_user)) -> CurrentUser:
     return user
 
 
+_PROXY_NETS = (ipaddress.ip_network("172.16.0.0/12"),)  # Docker bridges: only processes on the host itself
+
+
+def via_proxy(request: Request) -> bool:
+    """True when the request came through the host's reverse proxy (Caddy -> published port), i.e. from
+    the public domain. LAN clients and the project's own workers never set X-Forwarded-For."""
+    peer = request.client.host if request.client else ""
+    try:
+        trusted = any(ipaddress.ip_address(peer) in n for n in _PROXY_NETS)
+    except ValueError:
+        trusted = False
+    return trusted and bool(request.headers.get("x-forwarded-for"))
+
+
 def client_ip(request: Request) -> str:
-    return request.client.host if request.client else ""
+    """Real client IP. X-Forwarded-For is honoured ONLY from the local proxy network (it cannot be forged
+    from the LAN or the internet); its right-most valid entry is the one the proxy appended."""
+    peer = request.client.host if request.client else ""
+    if via_proxy(request):
+        for part in reversed(request.headers.get("x-forwarded-for", "").split(",")):
+            try:
+                return str(ipaddress.ip_address(part.strip()))
+            except ValueError:
+                continue
+    return peer
 
 
 def audit(db: Session, request: Request, user: CurrentUser | None, action: str, target: str = "",

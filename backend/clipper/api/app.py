@@ -59,12 +59,20 @@ async def lifespan(app: FastAPI):
 def create_app(run_maintenance: bool = True) -> FastAPI:
     s = get_settings()
     app = FastAPI(title="AI Stream Clipper", version=__version__, lifespan=lifespan,
-                  docs_url="/api/docs" if not s.is_production else None, openapi_url="/api/openapi.json")
+                  docs_url="/api/docs" if not s.is_production else None,
+                  openapi_url=None if s.is_production else "/api/openapi.json")  # no public API map in production
     app.state.run_maintenance = run_maintenance
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
+        from .deps import via_proxy
+
+        # the public domain (reverse proxy) never reaches the worker API: workers use the LAN/docker network
+        if request.url.path.startswith("/internal/") and via_proxy(request):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
         resp = await call_next(request)
+        if request.url.scheme == "https" or via_proxy(request):
+            resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("X-Frame-Options", "DENY")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
