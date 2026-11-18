@@ -34,7 +34,7 @@ def sessions(limit: int = 12, db: Session = Depends(get_db), _: CurrentUser = De
     out = []
     for s in db.scalars(select(StreamSession).order_by(StreamSession.id.desc()).limit(max(1, min(limit, 50)))):
         st = db.get(Streamer, s.streamer_id)
-        n = db.query(SituationRow).filter(SituationRow.session_id == s.id).count()
+        n = db.query(SituationRow).filter(SituationRow.session_id == s.id, SituationRow.status != "discarded").count()
         out.append({"id": s.id, "streamer": (st.display_name if st else "") or "", "platform": st.platform if st else "",
                     "status": s.status, "title": s.title, "covered_until": s.covered_until,
                     "story_until": (s.stats or {}).get("story_until"), "situations": n,
@@ -47,7 +47,8 @@ def session_story(sid: int, db: Session = Depends(get_db), _: CurrentUser = Depe
     s = db.get(StreamSession, sid)
     if s is None:
         raise HTTPException(404, "session not found")
-    rows = list(db.scalars(select(SituationRow).where(SituationRow.session_id == sid).order_by(SituationRow.start)))
+    rows = list(db.scalars(select(SituationRow).where(SituationRow.session_id == sid, SituationRow.status != "discarded")
+                           .order_by(SituationRow.start)))
     clips = list(db.scalars(select(Clip).where(Clip.session_id == sid)))
     counts: dict[str, int] = {}
     for (d,) in db.execute(select(Candidate.decision).where(Candidate.session_id == sid)):

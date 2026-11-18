@@ -94,6 +94,7 @@ class BinFacts:
     t0: float
     t1: float
     police: list = field(default_factory=list)
+    urgency: list = field(default_factory=list)
     vehicle_words: list = field(default_factory=list)
     vehicle_sound: float = 0.0
     conflict: list = field(default_factory=list)
@@ -128,6 +129,8 @@ def facts(b: Bin) -> BinFacts:
     toks = _norm_tokens(b.words)
     f = BinFacts(b.t0, b.t1)
     f.police = _find(toks, POLICE) if toks else []
+    f.urgency = [(toks[i][0], ph) for i, ph, _w in lexicon.find_tension([w for _, w in toks])
+                 if ph not in ("policia", "a policia", "police", "cops", "viatura", "helicoptero", "helicopter")] if toks else []
     f.vehicle_words = _find(toks, VEHICLE) if toks else []
     f.conflict = _find(toks, CONFLICT) if toks else []
     f.crash = _find(toks, CRASH) if toks else []
@@ -202,6 +205,13 @@ class Situation:
         return out
 
     @property
+    def confirmed(self) -> bool:
+        """Provisional stories (only a police mention while driving) need a real sign before they count."""
+        if self.kind != "police_chase":
+            return True
+        return any(e.strength >= 1.6 for e in self.events)
+
+    @property
     def complete(self) -> bool:
         p = self.phases
         return bool(p["setup"]) and bool(p["climax"]) and bool(p["resolution"])
@@ -214,17 +224,19 @@ class Situation:
     @property
     def confidence(self) -> float:
         dur = max(0.0, self.last - self.start)
-        conf = 0.25 * len(self.modalities & {"transcript", "acoustic", "visual"}) + min(0.3, dur / 300.0)
-        conf += 0.15 if self.complete else 0.0
+        strong = sum(1 for e in self.events if e.strength >= 2.0)
+        conf = 0.2 * len(self.modalities & {"transcript", "acoustic", "visual"}) + min(0.25, 0.08 * strong)
+        conf += min(0.1, dur / 600.0) + (0.15 if self.complete else 0.0)
+        if strong == 0:
+            conf = min(conf, 0.45)  # a situation without any strong moment is never "certain"
         return round(min(1.0, conf), 2)
 
     def summary(self) -> str:
         """Short, rebuilt from events (bounded): never grows with the live."""
         steps = []
         for e in self.events:
-            if e.phase != "development" or e.strength >= 1.5:
-                if not steps or steps[-1] != e.label:
-                    steps.append(e.label)
+            if (e.phase != "development" or e.strength >= 1.5) and e.label not in steps:
+                steps.append(e.label)
         txt = f"{KIND_PT.get(self.kind, self.kind)} ({_mmss(self.start)}–{_mmss(self.last)}): " + " → ".join(steps[:8])
         if not self.phases["resolution"] and self.status == "closed":
             txt += " (sem desfecho observado)"
@@ -304,10 +316,15 @@ class StoryTracker:
                 s.status = "closed"
                 if not s.outcome:
                     s.outcome = "none"
+        self.situations = [s for s in self.situations if not (s.status == "closed" and not s.confirmed)]
+        for s in self.situations:
+            if s.confirmed and "perseguição ainda não confirmada" in s.uncertain:
+                s.uncertain.remove("perseguição ainda não confirmada")
 
         # --- police chase: police/chase cues AND driving evidence inside the last 60 s
         police_win = self._window("police")
         driving_win = any(x.driving for x in self.recent)
+        urgency = [x for x in self._window("urgency")]
         chase = self._open("police_chase")
         if chase is None and police_win and driving_win:
             t = min(t for t, _ in police_win)
@@ -315,9 +332,13 @@ class StoryTracker:
             chase.add(StoryEvent(t, "setup", f"polícia mencionada (“{police_win[0][1]}”)", "transcript", 1.5))
             chase.goals.append("fugir da polícia")
             chase.conflicts.append("jogador × polícia")
+            chase.uncertain.append("perseguição ainda não confirmada")
         elif chase is None and f.driving and not police_win:
             pass  # just driving: not a story
         if chase is not None:
+            if f.urgency:
+                chase.add(StoryEvent(_first(f.urgency), "development", f"fuga com urgência (“{f.urgency[0][1]}”)",
+                                     "transcript", 1.6))
             if f.police:
                 chase.add(StoryEvent(_first(f.police), "development", "perseguição continua", "transcript", 1.0))
             if f.driving:
@@ -377,7 +398,7 @@ class StoryTracker:
         laughs_win = self._window("laughs")
         funny = self._open("funny_conversation")
         talk = sum(x.speech_words for x in self.recent[-4:])
-        if funny is None and len(laughs_win) >= 2 and talk >= 12 and chase is None and shoot is None:
+        if funny is None and len(laughs_win) >= 3 and talk >= 15 and chase is None and shoot is None:
             funny = self._start("funny_conversation", laughs_win[0][0])
             funny.add(StoryEvent(laughs_win[0][0], "setup", "conversa com risadas", "transcript", 1.5))
         if funny is not None and f.laughs:
@@ -411,11 +432,14 @@ class StoryTracker:
             for s in self.situations:
                 if s.start - 5 <= t <= s.last + 10:
                     s.add(StoryEvent(t, "development", f"na tela: {label[:60]}", "visual", 1.2))
+        for s in self.situations:
+            if s.confirmed and "perseguição ainda não confirmada" in s.uncertain:
+                s.uncertain.remove("perseguição ainda não confirmada")
         return f
 
     def at(self, t: float, slack: float = 20.0) -> Situation | None:
         """The most relevant situation covering ``t`` (stories beat scares)."""
-        cands = [s for s in self.situations if s.start - slack <= t <= s.last + slack]
+        cands = [s for s in self.situations if s.start - slack <= t <= s.last + slack and s.confirmed]
         if not cands:
             return None
         rank = {"police_chase": 0, "shootout": 1, "conflict": 2, "funny_conversation": 3, "scare": 4}

@@ -123,3 +123,22 @@ def test_vlm_scores_are_capped():
                   visual={"funny": 10, "important": 10, "unexpected": 10, "confidence": 0.9, "summary": "x"},
                   director={"score": 40})
     assert hyped.criteria["humor"].value <= 2.0 + (10 - 2.0) * 0.35 + 0.01  # at most 35% of the gap
+
+
+def test_police_talk_while_driving_without_any_real_sign_is_discarded():
+    tr = StoryTracker()
+    bins = [_bin(0, "a policia passou ali na rua", {"vehicle": 0.6}), _bin(10, "vou levar o carro na oficina", {"vehicle": 0.6})]
+    bins += [_bin(t, "") for t in range(20, 120, 10)]
+    _feed(tr, bins)
+    assert not [s for s in tr.situations if s.kind == "police_chase"]  # never confirmed -> discarded
+    assert tr.at(10) is None
+
+
+def test_chase_confirmed_by_urgency_minutes_after_the_first_police_mention():
+    tr = StoryTracker()
+    bins = [_bin(0, "olha a policia ali", {"vehicle": 0.6})]
+    bins += [_bin(t, "dirigindo tranquilo", {"vehicle": 0.6}) for t in range(10, 40, 10)]
+    bins += [_bin(40, "corre acelera eles tao atras da gente", {"vehicle": 0.7})]
+    _feed(tr, bins)
+    ch = [s for s in tr.situations if s.kind == "police_chase"][0]
+    assert ch.confirmed and ch.start <= 5 and "perseguição ainda não confirmada" not in ch.uncertain

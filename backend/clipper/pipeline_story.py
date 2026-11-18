@@ -66,7 +66,8 @@ def _bins(db: Session, sess_id: int, a: float, b: float) -> list[Bin]:
 
 
 def load_tracker(db: Session, sess_id: int) -> tuple[StoryTracker, dict[int, SituationRow]]:
-    rows = list(db.scalars(select(SituationRow).where(SituationRow.session_id == sess_id)
+    rows = list(db.scalars(select(SituationRow).where(SituationRow.session_id == sess_id,
+                                                      SituationRow.status != "discarded")
                            .order_by(SituationRow.start)))
     ongoing = [r for r in rows if r.status == "ongoing"]
     closed = [r for r in rows if r.status != "ongoing"][-KEEP_CLOSED:]
@@ -76,6 +77,10 @@ def load_tracker(db: Session, sess_id: int) -> tuple[StoryTracker, dict[int, Sit
 
 
 def save_tracker(db: Session, sess_id: int, tracker: StoryTracker, rows: dict[int, SituationRow]) -> None:
+    alive = {s.id for s in tracker.situations if s.id is not None}
+    for rid, row in rows.items():  # provisional stories that ended unconfirmed
+        if row.status == "ongoing" and rid not in alive:
+            row.status = "discarded"
     for s in tracker.situations:
         d = s.as_dict()
         d["name_counts_raw"] = dict(list(s.name_counts.items())[:40])
@@ -141,7 +146,8 @@ def plan_cut(db: Session, sess_id: int, sit: Situation | None, start: float, end
 def story_context(db: Session, clip: Clip, window: float = 240.0) -> dict:
     """Bounded context for the VLM/director: the clip's situation and what happened before it."""
     rows = list(db.scalars(select(SituationRow).where(
-        SituationRow.session_id == clip.session_id, SituationRow.last >= clip.start - window,
+        SituationRow.session_id == clip.session_id, SituationRow.status != "discarded",
+        SituationRow.last >= clip.start - window,
         SituationRow.start <= clip.end + 30).order_by(SituationRow.start)))
     main = db.get(SituationRow, clip.situation_id) if clip.situation_id else None
     return {
