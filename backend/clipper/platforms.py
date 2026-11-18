@@ -12,6 +12,7 @@ import ipaddress
 import logging
 import re
 import socket
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -147,6 +148,67 @@ def parse_file_source(name: str, media_dir: Path, must_exist: bool = True) -> St
 
 
 # ---------------------------------------------------------------------------
+# YouTube: a watch?v= link is ONE broadcast; the channel is what must be monitored
+# ---------------------------------------------------------------------------
+
+_YT_WATCH = "https://www.youtube.com/watch?v={vid}"  # fixed host: no user-controlled destination
+_YT_CHANNEL_IN_PAGE = (re.compile(r'"channelId":"(UC[A-Za-z0-9_-]{22})"'),
+                       re.compile(r'itemprop="channelId" content="(UC[A-Za-z0-9_-]{22})"'))
+_YT_AUTHOR_IN_PAGE = re.compile(r'"ownerChannelName":"([^"]{1,120})"')
+YT_REMOVED = ("removed by the uploader", "video unavailable", "this video is private", "has been removed",
+              "account associated with this video has been terminated", "no longer available")
+
+
+class VideoUnavailable(InvalidStreamURL):
+    pass
+
+
+def channel_ref(channel_id: str, name: str = "") -> StreamRef:
+    if not _YT_CHANNEL_ID.match(channel_id):
+        raise InvalidStreamURL("invalid YouTube channel id")
+    return StreamRef("youtube", channel_id, f"https://www.youtube.com/channel/{channel_id}/live", name or channel_id)
+
+
+def resolve_youtube_channel(video_id: str, timeout: float = 15.0) -> tuple[str, str]:
+    """Return ``(channel_id, channel_name)`` of the channel that owns ``video_id``.
+    Raises :class:`VideoUnavailable` when YouTube says the video no longer exists and
+    ``InvalidStreamURL`` when the page could not be read (network, consent wall...)."""
+    import httpx
+
+    if not _YT_ID.match(video_id):
+        raise InvalidStreamURL("invalid YouTube video id")
+    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36",
+               "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8", "Cookie": "CONSENT=YES+1"}
+    try:
+        r = httpx.get(_YT_WATCH.format(vid=video_id), headers=headers, timeout=timeout, follow_redirects=False)
+    except httpx.HTTPError as exc:
+        raise InvalidStreamURL(f"could not read the YouTube page: {type(exc).__name__}") from exc
+    text = r.text if r.status_code == 200 else ""
+    for rx in _YT_CHANNEL_IN_PAGE:
+        m = rx.search(text)
+        if m:
+            a = _YT_AUTHOR_IN_PAGE.search(text)
+            return m.group(1), (a.group(1) if a else "")
+    low = text.lower()
+    if r.status_code == 200 and any(k in low for k in YT_REMOVED) or '"status":"error"' in low:
+        raise VideoUnavailable("video unavailable")
+    raise InvalidStreamURL(f"could not find the channel of this video (HTTP {r.status_code})")
+
+
+def canonical_youtube(ref: StreamRef) -> StreamRef:
+    """Turn a single-broadcast YouTube reference (``v:<id>``) into the owner's channel."""
+    if ref.platform != "youtube" or not ref.channel.startswith("v:"):
+        return ref
+    try:
+        cid, name = resolve_youtube_channel(ref.channel[2:])
+    except VideoUnavailable as exc:
+        raise VideoUnavailable(
+            "este vídeo do YouTube não existe mais (removido ou privado). Links watch?v= apontam para uma "
+            "transmissão só; cadastre o canal: youtube.com/@handle ou youtube.com/channel/ID") from exc
+    return channel_ref(cid, name)
+
+
+# ---------------------------------------------------------------------------
 # Live status probing (streamlink)
 # ---------------------------------------------------------------------------
 
@@ -156,6 +218,36 @@ class LiveStatus:
     live: bool
     title: str = ""
     error: str = ""
+    note: str = ""  # informational (e.g. scheduled broadcast), not an error
+    channel_id: str = ""  # YouTube: owner channel of a v:<id> target, when it could be resolved
+
+
+class _ThreadLog(logging.Handler):
+    """Collect streamlink plugin messages emitted by the current thread only (probes run in parallel)."""
+
+    def __init__(self):
+        super().__init__(logging.INFO)
+        self.tid = threading.get_ident()
+        self.messages: list[str] = []
+
+    def emit(self, record):
+        if record.thread == self.tid:
+            self.messages.append(record.getMessage())
+
+
+def explain_youtube(messages: list[str]) -> tuple[str, str]:
+    """Map streamlink's YouTube messages to (error, note) for the panel."""
+    for m in messages:
+        low = m.lower()
+        if any(k in low for k in YT_REMOVED):
+            return ("O vídeo deste link foi removido ou ficou privado. Links watch?v= apontam para uma transmissão "
+                    "só; cadastre o canal (youtube.com/@handle ou /channel/ID)."), ""
+        if "live_stream_offline" in low or "will begin" in low or "premieres" in low:
+            when = m.split(":", 2)[-1].strip()
+            return "", f"Transmissão agendada no YouTube ({when[:160]})"
+        if "sign in to confirm" in low or "not a bot" in low:
+            return "O YouTube pediu verificação anti-robô para este servidor (bloqueio de IP).", ""
+    return "", ""
 
 
 def probe_live(url: str, timeout: float = 20.0) -> LiveStatus:
@@ -167,6 +259,27 @@ def probe_live(url: str, timeout: float = 20.0) -> LiveStatus:
         return LiveStatus(False, error="streamlink not installed")
     session = Streamlink()
     session.set_option("http-timeout", timeout)
+    catcher = _ThreadLog()
+    slog = logging.getLogger("streamlink")
+    slog.addHandler(catcher)
+    try:
+        st = _probe(session, url, PluginError, NoPluginError)
+    finally:
+        slog.removeHandler(catcher)
+    if "youtube.com" in url and not st.live:
+        err, note = explain_youtube(catcher.messages)
+        st.error = st.error or err
+        st.note = note
+        vid = re.search(r"[?&]v=([A-Za-z0-9_-]{11})", url)
+        if vid and not err:  # single-broadcast link that still exists: find its channel for migration
+            try:
+                st.channel_id = resolve_youtube_channel(vid.group(1))[0]
+            except InvalidStreamURL:
+                pass
+    return st
+
+
+def _probe(session, url: str, PluginError, NoPluginError) -> LiveStatus:
     try:
         _, plugin_cls, resolved = session.resolve_url(url)
         plugin = plugin_cls(session, resolved)

@@ -78,9 +78,13 @@ def session_report(db: Session, s: Streamer, roles: dict[str, list[str]], settin
                               "enabled": s.enabled, "status": s.status, "last_checked_at": _iso(s.last_checked_at),
                               "last_error": s.last_error}}
     if sess is None:
-        rep.update(stage="Sem transmissão", state="idle",
-                   explanation="Nenhuma sessão capturada ainda." + (" O canal está offline." if s.status == "offline"
-                                                                    else ""))
+        if s.status == "error" and s.last_error:
+            rep.update(stage="Erro na verificação", state="error", explanation=s.last_error)
+        else:
+            rep.update(stage="Sem transmissão", state="idle",
+                       explanation="Nenhuma sessão capturada ainda." + (" O canal está offline." if s.status == "offline"
+                                                                        else "")
+                       + (f" {s.last_error}." if s.last_error else ""))
         return rep
     now = utcnow()
     clips = db.scalars(select(Clip).where(Clip.session_id == sess.id)).all()

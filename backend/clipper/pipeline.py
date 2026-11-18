@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from . import queue
 from .config import get_settings
 from .db import utcnow
-from .models import AudioFeature, Clip, Event, Job, Segment, Streamer, StreamSession, TranscriptWord, Worker
+from .models import AudioFeature, AuditLog, Clip, Event, Job, Segment, Streamer, StreamSession, TranscriptWord, Worker
 from .scoring.engine import weighted_total
 from .settings_store import AISettings, load_ai_settings
 
@@ -79,14 +79,27 @@ def monitor_targets(db: Session, min_interval_s: float) -> list[dict]:
     return out
 
 
-def report_status(db: Session, streamer_id: int, live: bool, title: str = "", error: str = "") -> dict:
+def report_status(db: Session, streamer_id: int, live: bool, title: str = "", error: str = "",
+                  note: str = "", channel_id: str = "") -> dict:
     s = db.get(Streamer, streamer_id)
     if s is None:
         raise NotFound("streamer")
     now = utcnow()
     s.last_checked_at = now
     s.check_requested = False
-    s.last_error = error[:1000]
+    s.last_error = error[:1000] or (note[:1000] if not live else "")
+    if channel_id and s.platform == "youtube" and s.channel.startswith("v:") and not live:
+        # single-broadcast link registered before v0.2.10: follow the owner channel from now on
+        from .platforms import channel_ref
+
+        ref = channel_ref(channel_id, s.display_name or "")
+        taken = db.scalar(select(Streamer.id).where(Streamer.platform == "youtube", Streamer.channel == ref.channel))
+        if taken is None:
+            log.info("youtube streamer migrated to its channel",
+                     extra={"streamer_id": s.id, "from": s.channel, "to": ref.channel})
+            s.channel, s.url, s.check_requested = ref.channel, ref.url, True
+            db.add(AuditLog(user_email="monitor", action="streamer.youtube_channel", target=f"streamer:{s.id}",
+                            details={"from": s.url, "to": ref.url}, ip=""))
     if error and not live:
         s.status = "error"
     else:

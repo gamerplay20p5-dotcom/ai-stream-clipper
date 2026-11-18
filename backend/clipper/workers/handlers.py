@@ -329,14 +329,16 @@ async def monitor_loop(rt: WorkerRuntime, interval: float = 60.0, concurrency: i
 
     async def check(t: dict) -> None:
         async with sem:
+            note = channel_id = ""
             if t["platform"] == "file":
                 live, title, error = True, "", ""
             else:
                 st = await asyncio.to_thread(probe_live, t["url"])
-                live, title, error = st.live, st.title, st.error
+                live, title, error, note, channel_id = st.live, st.title, st.error, st.note, st.channel_id
             try:
                 r = await rt.client.post("/internal/monitor/report", {"streamer_id": t["streamer_id"], "live": live,
-                                                                      "title": title, "error": error})
+                                                                      "title": title, "error": error, "note": note,
+                                                                      "channel_id": channel_id})
                 if r.get("created"):
                     log.info("live detected, session created", extra={"streamer_id": t["streamer_id"],
                                                                        "session_id": r.get("session_id")})

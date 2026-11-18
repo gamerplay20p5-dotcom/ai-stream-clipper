@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -12,10 +13,11 @@ from ..config import get_settings
 from ..db import get_db
 from ..models import Clip, Event, Job, Streamer, StreamSession
 from ..pipeline import active_session
-from ..platforms import InvalidStreamURL, parse_file_source, parse_stream_url
+from ..platforms import InvalidStreamURL, VideoUnavailable, canonical_youtube, parse_file_source, parse_stream_url
 from . import serializers as ser
 from .deps import CurrentUser, audit, current_user, require_admin
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["streamers"])
 
 ALLOWED_PREF_KEYS = {"game", "min_score", "caption_style", "layout", "webcam_region", "language", "notes"}
@@ -67,6 +69,13 @@ async def add_streamer(body: StreamerIn, request: Request, db: Session = Depends
             ref = parse_file_source(raw, cfg.test_media_dir, must_exist=cfg.test_media_dir.is_dir())
         else:
             ref = await asyncio.to_thread(parse_stream_url, raw)
+            if ref.platform == "youtube" and ref.channel.startswith("v:"):
+                try:  # a watch?v= link is one broadcast; monitor the channel so the next lives are found
+                    ref = await asyncio.to_thread(canonical_youtube, ref)
+                except VideoUnavailable:
+                    raise
+                except InvalidStreamURL as exc:  # page unreadable now: keep the link, the monitor retries
+                    log.warning("youtube channel not resolved at registration", extra={"err": str(exc)})
     except InvalidStreamURL as exc:
         raise HTTPException(422, str(exc)) from exc
     existing = db.scalar(select(Streamer).where(Streamer.platform == ref.platform, Streamer.channel == ref.channel))

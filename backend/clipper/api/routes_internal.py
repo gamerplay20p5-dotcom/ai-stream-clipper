@@ -152,12 +152,15 @@ class ReportIn(BaseModel):
     live: bool
     title: str = Field("", max_length=1000)
     error: str = Field("", max_length=2000)
+    note: str = Field("", max_length=500)
+    channel_id: str = Field("", pattern=r"^(UC[A-Za-z0-9_-]{22})?$")
 
 
 @router.post("/monitor/report")
 def monitor_report(body: ReportIn, _: str = Depends(worker_auth), db: Session = Depends(get_db)):
     try:
-        out = pipeline.report_status(db, body.streamer_id, body.live, body.title, body.error)
+        out = pipeline.report_status(db, body.streamer_id, body.live, body.title, body.error,
+                                     note=body.note, channel_id=body.channel_id)
     except pipeline.NotFound as exc:
         _nf(exc)
     db.commit()
