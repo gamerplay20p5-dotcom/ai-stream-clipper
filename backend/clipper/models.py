@@ -354,3 +354,104 @@ class RankerModel(Base):
     created_by: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 - auto publisher (YouTube Shorts, TikTok, Instagram Reels)
+# ---------------------------------------------------------------------------
+
+
+class PublishApp(Base):
+    """OAuth client registered by the admin on each platform (secret encrypted at rest)."""
+
+    __tablename__ = "publish_apps"
+    platform: Mapped[str] = mapped_column(String(20), primary_key=True)  # youtube | tiktok | instagram
+    client_id: Mapped[str] = mapped_column(String(512), default="")
+    client_secret_enc: Mapped[str] = mapped_column(Text, default="")
+    redirect_uri: Mapped[str] = mapped_column(String(1024), default="")
+    updated_by: Mapped[str] = mapped_column(String(255), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class OAuthState(Base):
+    __tablename__ = "oauth_states"
+    state: Mapped[str] = mapped_column(String(64), primary_key=True)
+    platform: Mapped[str] = mapped_column(String(20))
+    verifier_enc: Mapped[str] = mapped_column(Text, default="")  # PKCE code verifier (encrypted)
+    created_by: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PublishAccount(Base):
+    __tablename__ = "publish_accounts"
+    __table_args__ = (UniqueConstraint("platform", "external_id", name="uq_publish_account"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    platform: Mapped[str] = mapped_column(String(20), index=True)
+    external_id: Mapped[str] = mapped_column(String(255))  # channel id / open_id / ig user id
+    name: Mapped[str] = mapped_column(String(255), default="")
+    handle: Mapped[str] = mapped_column(String(255), default="")
+    tokens_enc: Mapped[str] = mapped_column(Text, default="")  # access + refresh tokens (encrypted JSON)
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(16), default="connected")  # connected|expired|revoked|error
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)  # platform capabilities (privacy options, limits)
+    quota: Mapped[dict] = mapped_column(JSON, default=dict)  # e.g. {"day": "2026-11-18", "units": 3200}
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    connected_by: Mapped[str] = mapped_column(String(255), default="")
+    connected_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class PublishRule(Base):
+    """How clips of a streamer (or of all streamers) go to an account."""
+
+    __tablename__ = "publish_rules"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("publish_accounts.id", ondelete="CASCADE"), index=True)
+    streamer_id: Mapped[int | None] = mapped_column(ForeignKey("streamers.id", ondelete="CASCADE"), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    mode: Mapped[str] = mapped_column(String(16), default="manual")  # manual | scheduled | immediate
+    require_approval: Mapped[bool] = mapped_column(Boolean, default=True)  # human approval before publishing
+    min_score: Mapped[float] = mapped_column(Float, default=70.0)
+    privacy: Mapped[str] = mapped_column(String(16), default="private")  # private | unlisted | public
+    allow_public_auto: Mapped[bool] = mapped_column(Boolean, default=False)  # explicit admin opt-in
+    max_per_day: Mapped[int] = mapped_column(Integer, default=3)
+    slots: Mapped[list] = mapped_column(JSON, default=list)  # ["12:00", "18:30"] local time
+    timezone: Mapped[str] = mapped_column(String(64), default="America/Sao_Paulo")
+    templates: Mapped[dict] = mapped_column(JSON, default=dict)  # title/description/hashtags per platform
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class Publication(Base):
+    """One clip on one account. Unique per (clip, account): a clip is never uploaded twice there."""
+
+    __tablename__ = "publications"
+    __table_args__ = (UniqueConstraint("clip_id", "account_id", name="uq_publication_clip_account"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    clip_id: Mapped[int | None] = mapped_column(ForeignKey("clips.id", ondelete="SET NULL"), nullable=True, index=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("publish_accounts.id", ondelete="CASCADE"), index=True)
+    rule_id: Mapped[int | None] = mapped_column(ForeignKey("publish_rules.id", ondelete="SET NULL"), nullable=True)
+    platform: Mapped[str] = mapped_column(String(20), index=True)
+    # draft -> scheduled -> uploading -> processing -> published | failed | cancelled
+    status: Mapped[str] = mapped_column(String(16), default="draft", index=True)
+    origin: Mapped[str] = mapped_column(String(16), default="manual")  # manual | auto
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    privacy: Mapped[str] = mapped_column(String(16), default="private")
+    video_sha256: Mapped[str] = mapped_column(String(64), default="")
+    video_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    upload_state: Mapped[dict] = mapped_column(JSON, default=dict)  # resumable session (never tokens)
+    remote_id: Mapped[str] = mapped_column(String(255), default="")
+    remote_url: Mapped[str] = mapped_column(String(1024), default="")
+    remote_status: Mapped[dict] = mapped_column(JSON, default=dict)
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)
+    metrics_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    log: Mapped[list] = mapped_column(JSON, default=list)  # [{"at", "event", "detail"}]
+    created_by: Mapped[str] = mapped_column(String(255), default="")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

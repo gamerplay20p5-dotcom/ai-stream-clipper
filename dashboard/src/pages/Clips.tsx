@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type Clip, type Streamer } from "../api";
 import AnalysisPanel, { AnalysisStatus } from "../components/AnalysisPanel";
+import PublishPanel from "../components/PublishPanel";
 import { ClipFrame, ClipStatus, Empty, ErrorNote, Meter, PageHeader, ScoreMark } from "../components/ui";
 import { dimensionLabel, platformName, seconds, timecode } from "../lib/format";
 
@@ -189,6 +190,7 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
           <button className="btn-quiet mt-2 w-full" disabled={evaluate.isPending} onClick={() => evaluate.mutate()}>
             <ClipboardCheck className="h-4 w-4" /> Avaliar este corte (feedback para a IA)
           </button>
+          {c.has_video && <PublishPanel clipId={c.id} isTest={c.is_test} />}
           <p className="mt-2 text-xs text-ink-faint">Atalhos: A aprova, R rejeita, J e K navegam, Esc fecha.</p>
           <ErrorNote error={action.error || remove.error || evaluate.error} />
         </div>

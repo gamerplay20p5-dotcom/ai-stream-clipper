@@ -8,6 +8,7 @@ import "./index.css";
 import Clips from "./pages/Clips";
 import Diagnostics from "./pages/Diagnostics";
 import Evaluation from "./pages/Evaluation";
+import Publishing from "./pages/Publishing";
 import Infrastructure from "./pages/Infrastructure";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
@@ -51,6 +52,7 @@ function App() {
           <Route path="infra" element={<Infrastructure />} />
           <Route path="diagnostico" element={<Diagnostics />} />
           <Route path="avaliacao" element={<Evaluation />} />
+          <Route path="publicacao" element={<Publishing />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       ) : (

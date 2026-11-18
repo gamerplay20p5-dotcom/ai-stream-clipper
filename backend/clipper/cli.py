@@ -203,6 +203,16 @@ def cmd_healthcheck(args) -> None:
     sys.exit(0 if age < args.max_age else 1)
 
 
+def cmd_publisher(args) -> None:
+    """Phase 4 publisher service (YouTube / TikTok / Instagram)."""
+    s = get_settings()
+    s.require_secrets("jwt_secret")  # tokens are encrypted with a key derived from it
+    setup_logging("publisher", s.log_level, s.log_json)
+    from .publish.runner import main as run
+
+    run()
+
+
 def cmd_probe_gpu(args) -> None:
     from .workers.sysinfo import gpu_info
 
@@ -230,6 +240,8 @@ def main(argv: list[str] | None = None) -> None:
     h.add_argument("target", choices=["api", "worker"])
     h.add_argument("--max-age", type=float, default=90.0)
     h.set_defaults(fn=cmd_healthcheck)
+    pb = sub.add_parser("publisher")
+    pb.set_defaults(fn=cmd_publisher)
     g = sub.add_parser("probe-gpu")
     g.set_defaults(fn=cmd_probe_gpu)
     args = p.parse_args(argv)

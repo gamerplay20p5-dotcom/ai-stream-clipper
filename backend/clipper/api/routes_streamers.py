@@ -20,7 +20,8 @@ from .deps import CurrentUser, audit, current_user, require_admin
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["streamers"])
 
-ALLOWED_PREF_KEYS = {"game", "min_score", "caption_style", "layout", "webcam_region", "language", "notes"}
+ALLOWED_PREF_KEYS = {"game", "min_score", "caption_style", "layout", "webcam_region", "language", "notes",
+                     "republish_allowed", "credit"}  # Phase 4: rights to republish + credit line
 
 
 class StreamerIn(BaseModel):
