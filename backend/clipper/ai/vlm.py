@@ -38,6 +38,26 @@ Responda SOMENTE com um objeto JSON, sem texto extra, no formato:
  "confidence": 0-1}}
 Use apenas instantes da lista acima. Não invente acontecimentos que não estejam visíveis nas imagens ou na fala."""
 
+# Constrained decoding (OpenVINO GenAI structured output): the answer must match this regex,
+# so every text field is bounded and the four scores always come right after the texts. Small
+# VLMs otherwise loop inside the first string ("O carro... e o carro... e o carro...") until
+# the token limit and never emit the scores. The grammar only shapes syntax and lengths; the
+# content is still the model's.
+_CH = r'[^"\\\n]'
+_N10 = r"(10|[0-9])(\.[0-9])?"
+_T = r"[0-9]{1,3}(\.[0-9]{1,2})?"
+_TN = rf"({_T}|null)"
+_B = "(true|false)"
+_EV = rf'\{{"t": {_T}, "label": "{_CH}{{1,80}}", "importance": {_N10}\}}'
+ANSWER_REGEX = (
+    rf'\{{"summary": "{_CH}{{1,200}}", "key_event": "{_CH}{{1,100}}", '
+    rf'"funny": {_N10}, "unexpected": {_N10}, "important": {_N10}, "action": {_N10}, '
+    rf'"events": \[({_EV}(, {_EV}){{0,3}})?\], '
+    rf'"setup_start": {_TN}, "climax": {_TN}, "resolution_end": {_TN}, "complete": {_B}, '
+    rf'"preserve_start": {_T}, "preserve_end": {_T}, "reaction_linked": {_B}, '
+    rf'"confidence": (0(\.[0-9]{{1,2}})?|1(\.0)?)\}}'
+)
+
 REPAIR = "Sua resposta anterior não era um JSON válido. Responda novamente APENAS com o objeto JSON pedido."
 
 
@@ -168,13 +188,27 @@ class VLMAnalyzer:
         self.key = model_key
         self.spec = MODELS[model_key]
 
-    def _generate(self, pipe, prompt: str, tensors) -> str:
+    structured = True  # class-level switch; turned off for the process if the runtime rejects it
+
+    def _generate(self, pipe, prompt: str, tensors, constrained: bool = True) -> str:
         import openvino_genai as ov_genai
 
         cfg = ov_genai.GenerationConfig()
         cfg.max_new_tokens = self.spec.max_new_tokens
         cfg.do_sample = False
         cfg.repetition_penalty = 1.05
+        if constrained and VLMAnalyzer.structured and hasattr(ov_genai, "StructuredOutputConfig"):
+            so = ov_genai.StructuredOutputConfig()
+            so.regex = ANSWER_REGEX
+            cfg.structured_output_config = so
+            try:
+                out = pipe.generate(prompt, images=tensors, generation_config=cfg)
+            except Exception as exc:  # older runtime / backend without grammar support
+                log.warning("structured output unavailable, using free generation: %s", exc)
+                VLMAnalyzer.structured = False
+                return self._generate(pipe, prompt, tensors, constrained=False)
+            texts = getattr(out, "texts", None)
+            return texts[0] if texts else str(out)
         out = pipe.generate(prompt, images=tensors, generation_config=cfg)
         texts = getattr(out, "texts", None)
         return texts[0] if texts else str(out)
@@ -194,7 +228,8 @@ class VLMAnalyzer:
             raw = self._generate(pipe, prompt, tensors)
             obj = extract_json(raw)
             if obj is None or not _has_core(obj):
-                raw2 = self._generate(pipe, prompt + "\n\n" + REPAIR, tensors)
+                # the retry is unconstrained, so a grammar-specific failure cannot repeat itself
+                raw2 = self._generate(pipe, prompt + "\n\n" + REPAIR, tensors, constrained=False)
                 obj = extract_json(raw2) or obj
                 if obj is None or not _has_core(obj):
                     # both answers hit the token limit (small VLMs loop on event lists)

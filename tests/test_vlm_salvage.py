@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from clipper.ai.jsonparse import extract_json, salvage_truncated
 from clipper.ai.manager import ModelManager
-from clipper.ai.vlm import FrameInput, VLMAnalyzer
+from clipper.ai.vlm import ANSWER_REGEX, FrameInput, VLMAnalyzer
+
+import re
 
 import numpy as np
 
@@ -38,9 +40,21 @@ class _FakeManager(ModelManager):
 
 def test_analyzer_uses_salvaged_answer_and_says_so(monkeypatch):
     a = VLMAnalyzer(_FakeManager(), "qwen3-vl-2b-int4")
-    monkeypatch.setattr(a, "_generate", lambda pipe, prompt, tensors: LOOPING)
+    monkeypatch.setattr(a, "_generate", lambda pipe, prompt, tensors, **kw: LOOPING)
     img = np.zeros((90, 160, 3), np.uint8)
     frames = [FrameInput(float(t), img) for t in range(0, 40, 4)]
     res = a.analyze(frames, 20.0, 40.0, (0.0, 40.0), [], [])
     assert res.summary.startswith("Um carro")
     assert any("truncada" in n for n in res.notes)
+
+
+def test_answer_grammar_bounds_texts_and_requires_scores():
+    ok = ('{"summary": "um carro é atingido", "key_event": "batida", "funny": 1, "unexpected": 7.5, '
+          '"important": 8, "action": 10, "events": [{"t": 12.0, "label": "batida forte", "importance": 9}], '
+          '"setup_start": 0.0, "climax": 27.3, "resolution_end": null, "complete": true, '
+          '"preserve_start": 0.0, "preserve_end": 39.3, "reaction_linked": false, "confidence": 0.8}')
+    assert re.fullmatch(ANSWER_REGEX, ok)
+    assert extract_json(ok)["unexpected"] == 7.5
+    assert not re.fullmatch(ANSWER_REGEX, ok.replace("um carro é atingido", "e o carro " * 25))  # > 200 chars
+    five = ", ".join(['{"t": 1.0, "label": "x", "importance": 1}'] * 5)
+    assert not re.fullmatch(ANSWER_REGEX, ok.replace('{"t": 12.0, "label": "batida forte", "importance": 9}', five))
