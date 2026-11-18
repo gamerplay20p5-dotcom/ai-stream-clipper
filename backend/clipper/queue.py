@@ -36,6 +36,7 @@ JOB_ROLES: dict[str, str] = {
     "render": "render",
     "dataset_media": "render",  # Phase 3: extract + re-encode media of evaluation examples (206)
     "publish": "publisher",  # Phase 4: upload to YouTube / TikTok / Instagram (210, publisher service)
+    "learn": "publisher",  # Phase 5: preference profile + ranker (re)training; low priority, 1-CPU container
 }
 
 TERMINAL = {"done", "dead", "cancelled"}

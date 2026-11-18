@@ -31,6 +31,21 @@ class NotEnoughData(ValueError):
         self.counts = counts
 
 
+def _features_from_snapshot(ai: dict) -> dict:
+    """Observable dims stored with the example (clips older than the candidates table)."""
+    b = ai.get("breakdown") or {}
+    f = {f"dim_{k}": float(v) for k, v in b.items() if isinstance(v, (int, float)) and k != "visual"}
+    if not f:
+        return {}
+    kinds = ai.get("kinds") or []
+    for k in ("laughter", "scream", "keyword", "speech_burst", "loudness_spike", "silence_break", "energy_burst",
+              "bright_burst"):
+        f[f"n_{k}"] = float(kinds.count(k) if isinstance(kinds, list) else 0)
+    if ai.get("start") is not None and ai.get("end") is not None:
+        f["duration_s"] = float(ai["end"] - ai["start"])
+    return f
+
+
 def feature_names(rows: list[dict]) -> list[str]:
     names: set[str] = set()
     for f in rows:
@@ -52,13 +67,15 @@ def labelled(db: Session) -> dict[str, list[tuple[dict, int, float | None, int]]
     """split -> [(features, label, heuristic_score, session_id)]"""
     out: dict[str, list] = {"train": [], "val": []}
     for ex, rv in reviewed_pairs(db):
-        if rv.rating == "fair" or not ex.candidate_id:
+        if rv.rating == "fair":
             continue
-        cand = db.get(Candidate, ex.candidate_id)
-        if cand is None or not cand.features:
+        cand = db.get(Candidate, ex.candidate_id) if ex.candidate_id else None
+        feats = cand.features if cand is not None and cand.features else _features_from_snapshot(ex.ai or {})
+        if not feats:
             continue
+        score = cand.score if cand is not None else (ex.ai or {}).get("candidate_score", (ex.ai or {}).get("score"))
         y = 1 if rv.rating in taxonomy.POSITIVE else 0
-        out.setdefault(ex.split, []).append((cand.features, y, cand.score, ex.session_id or 0))
+        out.setdefault(ex.split, []).append((feats, y, score, ex.session_id or 0))
     return out
 
 

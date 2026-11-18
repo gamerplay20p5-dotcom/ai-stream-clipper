@@ -77,11 +77,28 @@ def patch_clip(cid: int, body: ClipPatch, request: Request, db: Session = Depend
             data["webcam_region"] = {k: min(1.0, max(0.0, float(data["webcam_region"][k]))) for k in "xywh"}
         except (KeyError, TypeError, ValueError) as exc:
             raise HTTPException(422, "webcam_region needs x,y,w,h") from exc
+    if ("start" in data or "end" in data) and (start != c.start or end != c.end):
+        from ..evaluation.feedback import record_time_edit
+
+        record_time_edit(c, start, end, user.email)  # human ideal bounds (used as a label)
     for k, v in data.items():
         setattr(c, k, v)
     audit(db, request, user, "clip.update", f"clip:{cid}", {k: v for k, v in data.items() if k != "description"})
     db.commit()
     return ser.clip(c)
+
+
+def _human_label(db: Session, clip: Clip, user: str, action: str) -> None:
+    """The owner's approve/reject is a human label for continuous learning (never blocks the action)."""
+    from ..evaluation.feedback import record_clip_action
+
+    try:
+        with db.begin_nested():
+            record_clip_action(db, clip, user, action)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("could not record the human label")
 
 
 @router.post("/{cid}/rerender")
@@ -118,6 +135,7 @@ def approve(cid: int, request: Request, db: Session = Depends(get_db), user: Cur
         raise HTTPException(409, "only rendered clips can be approved")
     c.status = "approved"
     audit(db, request, user, "clip.approve", f"clip:{cid}")
+    _human_label(db, c, user.email, "approve")
     db.commit()
     return ser.clip(c)
 
@@ -129,6 +147,7 @@ def reject(cid: int, request: Request, db: Session = Depends(get_db), user: Curr
         raise HTTPException(409, "clip is being processed")
     c.status = "rejected"
     audit(db, request, user, "clip.reject", f"clip:{cid}")
+    _human_label(db, c, user.email, "reject")
     db.commit()
     return ser.clip(c)
 

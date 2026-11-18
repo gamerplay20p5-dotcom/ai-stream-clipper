@@ -7,6 +7,7 @@ import { Empty, ErrorNote, PageHeader } from "../components/ui";
 import { ago, bytes, platformName, timecode } from "../lib/format";
 
 const TABS = [
+  { key: "aprendizado", label: "Aprendizado" },
   { key: "revisar", label: "Revisar" },
   { key: "metricas", label: "Métricas" },
   { key: "dataset", label: "Dataset e modelos" },
@@ -50,6 +51,7 @@ export default function Evaluation() {
       {tax.data && tab === "revisar" && <ReviewDesk tax={tax.data} />}
       {tax.data && tab === "metricas" && <Metrics tax={tax.data} />}
       {tax.data && tab === "dataset" && <DatasetPanel tax={tax.data} />}
+      {tab === "aprendizado" && <LearningPanel />}
       <ErrorNote error={tax.error} />
     </div>
   );
@@ -617,3 +619,81 @@ function DatasetPanel({ tax }: { tax: Taxonomy }) {
   );
 }
 
+
+// ------------------------------------------------------------------ continuous learning
+type Group = { value: string; n: number; approved: number; rate: number | null; ci95: [number, number] | null; reliable: boolean };
+type Learning = {
+  status: { human_labels: number; labels_last_7d: number; active_model: string; shadow_model: string | null;
+    last_run: { at: string; outcome: string; detail: string; labels: number } | null };
+  profile: { labels: number; approved: number; rejected: number; note: string; approval_rate: number | null;
+    approval_ci95: [number, number] | null; by_source: Record<string, number>; by_signal: Group[]; by_streamer: Group[];
+    by_situation: Group[]; duration_median: { approved: number | null; rejected: number | null };
+    current_score_auc: number | null; start_delta_median: number | null; rejection_reasons: Record<string, number>;
+    recurring_problems: string[]; diversity: string | null; sufficient_for_training: boolean };
+};
+const outcomeLabel: Record<string, string> = {
+  profile_only: "perfil atualizado (sem treino)", trained_shadow: "treinado, em sombra", promoted: "treinado e ativado",
+};
+
+function GroupTable({ title, rows }: { title: string; rows: Group[] }) {
+  if (!rows.length) return null;
+  return (
+    <div className="rounded-lg border border-suite-line p-3">
+      <p className="mb-2 text-sm font-medium">{title}</p>
+      <table className="w-full text-sm">
+        <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Grupo</th><th>Rótulos</th><th>Aprovação</th><th>IC 95%</th></tr></thead>
+        <tbody>{rows.slice(0, 10).map((g) => (
+          <tr key={g.value} className={`border-t border-suite-line/50 ${g.reliable ? "" : "text-ink-muted"}`}>
+            <td className="py-1">{g.value}</td><td>{g.n}</td><td>{pct(g.rate)}</td>
+            <td className="text-xs">{g.ci95 ? `${Math.round(g.ci95[0] * 100)}–${Math.round(g.ci95[1] * 100)}%` : "—"}{!g.reliable && " · poucos dados"}</td>
+          </tr>))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function LearningPanel() {
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["learning"], queryFn: () => api.get<Learning>("/api/review/learning"), refetchInterval: 30_000 });
+  const backfill = useMutation({ mutationFn: () => api.post<{ labels: number }>("/api/review/learning/backfill"), onSuccess: () => qc.invalidateQueries({ queryKey: ["learning"] }) });
+  const run = useMutation({ mutationFn: () => api.post("/api/review/learning/run"), onSuccess: () => qc.invalidateQueries({ queryKey: ["learning"] }) });
+  const d = q.data;
+  if (!d) return <ErrorNote error={q.error} />;
+  const p = d.profile;
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-3 sm:grid-cols-4">
+        <Stat label="Avaliações humanas" value={String(d.status.human_labels)} hint={`${d.status.labels_last_7d} nos últimos 7 dias · aprovar/rejeitar nos cortes também conta`} />
+        <Stat label="Modelo ativo" value={d.status.active_model.replace(" (nenhum classificador ativo)", "")} hint={d.status.shadow_model ? `em sombra: ${d.status.shadow_model}` : "nenhum modelo em sombra"} />
+        <Stat label="Último aprendizado" value={d.status.last_run ? ago(d.status.last_run.at) : "nunca"} hint={d.status.last_run ? `${outcomeLabel[d.status.last_run.outcome] ?? d.status.last_run.outcome} · ${d.status.last_run.labels} rótulos` : ""} />
+        <Stat label="Taxa de aprovação" value={pct(p.approval_rate)} hint={p.approval_ci95 ? `IC 95%: ${Math.round(p.approval_ci95[0] * 100)}–${Math.round(p.approval_ci95[1] * 100)}%` : ""} />
+      </div>
+      <p className={`rounded-md border px-3 py-2 text-sm ${p.labels < 30 ? "border-take/50 bg-take-dim text-take" : "border-suite-line text-ink-muted"}`}>
+        {p.labels} rótulos ({p.approved} aprovados, {p.rejected} rejeitados) — {p.note}.
+        {d.status.last_run?.detail && <span className="block text-xs opacity-80">Último treino: {d.status.last_run.detail}</span>}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <button className="btn-quiet" disabled={backfill.isPending} onClick={() => backfill.mutate()}>Importar aprovações/rejeições anteriores</button>
+        <button className="btn-quiet" disabled={run.isPending} onClick={() => run.mutate()}>Rodar aprendizado agora (baixa prioridade)</button>
+        {backfill.data && <span className="self-center text-xs text-ink-muted">{backfill.data.labels} decisões importadas</span>}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Stat label="A nota atual separa bons de ruins?" value={p.current_score_auc === null ? "n/d" : `AUC ${p.current_score_auc}`} hint="0,5 = acaso · 1,0 = perfeito (só rótulos humanos)" />
+        <Stat label="Duração mediana" value={`${fmt(p.duration_median.approved)} / ${fmt(p.duration_median.rejected)} s`} hint="aprovados / rejeitados" />
+        <Stat label="Início da IA vs. o seu" value={p.start_delta_median === null ? "n/d" : `${p.start_delta_median > 0 ? "+" : ""}${p.start_delta_median} s`} hint="positivo = a IA começou depois do ideal" />
+      </div>
+      {(p.recurring_problems.length > 0 || p.diversity) && (
+        <div className="rounded-lg border border-take/40 p-3 text-sm">
+          <p className="mb-1 font-medium">Padrões que o diretor está corrigindo</p>
+          <ul className="list-inside list-disc text-ink-muted">{p.recurring_problems.map((r, i) => <li key={i}>{r}</li>)}{p.diversity && <li>{p.diversity}</li>}</ul>
+        </div>
+      )}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <GroupTable title="Por sinal detectado" rows={p.by_signal} />
+        <GroupTable title="Por streamer" rows={p.by_streamer} />
+        <GroupTable title="Por situação narrativa" rows={p.by_situation} />
+      </div>
+      <ErrorNote error={backfill.error ?? run.error} />
+    </div>
+  );
+}

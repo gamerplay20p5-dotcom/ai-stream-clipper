@@ -265,6 +265,35 @@ def _ranker_dict(m: RankerModel) -> dict:
             "created_by": m.created_by, "created_at": _iso(m.created_at), "activated_at": _iso(m.activated_at)}
 
 
+@router.get("/learning")
+def learning(db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+    from ..evaluation import feedback
+
+    return {"status": feedback.status(db), "profile": feedback.profile(db)}
+
+
+@router.post("/learning/backfill")
+def learning_backfill(request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
+    """Import past approve/reject decisions (audit trail) as human labels."""
+    from ..evaluation import feedback
+
+    out = feedback.backfill_from_audit(db)
+    feedback.request_learning(db)
+    audit(db, request, user, "learning.backfill", "", out)
+    db.commit()
+    return out
+
+
+@router.post("/learning/run")
+def learning_run(request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
+    from ..evaluation import feedback
+
+    feedback.request_learning(db)
+    audit(db, request, user, "learning.request", "")
+    db.commit()
+    return {"queued": True}
+
+
 @router.get("/rankers")
 def list_rankers(db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
     data = ranker.labelled(db)

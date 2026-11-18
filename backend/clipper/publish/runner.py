@@ -282,6 +282,29 @@ def tick(state: dict) -> None:
         todo = [(j.id, int(j.payload["publication_id"])) for j in jobs]
     for jid, pid in todo:
         run_publish(jid, pid)
+    if not todo:  # learning only when no upload is waiting (lowest priority)
+        run_learning()
+
+
+def run_learning() -> None:
+    from ..evaluation import feedback
+
+    with session_scope() as db:
+        jobs = queue.claim(db, worker_id(), ["learn"], has_gpu=False, limit=1, lease_seconds=1800)
+        if not jobs:
+            return
+        jid = jobs[0].id
+    try:
+        with session_scope() as db:
+            r = feedback.learn(db)
+            db.flush()
+            out = {"outcome": r.outcome, "labels": r.labels, "detail": r.detail[:300]}
+            queue.complete(db, jid, worker_id(), out)
+        log.info("learning run", extra=out)
+    except Exception as exc:
+        log.exception("learning run failed")
+        with session_scope() as db:
+            queue.fail(db, jid, worker_id(), f"{type(exc).__name__}: {exc}", retryable=False)
 
 
 def main() -> None:

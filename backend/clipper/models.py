@@ -174,6 +174,19 @@ class Clip(Base):
     heuristic_end: Mapped[float | None] = mapped_column(Float, nullable=True)
     # Phase 3: versions of code/models/settings that produced the clip
     provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Phase 5: editorial judgement (preliminary at detection, final after review) and story link
+    prelim_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    editorial_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    situation_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # Phase 5: storage lifecycle (media only - the row and the labels are never deleted by cleanup)
+    protected: Mapped[bool] = mapped_column(Boolean, default=False)
+    favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    lifecycle: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active|quarantined|purged
+    quarantined_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    purge_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    purge_reason: Mapped[str] = mapped_column(String(255), default="")
+    media_purged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=0)
     source_path: Mapped[str] = mapped_column(String(512), default="")
     source_start: Mapped[float] = mapped_column(Float, default=0.0)
@@ -333,6 +346,7 @@ class Review(Base):
     short_start: Mapped[float | None] = mapped_column(Float, nullable=True)
     short_end: Mapped[float | None] = mapped_column(Float, nullable=True)
     ai_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)  # the AI result that was judged
+    source: Mapped[str] = mapped_column(String(16), default="review")  # review | clip_action (approve/reject)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -456,3 +470,53 @@ class Publication(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 - story memory, cleanup audit trail, learning runs
+# ---------------------------------------------------------------------------
+
+
+class SituationRow(Base):
+    """A narrative situation followed over minutes (see ai/story.py). Bounded JSON payload."""
+
+    __tablename__ = "situations"
+    __table_args__ = (Index("ix_situations_session_start", "session_id", "start"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("stream_sessions.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    start: Mapped[float] = mapped_column(Float)
+    last: Mapped[float] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(16), default="ongoing")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    related_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class CleanupLog(Base):
+    """Every storage action (quarantine, restore, purge of a given artefact) - idempotent trail."""
+
+    __tablename__ = "cleanup_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    clip_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(24))  # quarantine | restore | purge_video | purge_source | ...
+    reason: Mapped[str] = mapped_column(String(255), default="")
+    bytes_freed: Mapped[int] = mapped_column(Integer, default=0)
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=False)
+    actor: Mapped[str] = mapped_column(String(255), default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class LearningRun(Base):
+    """Background learning job: preference profile + (re)training attempt and its outcome."""
+
+    __tablename__ = "learning_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    labels: Mapped[int] = mapped_column(Integer, default=0)
+    outcome: Mapped[str] = mapped_column(String(32), default="")  # profile_only | trained_shadow | promoted | ...
+    ranker_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    profile: Mapped[dict] = mapped_column(JSON, default=dict)
+    detail: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
