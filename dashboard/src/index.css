@@ -1,0 +1,78 @@
+@import "@fontsource-variable/archivo/wdth.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    background: #232428;
+    color: #eceae4;
+    font-feature-settings: "tnum" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    min-height: 100vh;
+  }
+  ::selection {
+    background: #f2b33d;
+    color: #1e1a12;
+  }
+  :focus-visible {
+    outline: 2px solid #f2b33d;
+    outline-offset: 2px;
+  }
+  input,
+  select,
+  textarea {
+    color-scheme: dark;
+  }
+}
+
+@layer components {
+  .display {
+    font-variation-settings: "wdth" 125;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .field {
+    @apply w-full rounded-md border border-suite-line bg-suite px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-take focus:outline-none;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-take {
+    @apply btn bg-take text-take-ink hover:bg-[#f6c25e];
+  }
+  .btn-quiet {
+    @apply btn border border-suite-line text-ink hover:border-ink-faint hover:bg-suite-raised;
+  }
+  .btn-danger {
+    @apply btn border border-suite-line text-tally hover:border-tally hover:bg-tally-dim;
+  }
+  .label {
+    @apply mb-1 block text-xs text-ink-muted;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes tally {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.tally-blink {
+  animation: tally 1.6s ease-in-out infinite;
+}
