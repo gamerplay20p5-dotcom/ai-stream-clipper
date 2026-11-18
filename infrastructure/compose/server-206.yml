@@ -35,7 +35,7 @@ x-health: &worker-health
 
 services:
   worker-capture:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.5}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.6}
     container_name: asc-worker-capture
     <<: *hardening
     command: ["worker", "--roles", "monitor,capture"]
@@ -59,7 +59,7 @@ services:
         limits: { cpus: "3", memory: 3g }
 
   worker-audio:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.5}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.6}
     container_name: asc-worker-audio
     <<: *hardening
     command: ["worker", "--roles", "audio"]
@@ -78,7 +78,7 @@ services:
         limits: { cpus: "8", memory: 12g }
 
   worker-render:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.5}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.6}
     container_name: asc-worker-render
     <<: *hardening
     command: ["worker", "--roles", "render"]

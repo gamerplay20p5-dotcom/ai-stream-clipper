@@ -189,8 +189,10 @@ def disconnect(aid: int, request: Request, db: Session = Depends(get_db), user: 
     if a is None:
         raise HTTPException(404, "account not found")
     a.tokens_enc, a.status = "", "revoked"
-    for p in db.scalars(select(Publication).where(Publication.account_id == aid, Publication.status == "scheduled")):
-        p.status, p.last_error = "cancelled", "conta desconectada"
+    for p in db.scalars(select(Publication).where(Publication.account_id == aid)):
+        if p.status == "scheduled":
+            p.status, p.last_error = "cancelled", "conta desconectada"
+        p.metrics, p.metrics_at = {}, None  # platform data obtained with the account's authorization
     audit(db, request, user, "publish.disconnect", f"account:{aid}", {"platform": a.platform, "name": a.name})
     db.commit()
     return {"ok": True}

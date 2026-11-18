@@ -65,6 +65,14 @@ def retention() -> dict:
                 db.execute(delete(model).where(model.session_id == sid))
         removed["raw_sessions"] = len(old)
     with session_scope() as db:
+        # platform statistics not refreshed for 30 days are deleted (YouTube API data policy)
+        from .models import Publication
+
+        stale = utcnow() - timedelta(days=30)
+        for p in db.scalars(select(Publication).where(Publication.metrics_at.is_not(None), Publication.metrics_at < stale)):
+            p.metrics, p.metrics_at = {}, None
+            removed["stale_metrics"] = removed.get("stale_metrics", 0) + 1
+    with session_scope() as db:
         from .evaluation.media import enforce_retention
 
         ds = enforce_retention(db, load_ai_settings(db))

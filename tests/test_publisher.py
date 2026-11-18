@@ -291,3 +291,26 @@ def test_youtube_quota_uses_the_upload_bucket_and_privacy_is_always_explicit():
         assert youtube._metadata(_pub_ns(privacy=priv))["status"]["privacyStatus"] == priv
     sched = youtube._metadata(_pub_ns(privacy="public", upload_state={"publish_at": "2026-12-01T15:00:00Z"}))
     assert sched["status"] == {**sched["status"], "privacyStatus": "private", "publishAt": "2026-12-01T15:00:00Z"}
+
+
+def test_disconnect_and_stale_metrics_delete_platform_data(admin, client):
+    from clipper import maintenance
+
+    cid, aid, _ = _setup("purge")
+    _, aid2, _ = _setup("stale")
+    with session_scope() as db:
+        p1 = Publication(clip_id=cid, account_id=aid, platform="youtube", status="published",
+                         metrics={"viewCount": 5}, metrics_at=utcnow())
+        db.add(p1)
+        db.flush()
+        pid = p1.id
+        old = Publication(clip_id=None, account_id=aid2, platform="youtube", status="published",
+                          metrics={"viewCount": 9}, metrics_at=utcnow() - timedelta(days=31))
+        db.add(old)
+        db.flush()
+        oid = old.id
+    assert admin.delete(f"/api/publish/accounts/{aid}", headers=CSRF).status_code == 200
+    maintenance.retention()
+    with session_scope() as db:
+        assert db.get(Publication, pid).metrics == {} and db.get(PublishAccount, aid).tokens_enc == ""
+        assert db.get(Publication, oid).metrics == {}

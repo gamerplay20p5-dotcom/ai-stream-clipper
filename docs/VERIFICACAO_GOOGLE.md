@@ -16,7 +16,7 @@
 ## Checklist
 
 - [ ] **Domínio autorizado** `howto.software` em Google Auth Platform → Branding → Domínios autorizados.
-- [ ] **Prova de controle do domínio** no [Google Search Console](https://search.google.com/search-console), com uma conta que seja proprietária ou editora do projeto do Google Cloud.
+- [x] **Prova de controle do domínio** no [Google Search Console](https://search.google.com/search-console), com uma conta que seja proprietária ou editora do projeto do Google Cloud.
   - Depende do Hank: verificação por registro TXT no DNS de `howto.software`, que está na Cloudflare.
   - **Não vou alterar o DNS:** o registro TXT precisa ser adicionado pelo dono do domínio.
 - [ ] **Branding:**
@@ -25,7 +25,7 @@
   - logotipo de 120×120 px, opcional (com logotipo, o Google também verifica a marca);
   - e-mail de contato do desenvolvedor.
 - [ ] **Página inicial:** `https://clipper.howto.software/`.
-- [ ] **Política de privacidade:** `https://clipper.howto.software/privacidade`. Antes de publicar, preencha os campos marcados como **[a confirmar]**: responsável, e-mail de privacidade e prazo de resposta.
+- [x] **Política de privacidade:** `https://clipper.howto.software/privacidade` (v0.4.6: responsável HowTo.Software, contato friendhost1@gmail.com, resposta em 15 dias; cobre dados, escopos, Limited Use, tokens, compartilhamento, retenção, desconexão e exclusão).
 - [ ] **Termos de uso:** `https://clipper.howto.software/termos`.
 - [ ] **Escopos** em Acesso a dados: apenas `youtube.upload` e `youtube.readonly`, com justificativa:
   - *upload:* "enviar ao canal do próprio usuário os cortes que ele aprovou no painel";
@@ -51,7 +51,7 @@ Grave em inglês, ou com legendas em inglês, mostrando a URL na barra do navega
 | Item | Quem |
 |---|---|
 | Registro TXT de verificação no DNS de `howto.software` | Hank (dono do domínio) |
-| Responsável legal, e-mail de privacidade e prazo de resposta nas páginas | você |
+| Responsável legal, e-mail de privacidade e prazo de resposta nas páginas | definido: HowTo.Software / friendhost1@gmail.com / 15 dias |
 | Logotipo, e-mail de suporte e envio do formulário no Google Cloud | você |
 
 ---
@@ -71,4 +71,4 @@ Grave em inglês, ou com legendas em inglês, mostrando a URL na barra do navega
   - publish to production;
   - submit for verification;
   - a demo video following the script above.
-- **Open items:** fields marked "[a confirmar]" (controller, privacy contact, response time) must be filled before submission.
+- **Done (v0.4.6):** domain verified in Search Console; privacy policy expanded (controller HowTo.Software, privacy contact, 15-day response, Limited Use statement, scopes, retention, disconnection, deletion).
