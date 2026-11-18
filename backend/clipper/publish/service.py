@@ -77,6 +77,18 @@ def save_app(db: Session, platform: str, client_id: str, client_secret: str | No
     return row
 
 
+def delete_app(db: Session, platform: str) -> None:
+    connected = db.scalar(select(func.count()).select_from(PublishAccount).where(
+        PublishAccount.platform == platform, PublishAccount.status == "connected"))
+    if connected:
+        raise PublishRefused([f"desconecte as {connected} conta(s) de {PLATFORM_NAME.get(platform, platform)} antes "
+                              "de remover o app"])
+    row = db.get(PublishApp, platform)
+    if row is not None:
+        db.delete(row)
+    db.query(OAuthState).filter(OAuthState.platform == platform).delete()
+
+
 def get_app(db: Session, platform: str) -> App:
     row = db.get(PublishApp, platform)
     if row is None or not row.client_id or not row.client_secret_enc or not row.redirect_uri:
@@ -86,6 +98,11 @@ def get_app(db: Session, platform: str) -> App:
 
 def start_oauth(db: Session, platform: str, user: str) -> dict:
     app = get_app(db, platform)
+    if platform == "instagram" and not app.config_id:
+        # apps created with "API do Instagram (login unificado)" only accept the Facebook Login for
+        # Business dialog; the legacy instagram.com/oauth/authorize answers "Invalid platform app"
+        raise PublishRefused(["informe o config_id da configuração do login unificado da Meta (Publicação → "
+                              "Instagram) antes de conectar"])
     db.query(OAuthState).filter(OAuthState.created_at < utcnow() - STATE_TTL).delete()
     state = secrets.token_urlsafe(24)
     verifier, challenge = pkce_pair()

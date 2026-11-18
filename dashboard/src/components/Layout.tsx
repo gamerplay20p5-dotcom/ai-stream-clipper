@@ -23,6 +23,12 @@ export default function Layout({ email }: { email: string }) {
     refetchInterval: 10_000,
   });
   const toReview = stats?.clips_by_status?.ready ?? 0;
+  const health = useQuery({
+    queryKey: ["healthz"],
+    queryFn: () => fetch("/healthz", { cache: "no-store" }).then((r) => r.json() as Promise<{ version?: string }>),
+    refetchInterval: 60_000,
+  });
+  const stale = Boolean(health.data?.version && health.data.version !== __APP_VERSION__);
 
   async function logout() {
     await api.post("/api/auth/logout");
@@ -73,7 +79,13 @@ export default function Layout({ email }: { email: string }) {
         </button>
       </aside>
       <main className="min-w-0 flex-1 px-4 py-6 sm:px-8 lg:px-10">
-        <Outlet />
+        {stale && (
+            <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-take/50 bg-take-dim px-3 py-2 text-sm text-take">
+              <span>O sistema foi atualizado para a versão {health.data?.version} e esta aba ainda roda a {__APP_VERSION__}.</span>
+              <button className="btn-take" onClick={() => window.location.reload()}>Recarregar agora</button>
+            </div>
+          )}
+          <Outlet />
       </main>
     </div>
   );

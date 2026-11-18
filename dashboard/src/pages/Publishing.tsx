@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api, type Streamer } from "../api";
 import { Empty, ErrorNote, PageHeader } from "../components/ui";
 
-export type PubApp = { platform: string; name: string; configured: boolean; client_id: string; has_secret: boolean; redirect_uri: string; validated: boolean; config_id: string; callback_url: string };
+export type PubApp = { platform: string; name: string; configured: boolean; client_id: string; has_secret: boolean; redirect_uri: string; validated: boolean; config_id: string; callback_url: string; flow: string };
 export type PubAccount = { id: number; platform: string; platform_name: string; name: string; handle: string; status: string;
   meta: { privacy_options?: string[]; quota_limit?: number }; quota: { day?: string; units?: number }; last_error: string; connected_at: string };
 type Rule = { id: number; account_id: number; streamer_id: number | null; enabled: boolean; mode: string; require_approval: boolean;
@@ -85,6 +85,10 @@ function AppCard({ app }: { app: PubApp }) {
       ...(app.platform === "instagram" ? { config_id: configId } : {}) }),
     onSuccess: () => { setSecret(""); qc.invalidateQueries({ queryKey: ["publish-overview"] }); },
   });
+  const remove = useMutation({
+    mutationFn: () => api.del(`/api/publish/apps/${app.platform}`),
+    onSuccess: () => { setCid(""); setSecret(""); qc.invalidateQueries({ queryKey: ["publish-overview"] }); },
+  });
   return (
     <div className="rounded-lg border border-suite-line p-3 text-sm">
       <div className="mb-2 flex items-center justify-between">
@@ -102,8 +106,15 @@ function AppCard({ app }: { app: PubApp }) {
         <label className="mb-2 block"><span className="text-xs text-ink-muted">config_id (login unificado; vazio = login do Instagram antigo)</span>
           <input className="field" value={configId} inputMode="numeric" onChange={(e) => setConfigId(e.target.value.trim())} /></label>
       )}
-      <ErrorNote error={save.error} />
-      <button className="btn-quiet" disabled={save.isPending || (!cid && !app.client_id)} onClick={() => save.mutate()}>Salvar</button>
+      {app.platform === "instagram" && app.configured && app.flow !== "unified" && (
+        <p className="mb-2 text-xs text-[#ffb4b6]">Falta o config_id: sem ele a Meta recusa a conexão (“Invalid platform app”).</p>
+      )}
+      <ErrorNote error={save.error ?? remove.error} />
+      <div className="flex gap-2">
+        <button className="btn-quiet" disabled={save.isPending || (!cid && !app.client_id)} onClick={() => save.mutate()}>Salvar</button>
+        {app.configured && <button className="btn-danger" disabled={remove.isPending}
+          onClick={() => confirm(`Remover as credenciais de ${app.name}?`) && remove.mutate()}>Remover</button>}
+      </div>
     </div>
   );
 }

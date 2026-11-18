@@ -70,7 +70,8 @@ def overview(db: Session = Depends(get_db), _: CurrentUser = Depends(current_use
                     "client_id": (row.client_id[:12] + "…") if row and row.client_id else "",
                     "has_secret": bool(row and row.client_secret_enc), "redirect_uri": row.redirect_uri if row else "",
                     "config_id": row.config_id if row else "", "callback_url": f"{_public_base()}/api/publish/oauth/{pf}/callback",
-                    "validated": pf == "youtube"}
+                    "validated": pf == "youtube",
+                    "flow": ("unified" if row and row.config_id else "missing_config_id") if pf == "instagram" else "oauth2"}
     accounts = [_account(a) for a in db.scalars(select(PublishAccount).order_by(PublishAccount.platform))]
     rules = [_rule(r) for r in db.scalars(select(PublishRule).order_by(PublishRule.id))]
     counts: dict[str, int] = {}
@@ -105,6 +106,20 @@ def put_app(platform: str, body: AppIn, request: Request, db: Session = Depends(
         raise _refused(exc) from exc
     audit(db, request, user, "publish.app", platform, {"redirect_uri": body.redirect_uri,
                                                        "secret_changed": bool(body.client_secret)})
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/apps/{platform}")
+def delete_app(platform: str, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
+    """Remove an app configuration (e.g. credentials saved on the wrong platform)."""
+    if platform not in PLATFORMS:
+        raise HTTPException(404, "unknown platform")
+    try:
+        service.delete_app(db, platform)
+    except PublishRefused as exc:
+        raise _refused(exc) from exc
+    audit(db, request, user, "publish.app_delete", platform)
     db.commit()
     return {"ok": True}
 

@@ -86,3 +86,28 @@ def test_callback_without_cookie_connects_every_shared_account(admin, app, fake_
     again = anon.get(f"/api/publish/oauth/instagram/callback?code=AQB&state={start['state']}")
     assert again.status_code == 303 and "erro=" in again.headers["location"]
     assert len(fake_meta.exchanges) == 1
+
+
+def test_instagram_without_config_id_never_opens_the_legacy_dialog(admin):
+    admin.put("/api/publish/apps/instagram", json={"client_id": "1234567890", "client_secret": "meta-secret",
+                                                   "redirect_uri": CALLBACK, "config_id": ""}, headers=CSRF)
+    r = admin.post("/api/publish/oauth/instagram/start", headers=CSRF)
+    assert r.status_code == 422 and "config_id" in str(r.json()["detail"])
+    assert admin.get("/api/publish/overview").json()["apps"]["instagram"]["flow"] == "missing_config_id"
+    admin.put("/api/publish/apps/instagram", json={"redirect_uri": CALLBACK, "config_id": "987654321"}, headers=CSRF)
+    ok = admin.post("/api/publish/oauth/instagram/start", headers=CSRF).json()
+    assert ok["auth_url"].startswith("https://www.facebook.com/dialog/oauth?") and "instagram.com" not in ok["auth_url"]
+
+
+def test_wrong_app_can_be_removed(admin):
+    admin.put("/api/publish/apps/tiktok", json={"client_id": "1234567890", "client_secret": "x",
+                                                "redirect_uri": "https://localhost/asc-callback"}, headers=CSRF)
+    assert admin.get("/api/publish/overview").json()["apps"]["tiktok"]["configured"]
+    with session_scope() as db:  # with a connected account the app cannot be removed
+        db.add(PublishAccount(platform="tiktok", external_id="tt-guard", status="connected"))
+    assert admin.delete("/api/publish/apps/tiktok", headers=CSRF).status_code == 422
+    with session_scope() as db:
+        for a in db.query(PublishAccount).filter(PublishAccount.platform == "tiktok"):
+            a.status = "revoked"
+    assert admin.delete("/api/publish/apps/tiktok", headers=CSRF).status_code == 200
+    assert not admin.get("/api/publish/overview").json()["apps"]["tiktok"]["configured"]
