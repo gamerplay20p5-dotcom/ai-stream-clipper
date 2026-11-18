@@ -43,19 +43,26 @@ class Transcriber(Protocol):
 
 
 class FasterWhisperProvider:
-    def __init__(self, model: str, compute_type: str = "int8", cpu_threads: int = 4, download_root: Path | None = None):
+    def __init__(self, model: str, compute_type: str = "int8", cpu_threads: int = 4, download_root: Path | None = None,
+                 workers: int = 1):
         from faster_whisper import WhisperModel
 
         self.name = f"faster-whisper:{model}"
-        log.info("loading whisper model", extra={"model": model, "compute_type": compute_type, "threads": cpu_threads})
+        self.workers = max(1, int(workers))
+        log.info("loading whisper model", extra={"model": model, "compute_type": compute_type, "threads": cpu_threads,
+                                                 "workers": self.workers})
+        # num_workers: CTranslate2 runs that many transcriptions in parallel on ONE loaded model
+        # (cpu_threads each). Before v0.3.1 a lock serialised every call, so the audio worker's
+        # concurrency setting never parallelised transcription (found with 3 simultaneous lives).
         self._model = WhisperModel(
             model,
             device="cpu",
             compute_type=compute_type,
             cpu_threads=cpu_threads,
+            num_workers=self.workers,
             download_root=str(download_root) if download_root else None,
         )
-        self._lock = threading.Lock()  # one decode at a time per model instance
+        self._lock = threading.BoundedSemaphore(self.workers)
 
     def transcribe(self, audio: np.ndarray, language: str | None, prompt: str | None = None) -> TranscriptResult:
         lang = None if not language or language == "auto" else language
@@ -97,11 +104,12 @@ _cache: dict[str, Transcriber] = {}
 _cache_lock = threading.Lock()
 
 
-def get_transcriber(model: str, compute_type: str, cpu_threads: int, download_root: Path | None) -> Transcriber:
+def get_transcriber(model: str, compute_type: str, cpu_threads: int, download_root: Path | None,
+                    workers: int = 1) -> Transcriber:
     if model in ("", "none", "off"):
         return NullTranscriber()
-    key = f"{model}:{compute_type}:{cpu_threads}"
+    key = f"{model}:{compute_type}:{cpu_threads}:{workers}"
     with _cache_lock:
         if key not in _cache:
-            _cache[key] = FasterWhisperProvider(model, compute_type, cpu_threads, download_root)
+            _cache[key] = FasterWhisperProvider(model, compute_type, cpu_threads, download_root, workers)
         return _cache[key]

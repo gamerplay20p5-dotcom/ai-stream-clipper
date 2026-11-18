@@ -81,7 +81,7 @@ async def handle_audio(ctx: JobContext) -> dict:
     model = p.get("whisper_model") or s.whisper_model
     t0 = time.monotonic()
     transcriber = await asyncio.to_thread(get_transcriber, model, s.whisper_compute_type, s.whisper_cpu_threads,
-                                          s.whisper_model_dir)
+                                          s.whisper_model_dir, s.concurrency_audio)
     tr = await asyncio.to_thread(transcriber.transcribe, samples, p.get("language") or "auto")
     stt = time.monotonic() - t0
     await ctx.client.post(f"/internal/sessions/{sid}/analysis", {
