@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from . import queue
 from .config import get_settings
 from .db import utcnow
-from .models import AudioFeature, AuditLog, Clip, Event, Job, Segment, Streamer, StreamSession, TranscriptWord, Worker
+from .models import AudioFeature, AuditLog, Candidate, Clip, Event, Job, Segment, Streamer, StreamSession, TranscriptWord, Worker
 from .scoring.engine import weighted_total
 from .settings_store import AISettings, load_ai_settings
 
@@ -378,7 +378,37 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
                      kind=str(e["kind"])[:32], strength=float(e.get("strength", 0)), data=e.get("data") or {}))
     streamer = db.get(Streamer, sess.streamer_id)
     prefs = (streamer.preferences or {}) if streamer else {}
+    from .evaluation.versions import scoring_provenance
+
+    scoring_version = str(result.get("scoring_version", ""))[:32]
+    prov = scoring_provenance(settings, scoring_version)
     created = []
+    new_cands: list[Candidate] = []
+    for r in result.get("rejected", []):
+        d = r.get("detail") or {}
+        row = Candidate(session_id=session_id, streamer_id=sess.streamer_id, peak=float(r["peak"]),
+                        start=d.get("start"), end=d.get("end"),
+                        score=d.get("score") if d.get("score") is not None else r.get("score"),
+                        decision=str(r.get("reason", "other"))[:24], kinds=list(r.get("kinds") or []),
+                        breakdown=d.get("breakdown") or {}, features=d.get("features") or {},
+                        transcript=str(d.get("transcript", ""))[:1500], scoring_version=scoring_version)
+        db.add(row)
+        new_cands.append(row)
+    ranker = None
+    if settings.ranker_mode != "off":
+        from .evaluation.ranker import predict, scoring_model
+
+        ranker = scoring_model(db)
+
+    def rank(row: Candidate) -> None:
+        if ranker is not None and row.features:
+            try:
+                row.ranker_score = predict(ranker.params, ranker.feature_names, row.features)
+            except Exception:  # a broken model must never block scoring
+                log.exception("ranker prediction failed")
+
+    for row in new_cands:
+        rank(row)
     for c in result.get("candidates", []):
         clip = Clip(
             session_id=session_id, streamer_id=sess.streamer_id, start=float(c["start"]), end=float(c["end"]),
@@ -390,19 +420,52 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
             caption_style=prefs.get("caption_style") or settings.caption_style,
             layout=prefs.get("layout") or settings.default_layout,
             webcam_region=prefs.get("webcam_region"),
-            version=1,
+            version=1, provenance=prov,
         )
         db.add(clip)
         db.flush()
+        row = Candidate(session_id=session_id, streamer_id=sess.streamer_id, peak=clip.peak, start=clip.start,
+                        end=clip.end, score=clip.score, decision="accepted", kinds=clip.kinds,
+                        breakdown=clip.score_breakdown, features=c.get("features") or {},
+                        transcript=clip.transcript[:1500], clip_id=clip.id, scoring_version=scoring_version)
+        rank(row)
+        db.add(row)
+        db.flush()
+        if settings.dataset_enabled:
+            from .evaluation.dataset import create_example
+
+            _dataset_safely(db, lambda: create_example(
+                db, stratum="accepted", candidate=row, clip=clip, min_score=settings.min_score,
+                priority=60.0 if clip.score < settings.min_score + 10 else 40.0))
         _route_new_clip(db, clip, settings)
         created.append(clip.id)
+    db.flush()
+    if settings.dataset_enabled and new_cands:
+        from .evaluation.dataset import create_example
+        from .evaluation.sampler import select_for_review
+
+        def pick():
+            for cand, stratum, priority in select_for_review(db, new_cands, settings.min_score,
+                                                             settings.dataset_max_per_hour):
+                create_example(db, stratum=stratum, candidate=cand, priority=priority, min_score=settings.min_score)
+
+        _dataset_safely(db, pick)
     return created
+
+
+def _dataset_safely(db: Session, fn) -> None:
+    """Evaluation bookkeeping is secondary: a failure there must never block clips."""
+    try:
+        with db.begin_nested():
+            fn()
+    except Exception:
+        log.exception("dataset bookkeeping failed (clips unaffected)")
 
 
 def _record_scoring_stats(sess: StreamSession, result: dict) -> None:
     """Keep per-session diagnostics: how many moments were rejected and why."""
     st = dict(sess.stats or {})
-    rejected = list(result.get("rejected") or [])
+    rejected = [{k: v for k, v in r.items() if k != "detail"} for r in (result.get("rejected") or [])]
     counts = dict(st.get("rejected_counts") or {})
     for r in rejected:
         counts[r.get("reason", "other")] = counts.get(r.get("reason", "other"), 0) + 1

@@ -64,6 +64,11 @@ def retention() -> dict:
             for model in (TranscriptWord, AudioFeature, Segment):
                 db.execute(delete(model).where(model.session_id == sid))
         removed["raw_sessions"] = len(old)
+    with session_scope() as db:
+        from .evaluation.media import enforce_retention
+
+        ds = enforce_retention(db, load_ai_settings(db))
+        removed["dataset_media"] = ds["expired"]
     for cid in doomed:
         storage.delete_clip_files(cid)
     removed["clips"] = len(doomed)

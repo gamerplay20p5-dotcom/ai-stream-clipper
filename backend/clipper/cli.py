@@ -95,6 +95,7 @@ async def _run_worker(roles: list[str], stop_event=None) -> None:
                     "vram_total_bytes": mem.get("total_bytes")}
     if "render" in roles:
         specs.append(RoleSpec("render", handlers.handle_render, s.concurrency_render))
+        specs.append(RoleSpec("dataset_media", handlers.handle_dataset_media, 1))
     if "monitor" in roles:
         background.append(handlers.monitor_loop)
 

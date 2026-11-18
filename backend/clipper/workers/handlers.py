@@ -259,10 +259,31 @@ async def handle_vision(ctx: JobContext) -> dict:
                  "vision_provider": visual.provider, "narrative_provider": narr.provider,
                  "fallback_reason": fallback_reason, "timings": timings, "frames_sampled": len(frames),
                  "frames_to_model": 0 if visual.fallback else len(visual.frame_times),
-                 "model_state": (snap.get("models") or {}).get(model or "", {})},
+                 "model_state": (snap.get("models") or {}).get(model or "", {}),
+                 "prompt_version": _prompt_version(), "director_version": _director_version(),
+                 "max_new_tokens": _max_tokens(model), "frames": list(visual.frame_times)[:16]},
     })
     return {"mode": decision.mode, "keep": decision.keep, "score": decision.score, "vision": visual.provider,
             "narrative": narr.provider, "timings": timings}
+
+
+def _prompt_version() -> str:
+    from ..ai.vlm import PROMPT_VERSION
+
+    return PROMPT_VERSION
+
+
+def _director_version() -> str:
+    from ..ai import director
+
+    return getattr(director, "DIRECTOR_VERSION", "director-2")
+
+
+def _max_tokens(model: str | None) -> int | None:
+    from ..ai.registry import MODELS
+
+    spec = MODELS.get(model or "")
+    return getattr(spec, "max_new_tokens", None) if spec else None
 
 
 def _audio_cues(spec: dict, w0: float) -> list[str]:
@@ -317,6 +338,60 @@ async def handle_render(ctx: JobContext) -> dict:
                                 params={"version": version, "seconds": f"{res.seconds:.2f}", "layout": res.layout})
     return {"seconds": round(res.seconds, 2), "duration": round(res.duration, 2), "layout": res.layout,
             "stale": bool(r.get("stale")), "applied": res.applied, "audio": res.audio}
+
+
+# ---------------------------------------------------------------------------
+# evaluation dataset media (Phase 3): extract, re-encode to 720p, upload
+# ---------------------------------------------------------------------------
+
+
+async def handle_dataset_media(ctx: JobContext) -> dict:
+    eid = int(ctx.payload["example_id"])
+    try:
+        spec = await ctx.client.get(f"/internal/examples/{eid}/media-spec")
+    except InternalError as exc:
+        if exc.status == 404:
+            return {"skipped": "example gone"}
+        raise
+    raw = ctx.workdir / "raw.mp4"
+    out = ctx.workdir / "example.mp4"
+    try:
+        if spec["source"] == "segments":
+            a, b = spec["range"]
+            headers = await ctx.client.download(f"{spec['segment_base_url']}/extract", raw,
+                                                params={"session_id": spec["session_id"], "start": f"{a:.3f}",
+                                                        "end": f"{b:.3f}"})
+            src_start = float(headers.get("x-asc-source-start", a))
+            trim = (0.0, None)
+        else:  # clip source kept by the API (with margins)
+            await ctx.client.download(f"/internal/examples/{eid}/source", raw)
+            src_start = float(spec["source_start"])
+            a, b = spec["range"]
+            trim = (max(0.0, a - src_start), b - a)
+    except InternalError as exc:
+        if exc.status == 404:
+            await ctx.client.post(f"/internal/examples/{eid}/media-failed",
+                                  {"error": "mídia não está mais disponível no buffer de captura"})
+            return {"failed": "source gone"}
+        raise
+    # small review copy: 720p30, CRF 28 (~1 Mbit/s) - the dataset must not eat the disk
+    cmd = [media.FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
+    if trim[0] > 0:
+        cmd += ["-ss", f"{trim[0]:.3f}"]
+    cmd += ["-i", str(raw)]
+    if trim[1] is not None:
+        cmd += ["-t", f"{trim[1]:.3f}"]
+    cmd += ["-vf", "scale=-2:'min(720,ih)',fps=30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+            "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out)]
+    try:
+        await media.run(cmd, timeout=600)
+    except media.MediaError as exc:
+        raise JobError(f"ffmpeg failed: {str(exc)[-300:]}") from exc
+    info = await media.probe(out)
+    dur = media.duration_of(info) or 0.0
+    await ctx.client.upload(f"/internal/examples/{eid}/media", out,
+                            params={"start": f"{src_start + trim[0]:.3f}", "duration": f"{dur:.3f}"})
+    return {"bytes": out.stat().st_size, "duration": dur}
 
 
 # ---------------------------------------------------------------------------

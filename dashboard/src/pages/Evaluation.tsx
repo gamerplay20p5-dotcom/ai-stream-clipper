@@ -1,0 +1,619 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Download, Flag, Loader2, Save, SkipForward } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { api, type Example, type Taxonomy } from "../api";
+import { Empty, ErrorNote, PageHeader } from "../components/ui";
+import { ago, bytes, platformName, timecode } from "../lib/format";
+
+const TABS = [
+  { key: "revisar", label: "Revisar" },
+  { key: "metricas", label: "Métricas" },
+  { key: "dataset", label: "Dataset e modelos" },
+];
+
+const providerTone: Record<string, string> = {
+  multimodal: "bg-ok/15 text-ok",
+  audio_fallback: "bg-tally-dim text-[#ffb4b6]",
+  heuristic: "bg-suite-raised text-ink-muted",
+  ranker: "bg-take-dim text-take",
+};
+
+export function ProviderBadge({ provider, tax }: { provider?: string; tax?: Taxonomy }) {
+  const p = provider || "heuristic";
+  return (
+    <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${providerTone[p] ?? providerTone.heuristic}`}>
+      {tax?.providers[p] ?? p}
+    </span>
+  );
+}
+
+const fmt = (v: number | null | undefined, digits = 0) => (v === null || v === undefined ? "n/d" : v.toFixed(digits));
+const pct = (v: number | null | undefined) => (v === null || v === undefined ? "n/d" : `${Math.round(v * 100)}%`);
+
+export default function Evaluation() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("aba") ?? "revisar";
+  const tax = useQuery({ queryKey: ["taxonomy"], queryFn: () => api.get<Taxonomy>("/api/review/taxonomy"), staleTime: Infinity });
+  return (
+    <div>
+      <PageHeader title="Avaliação editorial">
+        <nav className="flex gap-1" aria-label="Seções da avaliação">
+          {TABS.map((t) => (
+            <button key={t.key} onClick={() => setParams({ aba: t.key })}
+              className={`rounded-md px-3 py-1.5 text-sm ${tab === t.key ? "bg-suite-raised text-ink" : "text-ink-muted hover:text-ink"}`}>
+              {t.label}
+            </button>
+          ))}
+        </nav>
+      </PageHeader>
+      {tax.data && tab === "revisar" && <ReviewDesk tax={tax.data} />}
+      {tax.data && tab === "metricas" && <Metrics tax={tax.data} />}
+      {tax.data && tab === "dataset" && <DatasetPanel tax={tax.data} />}
+      <ErrorNote error={tax.error} />
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ review desk
+function ReviewDesk({ tax }: { tax: Taxonomy }) {
+  const [params, setParams] = useSearchParams();
+  const [filter, setFilter] = useState<"queue" | "reviewed">("queue");
+  const queue = useQuery({
+    queryKey: ["review-queue", filter],
+    queryFn: () => filter === "queue"
+      ? api.get<Example[]>("/api/review/queue?limit=60")
+      : api.get<Example[]>("/api/review/examples?state=reviewed&limit=100"),
+    refetchInterval: 15_000,
+  });
+  const items = queue.data ?? [];
+  const sel = params.get("ex") ? Number(params.get("ex")) : items[0]?.id ?? null;
+  const select = (id: number | null) => {
+    const p = new URLSearchParams(params);
+    if (id) p.set("ex", String(id)); else p.delete("ex");
+    setParams(p);
+  };
+  const next = () => {
+    const i = items.findIndex((e) => e.id === sel);
+    const n = items.find((e, j) => j > i && !e.reviewed_at) ?? items.find((e) => e.id !== sel && !e.reviewed_at);
+    select(n?.id ?? null);
+  };
+
+  return (
+    <div className="lg:grid lg:grid-cols-[300px_minmax(0,1fr)] lg:gap-6">
+      <aside className="mb-6 lg:mb-0">
+        <div className="mb-3 flex gap-1 text-sm">
+          <button className={`rounded px-2 py-1 ${filter === "queue" ? "bg-suite-raised" : "text-ink-muted"}`} onClick={() => setFilter("queue")}>
+            Fila sugerida
+          </button>
+          <button className={`rounded px-2 py-1 ${filter === "reviewed" ? "bg-suite-raised" : "text-ink-muted"}`} onClick={() => setFilter("reviewed")}>
+            Já avaliados
+          </button>
+        </div>
+        <p className="mb-3 text-xs text-ink-muted">
+          {filter === "queue"
+            ? "Ordenada pelo que mais ajuda a IA a aprender: perto do limiar, áudio e visão discordando, rejeitados com reação."
+            : "Avaliações salvas. Você pode corrigir qualquer uma."}
+        </p>
+        {queue.isLoading && <p className="text-sm text-ink-muted">Carregando…</p>}
+        {!queue.isLoading && items.length === 0 && (
+          <Empty title={filter === "queue" ? "Nada para revisar agora" : "Nenhuma avaliação ainda"}>
+            Os exemplos aparecem enquanto as lives são analisadas (a mídia leva cerca de 1 minuto para ficar pronta).
+          </Empty>
+        )}
+        <ul className="max-h-[70vh] space-y-1 overflow-y-auto pr-1">
+          {items.map((e) => (
+            <li key={e.id}>
+              <button onClick={() => select(e.id)}
+                className={`w-full rounded-md px-3 py-2 text-left text-sm ${e.id === sel ? "bg-suite-raised ring-1 ring-take" : "hover:bg-suite-panel"}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate font-medium">{e.streamer_name || "—"}</span>
+                  <span className="shrink-0 text-xs text-ink-muted">{e.ai.decision === "accepted" ? "corte" : "rejeitado"} · {fmt(e.ai.score)}</span>
+                </div>
+                <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-ink-muted">
+                  <span className="truncate">{e.stratum_label}</span>
+                  {e.review ? <span className="text-ok">{tax.ratings[e.review.rating]}</span> : <span>{ago(e.created_at)}</span>}
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </aside>
+      {sel ? <ExampleReview key={sel} id={sel} tax={tax} onDone={next} /> : null}
+    </div>
+  );
+}
+
+type Marks = { event_start: number | null; event_peak: number | null; event_end: number | null; short_start: number | null; short_end: number | null };
+
+function ExampleReview({ id, tax, onDone }: { id: number; tax: Taxonomy; onDone: () => void }) {
+  const qc = useQueryClient();
+  const ex = useQuery({ queryKey: ["example", id], queryFn: () => api.get<Example>(`/api/review/examples/${id}`) });
+  const video = useRef<HTMLVideoElement>(null);
+  const [now, setNow] = useState(0);
+  const [rating, setRating] = useState("");
+  const [category, setCategory] = useState("");
+  const [reasons, setReasons] = useState<string[]>([]);
+  const [tech, setTech] = useState<string[]>([]);
+  const [ctxq, setCtxq] = useState<number | null>(null);
+  const [description, setDescription] = useState("");
+  const [notes, setNotes] = useState("");
+  const [marks, setMarks] = useState<Marks>({ event_start: null, event_peak: null, event_end: null, short_start: null, short_end: null });
+
+  const e = ex.data;
+  useEffect(() => {
+    if (!e) return;
+    const r = e.review;
+    setRating(r?.rating ?? "");
+    setCategory(r?.category ?? "");
+    setReasons(r?.editorial_reasons ?? []);
+    setTech(r?.technical_issues ?? []);
+    setCtxq(r?.context_quality ?? null);
+    setDescription(r?.description ?? "");
+    setNotes(r?.notes ?? "");
+    setMarks({
+      event_start: r?.event_start ?? null, event_peak: r?.event_peak ?? null, event_end: r?.event_end ?? null,
+      short_start: r?.short_start ?? null, short_end: r?.short_end ?? null,
+    });
+  }, [e?.id, e?.review?.updated_at]);
+
+  const save = useMutation({
+    mutationFn: () => api.put<Example>(`/api/review/examples/${id}/review`, {
+      rating, category, editorial_reasons: reasons, technical_issues: tech, context_quality: ctxq,
+      description, notes, ...marks,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["review-queue"] });
+      qc.invalidateQueries({ queryKey: ["example", id] });
+      qc.invalidateQueries({ queryKey: ["review-metrics"] });
+      onDone();
+    },
+  });
+
+  // keyboard: I/O short in/out, A/P/F event start/peak/end, space play/pause, 1-5 rating
+  useEffect(() => {
+    const ratings = Object.keys(tax.ratings);
+    const onKey = (ev: KeyboardEvent) => {
+      const tag = (ev.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      const k = ev.key.toLowerCase();
+      if (k === "i") mark("short_start");
+      else if (k === "o") mark("short_end");
+      else if (k === "a") mark("event_start");
+      else if (k === "p") mark("event_peak");
+      else if (k === "f") mark("event_end");
+      else if (["1", "2", "3", "4", "5"].includes(k)) setRating(ratings[Number(k) - 1]);
+      else return;
+      ev.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  if (ex.isLoading || !e) return <p className="text-sm text-ink-muted">Carregando exemplo…</p>;
+  const abs = (t: number) => e.media_start + t; // media time -> session time
+  function mark(k: keyof Marks) {
+    if (!video.current || !e) return;
+    setMarks((m) => ({ ...m, [k]: Math.round(abs(video.current!.currentTime) * 10) / 10 }));
+  }
+  const seek = (sessionT: number | null | undefined) => {
+    if (video.current && sessionT !== null && sessionT !== undefined && e) video.current.currentTime = Math.max(0, sessionT - e.media_start);
+  };
+  const ai = e.ai;
+  const span = Math.max(1, e.media_end - e.media_start);
+  const x = (t: number | null | undefined) => (t === null || t === undefined ? null : Math.max(0, Math.min(100, ((t - e.media_start) / span) * 100)));
+  const humanDur = marks.short_start !== null && marks.short_end !== null ? marks.short_end - marks.short_start : null;
+  const aiDur = ai.start !== null && ai.end !== null ? ai.end - ai.start : null;
+
+  return (
+    <section className="min-w-0 space-y-5">
+      <header className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="display text-lg">{e.streamer_name}</span>
+        <span className="text-ink-muted">{platformName[e.platform] ?? e.platform} · sessão {e.session_id} · {e.split === "val" ? "validação" : "treino"}</span>
+        <ProviderBadge provider={ai.provider} tax={tax} />
+        <span className="rounded bg-suite-raised px-1.5 py-0.5 text-[11px] text-ink-muted">{e.stratum_label}</span>
+        {e.is_test && <span className="rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-semibold text-take">TESTE MANUAL · nunca usado como positivo</span>}
+      </header>
+
+      {e.media_state === "ready" ? (
+        <video ref={video} className="aspect-video w-full rounded-lg bg-black" controls preload="metadata"
+          src={`/api/review/examples/${e.id}/media`} onTimeUpdate={(ev) => setNow((ev.target as HTMLVideoElement).currentTime)} />
+      ) : (
+        <div className="flex aspect-video w-full items-center justify-center rounded-lg bg-suite-panel text-sm text-ink-muted">
+          {e.media_state === "pending" ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Preparando a mídia…</> : `Mídia indisponível: ${e.media_error || e.media_state}`}
+        </div>
+      )}
+
+      {/* timeline: AI selection (amber) vs human selection (green) */}
+      <div>
+        <div className="relative h-10 rounded-md bg-suite-panel" aria-label="Linha do tempo do exemplo">
+          {x(ai.start) !== null && x(ai.end) !== null && (
+            <div className="absolute top-1 h-3 rounded bg-take/70" style={{ left: `${x(ai.start)}%`, width: `${x(ai.end)! - x(ai.start)!}%` }} title="Seleção da IA" />
+          )}
+          {x(ai.heuristic_start) !== null && x(ai.heuristic_end) !== null && (ai.heuristic_start !== ai.start || ai.heuristic_end !== ai.end) && (
+            <div className="absolute top-[18px] h-1 rounded bg-take/30" style={{ left: `${x(ai.heuristic_start)}%`, width: `${x(ai.heuristic_end)! - x(ai.heuristic_start)!}%` }} title="Seleção heurística original" />
+          )}
+          {x(marks.short_start) !== null && x(marks.short_end) !== null && (
+            <div className="absolute bottom-1 h-3 rounded bg-ok/70" style={{ left: `${x(marks.short_start)}%`, width: `${Math.max(0.5, x(marks.short_end)! - x(marks.short_start)!)}%` }} title="Seu Short ideal" />
+          )}
+          {x(ai.peak) !== null && <div className="absolute inset-y-0 w-0.5 bg-take" style={{ left: `${x(ai.peak)}%` }} title="Pico (IA)" />}
+          {(["event_start", "event_peak", "event_end"] as const).map((k) => x(marks[k]) !== null && (
+            <div key={k} className="absolute inset-y-0 w-0.5 bg-ok" style={{ left: `${x(marks[k])}%` }} title={k} />
+          ))}
+          <div className="absolute inset-y-0 w-px bg-white" style={{ left: `${(now / span) * 100}%` }} />
+        </div>
+        <div className="mt-1 flex justify-between text-[11px] text-ink-faint">
+          <span>{timecode(e.media_start)}</span>
+          <span><span className="text-take">■</span> IA <span className="ml-2 text-ok">■</span> Você</span>
+          <span>{timecode(e.media_end)}</span>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 text-sm">
+        {([
+          ["event_start", "Início do acontecimento", "A"], ["event_peak", "Ponto principal", "P"], ["event_end", "Fim da situação", "F"],
+          ["short_start", "Início do Short", "I"], ["short_end", "Fim do Short", "O"],
+        ] as const).map(([k, label, key]) => (
+          <button key={k} className="btn-quiet" onClick={() => mark(k)} disabled={e.media_state !== "ready"}>
+            {label} <kbd className="ml-1 text-[10px] text-ink-faint">{key}</kbd>
+            {marks[k] !== null && <span className="ml-1 text-ok" onClick={(ev) => { ev.stopPropagation(); seek(marks[k]); }}>{timecode(marks[k]!)}</span>}
+          </button>
+        ))}
+        <button className="btn-quiet" onClick={() => { seek(ai.start); }}>Ir para início da IA</button>
+      </div>
+
+      <div className="grid gap-3 rounded-lg border border-suite-line p-3 text-sm sm:grid-cols-3">
+        <div><p className="text-xs text-ink-muted">Duração IA</p><p>{aiDur !== null ? `${aiDur.toFixed(0)} s` : "n/d"}</p></div>
+        <div><p className="text-xs text-ink-muted">Sua duração ideal</p><p>{humanDur !== null ? `${humanDur.toFixed(0)} s` : "marque I e O"}</p></div>
+        <div><p className="text-xs text-ink-muted">Diferença de início / fim</p>
+          <p>{marks.short_start !== null && ai.start !== null ? `${(ai.start - marks.short_start).toFixed(1)} s` : "—"} / {marks.short_end !== null && ai.end !== null ? `${(ai.end - marks.short_end).toFixed(1)} s` : "—"}</p></div>
+      </div>
+
+      <div>
+        <p className="mb-2 text-sm font-medium">Avaliação editorial <span className="text-xs text-ink-muted">(teclas 1–5)</span></p>
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(tax.ratings).map(([k, label], i) => (
+            <button key={k} onClick={() => setRating(k)}
+              className={`rounded-md border px-3 py-1.5 text-sm ${rating === k ? (k === "excellent" || k === "good" ? "border-ok bg-ok/15 text-ok" : k === "fair" ? "border-take bg-take-dim text-take" : "border-tally bg-tally-dim text-[#ffb4b6]") : "border-suite-line text-ink-muted hover:text-ink"}`}>
+              <span className="mr-1 text-[10px] text-ink-faint">{i + 1}</span>{label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <fieldset>
+          <legend className="mb-2 text-sm font-medium">Motivos editoriais</legend>
+          <Chips options={tax.editorial_reasons} value={reasons} onChange={setReasons} />
+        </fieldset>
+        <fieldset>
+          <legend className="mb-2 text-sm font-medium">Problemas técnicos <span className="text-xs text-ink-muted">(separados do julgamento editorial)</span></legend>
+          <Chips options={tax.technical_issues} value={tech} onChange={setTech} />
+        </fieldset>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="block text-sm">
+          <span className="mb-1 block font-medium">Tipo de momento</span>
+          <select className="field" value={category} onChange={(ev) => setCategory(ev.target.value)}>
+            <option value="">—</option>
+            {Object.entries(tax.categories).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </label>
+        <label className="block text-sm">
+          <span className="mb-1 block font-medium">Qualidade do contexto: {ctxq ?? "—"}</span>
+          <input type="range" min={0} max={10} value={ctxq ?? 5} onChange={(ev) => setCtxq(Number(ev.target.value))} className="w-full accent-[#F2B33D]" />
+        </label>
+      </div>
+      <label className="block text-sm">
+        <span className="mb-1 block font-medium">Descrição objetiva do que acontece</span>
+        <textarea className="field min-h-[60px]" value={description} onChange={(ev) => setDescription(ev.target.value)}
+          placeholder="Ex.: foge da polícia de moto, bate num poste e o streamer ri da própria falha" />
+      </label>
+      <label className="block text-sm">
+        <span className="mb-1 block font-medium">Observações</span>
+        <textarea className="field min-h-[48px]" value={notes} onChange={(ev) => setNotes(ev.target.value)} />
+      </label>
+
+      <ErrorNote error={save.error} />
+      <div className="flex flex-wrap gap-2">
+        <button className="btn-take" disabled={!rating || save.isPending} onClick={() => save.mutate()}>
+          <Save className="h-4 w-4" /> Salvar e ir para o próximo
+        </button>
+        <button className="btn-quiet" onClick={onDone}><SkipForward className="h-4 w-4" /> Pular</button>
+      </div>
+
+      <AiSide e={e} tax={tax} seek={seek} />
+    </section>
+  );
+}
+
+function Chips({ options, value, onChange }: { options: Record<string, string>; value: string[]; onChange: (v: string[]) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {Object.entries(options).map(([k, label]) => {
+        const on = value.includes(k);
+        return (
+          <button key={k} type="button" aria-pressed={on}
+            onClick={() => onChange(on ? value.filter((x) => x !== k) : [...value, k])}
+            className={`rounded-full border px-2.5 py-1 text-xs ${on ? "border-take bg-take-dim text-take" : "border-suite-line text-ink-muted hover:text-ink"}`}>
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AiSide({ e, tax, seek }: { e: Example; tax: Taxonomy; seek: (t: number) => void }) {
+  const ai = e.ai;
+  const words = e.context?.words ?? [];
+  const events = e.context?.acoustic_events ?? [];
+  return (
+    <details className="rounded-lg border border-suite-line p-3 text-sm" open>
+      <summary className="cursor-pointer font-medium">O que a IA viu e decidiu</summary>
+      <div className="mt-3 grid gap-4 md:grid-cols-2">
+        <div className="space-y-2">
+          <p>
+            Decisão: <b>{ai.decision === "accepted" ? "virou corte" : `rejeitado (${ai.decision})`}</b> · nota {fmt(ai.score, 1)}
+            {ai.min_score !== null && ai.min_score !== undefined && <> (mínimo {fmt(ai.min_score)})</>}
+            {ai.ranker_score !== null && ai.ranker_score !== undefined && <> · classificador {pct(ai.ranker_score)}</>}
+          </p>
+          <p className="flex items-center gap-2 text-xs">Produzido por <ProviderBadge provider={ai.provider} tax={tax} /></p>
+          <p className="text-xs text-ink-muted">A nota é uma heurística de ordenação. Não é garantia de qualidade nem probabilidade de viralizar.</p>
+          {ai.fallback_reason && <p className="text-xs text-[#ffb4b6]">Fallback: {ai.fallback_reason}</p>}
+          {ai.visual?.summary && <p><span className="text-ink-muted">Visão ({ai.visual.model ?? "modelo"}):</span> {ai.visual.summary}</p>}
+          {e.context?.disagreement && <p className="text-take">Áudio ({fmt(e.context.disagreement.audio_score)}) e visão ({fmt(e.context.disagreement.visual_interest, 1)}/10) discordam.</p>}
+          {(ai.reasons ?? []).length > 0 && <ul className="list-inside list-disc text-xs text-ink-muted">{ai.reasons!.slice(0, 8).map((r, i) => <li key={i}>{r}</li>)}</ul>}
+          {(ai.director?.adjustments ?? []).length > 0 && <p className="text-xs text-ink-muted">Diretor: {ai.director!.adjustments!.join("; ")}</p>}
+        </div>
+        <div className="space-y-2">
+          <p className="text-xs text-ink-muted">Eventos acústicos</p>
+          <ul className="max-h-32 space-y-0.5 overflow-y-auto text-xs">
+            {events.length === 0 && <li className="text-ink-faint">nenhum</li>}
+            {events.map((ev, i) => (
+              <li key={i}><button className="text-take hover:underline" onClick={() => seek(ev.t)}>{timecode(ev.t)}</button> {ev.kind}{ev.phrase ? ` “${ev.phrase}”` : ""}{ev.source ? ` (${ev.source})` : ""}</li>
+            ))}
+          </ul>
+          <p className="text-xs text-ink-muted">Transcrição</p>
+          <p className="max-h-32 overflow-y-auto text-xs leading-relaxed">
+            {words.length === 0 ? <span className="text-ink-faint">sem fala</span> : words.map(([t, w], i) => (
+              <span key={i} className="cursor-pointer hover:text-take" onClick={() => seek(t)}>{w} </span>
+            ))}
+          </p>
+        </div>
+      </div>
+      {e.provenance && (
+        <p className="mt-3 break-all text-[11px] text-ink-faint">
+          Versões: app {String((e.provenance as Record<string, unknown>).app ?? "?")} · pontuação {String((e.provenance as Record<string, unknown>).scoring ?? "?")} · config {String((e.provenance as Record<string, unknown>).settings_hash ?? "?")}
+          {(e.provenance as { analysis?: { prompt_version?: string; vision_model?: string } }).analysis &&
+            <> · visão {String((e.provenance as { analysis: { vision_model?: string } }).analysis.vision_model ?? "—")} · prompt {String((e.provenance as { analysis: { prompt_version?: string } }).analysis.prompt_version ?? "—")}</>}
+        </p>
+      )}
+    </details>
+  );
+}
+
+// ------------------------------------------------------------------ metrics
+type EditorialMetrics = {
+  reviewed: number; reviewed_accepted: number; reviewed_rejected: number;
+  approval_rate: number | null; precision: number | null; coverage: number | null;
+  false_negatives_known: number; false_positives: number; false_positives_per_hour: number | null;
+  duplicates_flagged: number; hours_captured: number;
+  start_error_s: { median: number | null; p95: number | null; n: number };
+  end_error_s: { median: number | null; p95: number | null; n: number };
+  duration_s: { ai_mean: number | null; human_ideal_mean: number | null };
+  precision_at_5: Record<string, number | null>;
+  editorial_reasons: Record<string, number>; technical_issues: Record<string, number>;
+  false_negative_examples: { example_id: number; stratum: string; score: number | null; rating: string }[];
+  false_positive_examples: { example_id: number; clip_id: number | null; score: number | null; rating: string; reasons: string[] }[];
+};
+type Operational = {
+  stages: Record<string, { n: number; run_p50: number | null; run_p95: number | null; wait_p50: number | null; wait_p95: number | null }>;
+  clip_ready_s: { p50: number | null; p95: number | null; n: number };
+  vlm_s: { p50: number | null; p95: number | null; n: number };
+  queue: { queued: Record<string, number>; oldest_s: Record<string, number> };
+  candidates_per_hour: number; clips_per_hour: number;
+};
+
+function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-lg border border-suite-line p-3">
+      <p className="text-xs text-ink-muted">{label}</p>
+      <p className="display mt-1 text-xl">{value}</p>
+      {hint && <p className="mt-1 text-[11px] text-ink-faint">{hint}</p>}
+    </div>
+  );
+}
+
+function Metrics({ tax }: { tax: Taxonomy }) {
+  const [split, setSplit] = useState("");
+  const m = useQuery({ queryKey: ["review-metrics", split], queryFn: () => api.get<{ editorial: EditorialMetrics; note: string }>(`/api/review/metrics${split ? `?split=${split}` : ""}`) });
+  const op = useQuery({ queryKey: ["review-op"], queryFn: () => api.get<Operational>("/api/review/operational?hours=24"), refetchInterval: 30_000 });
+  const [, setParams] = useSearchParams();
+  const ed = m.data?.editorial;
+  const open = (id: number) => setParams({ aba: "revisar", ex: String(id) });
+  const stageName: Record<string, string> = { audio_analyze: "Áudio e transcrição", score: "Pontuação", vision_analyze: "Análise multimodal", render: "Renderização", dataset_media: "Mídia do dataset" };
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-2 text-sm">
+        <span className="text-ink-muted">Conjunto:</span>
+        {[["", "Todos"], ["train", "Treino"], ["val", "Validação"]].map(([k, l]) => (
+          <button key={k} onClick={() => setSplit(k)} className={`rounded px-2 py-1 ${split === k ? "bg-suite-raised" : "text-ink-muted"}`}>{l}</button>
+        ))}
+      </div>
+      <p className="text-xs text-ink-muted">{m.data?.note}</p>
+      {ed && (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Stat label="Avaliações" value={String(ed.reviewed)} hint={`${ed.reviewed_accepted} cortes · ${ed.reviewed_rejected} rejeitados`} />
+            <Stat label="Precisão dos cortes" value={pct(ed.precision)} hint="bons ou excelentes entre os cortes avaliados (sem 'regular')" />
+            <Stat label="Cobertura" value={pct(ed.coverage)} hint="bons momentos conhecidos que viraram corte" />
+            <Stat label="Taxa de aprovação" value={pct(ed.approval_rate)} />
+            <Stat label="Falsos positivos por hora" value={fmt(ed.false_positives_per_hour, 2)} hint={`${ed.false_positives} ruins/indevidos · ${ed.hours_captured} h capturadas`} />
+            <Stat label="Falsos negativos conhecidos" value={String(ed.false_negatives_known)} hint="rejeitados que você avaliou como bons" />
+            <Stat label="Erro no início (mediana / p95)" value={`${fmt(ed.start_error_s.median, 1)} / ${fmt(ed.start_error_s.p95, 1)} s`} hint={`${ed.start_error_s.n} cortes com marcação`} />
+            <Stat label="Erro no fim (mediana / p95)" value={`${fmt(ed.end_error_s.median, 1)} / ${fmt(ed.end_error_s.p95, 1)} s`} />
+            <Stat label="Duração média IA / ideal" value={`${fmt(ed.duration_s.ai_mean)} / ${fmt(ed.duration_s.human_ideal_mean)} s`} />
+            <Stat label="Duplicatas marcadas" value={String(ed.duplicates_flagged)} />
+          </div>
+          <div className="rounded-lg border border-suite-line p-3">
+            <p className="mb-2 text-sm font-medium">Precision@5 por sessão: os melhores aparecem no topo?</p>
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Ordenação</th><th>P@5</th></tr></thead>
+              <tbody>
+                <tr><td className="py-1">A. Heurística (v0.2.9)</td><td>{pct(ed.precision_at_5.heuristic)}</td></tr>
+                <tr><td className="py-1">B. Julgamento contextual (diretor + visão + memória)</td><td>{pct(ed.precision_at_5.contextual)}</td></tr>
+                <tr><td className="py-1">C. Classificador treinado</td><td>{pct(ed.precision_at_5.ranker)}</td></tr>
+              </tbody>
+            </table>
+            <p className="mt-2 text-[11px] text-ink-faint">“n/d” = avaliações insuficientes na mesma sessão para comparar. Nenhuma melhoria é declarada sem esses números.</p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-lg border border-suite-line p-3">
+              <p className="mb-2 text-sm font-medium">Onde a IA ainda erra: falsos positivos</p>
+              {ed.false_positive_examples.length === 0 ? <p className="text-xs text-ink-faint">nenhum registrado</p> :
+                <ul className="space-y-1 text-xs">{ed.false_positive_examples.map((f) => (
+                  <li key={f.example_id}><button className="text-take hover:underline" onClick={() => open(f.example_id)}>#{f.example_id}</button> nota {fmt(f.score)} · {tax.ratings[f.rating]} · {f.reasons.map((r) => tax.editorial_reasons[r] ?? r).join(", ")}</li>
+                ))}</ul>}
+            </div>
+            <div className="rounded-lg border border-suite-line p-3">
+              <p className="mb-2 text-sm font-medium">Falsos negativos conhecidos</p>
+              {ed.false_negative_examples.length === 0 ? <p className="text-xs text-ink-faint">nenhum registrado</p> :
+                <ul className="space-y-1 text-xs">{ed.false_negative_examples.map((f) => (
+                  <li key={f.example_id}><button className="text-take hover:underline" onClick={() => open(f.example_id)}>#{f.example_id}</button> {tax.strata[f.stratum] ?? f.stratum} · nota {fmt(f.score)} · {tax.ratings[f.rating]}</li>
+                ))}</ul>}
+            </div>
+          </div>
+        </>
+      )}
+      {op.data && (
+        <div className="rounded-lg border border-suite-line p-3">
+          <p className="mb-2 text-sm font-medium">Desempenho operacional (últimas 24 h)</p>
+          <div className="mb-3 grid gap-3 sm:grid-cols-4">
+            <Stat label="Short pronto (p50 / p95)" value={`${fmt(op.data.clip_ready_s.p50)} / ${fmt(op.data.clip_ready_s.p95)} s`} />
+            <Stat label="Inferência VLM (p50 / p95)" value={`${fmt(op.data.vlm_s.p50, 1)} / ${fmt(op.data.vlm_s.p95, 1)} s`} />
+            <Stat label="Candidatos por hora" value={fmt(op.data.candidates_per_hour, 1)} />
+            <Stat label="Cortes por hora" value={fmt(op.data.clips_per_hour, 2)} />
+          </div>
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Etapa</th><th>Jobs</th><th>Execução p50/p95</th><th>Espera na fila p50/p95</th><th>Na fila agora</th></tr></thead>
+            <tbody>
+              {Object.entries(op.data.stages).map(([k, s]) => (
+                <tr key={k} className="border-t border-suite-line/50">
+                  <td className="py-1">{stageName[k] ?? k}</td><td>{s.n}</td>
+                  <td>{fmt(s.run_p50, 1)} / {fmt(s.run_p95, 1)} s</td><td>{fmt(s.wait_p50, 1)} / {fmt(s.wait_p95, 1)} s</td>
+                  <td>{op.data!.queue.queued[k] ?? 0}{op.data!.queue.oldest_s[k] ? ` (mais antigo ${op.data!.queue.oldest_s[k]} s)` : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <ErrorNote error={m.error ?? op.error} />
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ dataset & rankers
+type Stats = {
+  total: number; reviewed: number; media_bytes: number; quota_bytes: number; candidates: number;
+  by_stratum: Record<string, { total: number; reviewed: number }>;
+  by_split: Record<string, { total: number; reviewed: number }>;
+  by_media: Record<string, { total: number; reviewed: number }>;
+  by_rating: Record<string, number>;
+};
+type Ranker = { id: number; name: string; status: string; n_train: number; n_val: number; created_at: string;
+  metrics: { ranker?: { auc: number | null; p_at_5: number | null }; heuristic?: { auc: number | null; p_at_5: number | null }; beats_heuristic?: boolean; top_weights?: [string, number][] } };
+type Rankers = { models: Ranker[]; labelled: Record<string, { n: number; pos: number }>; mode: string;
+  requirements: { min_train: number; min_per_class: number; min_val: number } };
+
+function DatasetPanel({ tax }: { tax: Taxonomy }) {
+  const qc = useQueryClient();
+  const st = useQuery({ queryKey: ["review-stats"], queryFn: () => api.get<Stats>("/api/review/stats"), refetchInterval: 20_000 });
+  const rk = useQuery({ queryKey: ["rankers"], queryFn: () => api.get<Rankers>("/api/review/rankers") });
+  const train = useMutation({ mutationFn: () => api.post("/api/review/rankers/train"), onSuccess: () => qc.invalidateQueries({ queryKey: ["rankers"] }) });
+  const setStatus = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: string }) => api.post(`/api/review/rankers/${id}/status`, { status }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["rankers"] }),
+  });
+  const backfill = useMutation({ mutationFn: () => api.post<{ created: number }>("/api/review/backfill"), onSuccess: () => qc.invalidateQueries() });
+  const s = st.data;
+  const useBar = s ? Math.min(100, (s.media_bytes / Math.max(1, s.quota_bytes)) * 100) : 0;
+  return (
+    <div className="space-y-6">
+      {s && (
+        <div className="grid gap-3 sm:grid-cols-4">
+          <Stat label="Exemplos" value={String(s.total)} hint={`${s.reviewed} avaliados`} />
+          <Stat label="Candidatos registrados" value={String(s.candidates)} hint="todos os momentos pontuados, inclusive os rejeitados" />
+          <Stat label="Treino / validação" value={`${s.by_split.train?.total ?? 0} / ${s.by_split.val?.total ?? 0}`} hint="separados por sessão (sem vazamento)" />
+          <div className="rounded-lg border border-suite-line p-3">
+            <p className="text-xs text-ink-muted">Mídia do dataset</p>
+            <p className="display mt-1 text-xl">{bytes(s.media_bytes)}</p>
+            <div className="mt-2 h-1.5 rounded-full bg-suite-line"><div className="h-1.5 rounded-full bg-take" style={{ width: `${useBar}%` }} /></div>
+            <p className="mt-1 text-[11px] text-ink-faint">cota {bytes(s.quota_bytes)} · retenção em Configurações da IA</p>
+          </div>
+        </div>
+      )}
+      {s && (
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="rounded-lg border border-suite-line p-3 text-sm">
+            <p className="mb-2 font-medium">Por motivo de seleção</p>
+            <ul className="space-y-1">{Object.entries(s.by_stratum).map(([k, v]) => (
+              <li key={k} className="flex justify-between"><span>{tax.strata[k] ?? k}</span><span className="text-ink-muted">{v.reviewed}/{v.total}</span></li>
+            ))}</ul>
+          </div>
+          <div className="rounded-lg border border-suite-line p-3 text-sm">
+            <p className="mb-2 font-medium">Avaliações por nota</p>
+            <ul className="space-y-1">{Object.entries(tax.ratings).map(([k, label]) => (
+              <li key={k} className="flex justify-between"><span>{label}</span><span className="text-ink-muted">{s.by_rating[k] ?? 0}</span></li>
+            ))}</ul>
+          </div>
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <a className="btn-quiet" href="/api/review/export?format=jsonl"><Download className="h-4 w-4" /> Exportar JSONL (avaliados)</a>
+        <a className="btn-quiet" href="/api/review/export?format=csv"><Download className="h-4 w-4" /> Exportar CSV de atributos</a>
+        <a className="btn-quiet" href="/api/review/export?format=jsonl&split=val">Só validação</a>
+        <button className="btn-quiet" disabled={backfill.isPending} onClick={() => backfill.mutate()}><Flag className="h-4 w-4" /> Incluir cortes antigos</button>
+        {backfill.data && <span className="self-center text-xs text-ink-muted">{backfill.data.created} cortes incluídos</span>}
+      </div>
+
+      <div className="rounded-lg border border-suite-line p-3">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm font-medium">Classificador de ranking (aprende com as suas avaliações)</p>
+          <button className="btn-take" disabled={train.isPending} onClick={() => train.mutate()}>Treinar nova versão</button>
+        </div>
+        {rk.data && (
+          <p className="mb-3 text-xs text-ink-muted">
+            Modo atual: <b>{rk.data.mode === "shadow" ? "sombra (calcula e mostra, não decide)" : rk.data.mode === "active" ? "ativo" : "desligado"}</b>.
+            Exemplos rotulados: treino {rk.data.labelled.train?.n ?? 0} ({rk.data.labelled.train?.pos ?? 0} positivos),
+            validação {rk.data.labelled.val?.n ?? 0} ({rk.data.labelled.val?.pos ?? 0} positivos).
+            Mínimo: {rk.data.requirements.min_train} no treino com ≥{rk.data.requirements.min_per_class} de cada classe e {rk.data.requirements.min_val} na validação.
+          </p>
+        )}
+        <ErrorNote error={train.error ?? setStatus.error} />
+        <table className="w-full text-sm">
+          <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Versão</th><th>Estado</th><th>AUC val. (modelo / heurística)</th><th>P@5 (modelo / heurística)</th><th>Treino/val</th><th /></tr></thead>
+          <tbody>
+            {(rk.data?.models ?? []).map((m) => (
+              <tr key={m.id} className="border-t border-suite-line/50">
+                <td className="py-1">{m.name}</td><td>{m.status}</td>
+                <td>{fmt(m.metrics.ranker?.auc, 3)} / {fmt(m.metrics.heuristic?.auc, 3)} {m.metrics.beats_heuristic ? <span className="text-ok">melhor</span> : <span className="text-ink-faint">não superou</span>}</td>
+                <td>{pct(m.metrics.ranker?.p_at_5)} / {pct(m.metrics.heuristic?.p_at_5)}</td>
+                <td>{m.n_train}/{m.n_val}</td>
+                <td className="space-x-1 text-right">
+                  {m.status !== "shadow" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => setStatus.mutate({ id: m.id, status: "shadow" })}>Sombra</button>}
+                  {m.status !== "active" && m.metrics.beats_heuristic && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => setStatus.mutate({ id: m.id, status: "active" })}>Ativar</button>}
+                  {m.status !== "archived" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => setStatus.mutate({ id: m.id, status: "archived" })}>Arquivar</button>}
+                </td>
+              </tr>
+            ))}
+            {(rk.data?.models ?? []).length === 0 && <tr><td colSpan={6} className="py-2 text-xs text-ink-faint">Nenhum modelo treinado ainda. Avalie exemplos primeiro.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Download, RotateCcw, Trash2, X } from "lucide-react";
+import { Check, ClipboardCheck, Download, RotateCcw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type Clip, type Streamer } from "../api";
@@ -112,6 +112,11 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
       if ((a === "approve" || a === "reject") && idx >= 0 && items[idx + 1]) onNavigate(items[idx + 1].id);
     },
   });
+  const navigate = useNavigate();
+  const evaluate = useMutation({
+    mutationFn: () => api.post<{ id: number }>(`/api/review/clips/${clipId}/example`),
+    onSuccess: (ex) => navigate(`/avaliacao?aba=revisar&ex=${ex.id}`),
+  });
   const remove = useMutation({
     mutationFn: () => api.del(`/api/clips/${clipId}`),
     onSuccess: () => {
@@ -181,8 +186,11 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
               <Trash2 className="h-4 w-4" /> Excluir
             </button>
           </div>
+          <button className="btn-quiet mt-2 w-full" disabled={evaluate.isPending} onClick={() => evaluate.mutate()}>
+            <ClipboardCheck className="h-4 w-4" /> Avaliar este corte (feedback para a IA)
+          </button>
           <p className="mt-2 text-xs text-ink-faint">Atalhos: A aprova, R rejeita, J e K navegam, Esc fecha.</p>
-          <ErrorNote error={action.error || remove.error} />
+          <ErrorNote error={action.error || remove.error || evaluate.error} />
         </div>
 
         <div className="min-w-0 space-y-5">

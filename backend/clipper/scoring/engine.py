@@ -18,6 +18,10 @@ from ..analysis import lexicon
 from ..settings_store import AISettings
 from .titles import suggest_metadata
 
+# Bump whenever detection/scoring logic changes: stored with every candidate and clip so
+# evaluations can be reproduced and compared across versions.
+SCORING_VERSION = "score-3.0"
+
 HOP = 0.25
 ABS_FLOOR_DB = -48.0  # ignore "spikes" in near-silence
 BASE_WINDOW_S = 90.0
@@ -56,6 +60,7 @@ class Candidate:
     title_suggestions: list[str] = field(default_factory=list)
     description: str = ""
     hashtags: list[str] = field(default_factory=list)
+    features: dict = field(default_factory=dict)  # observable signals (ranker / dataset)
 
 
 ACOUSTIC_CATS = ("speech", "laughter", "scream", "shout", "game_impact", "gunfire", "vehicle", "music", "crowd")
@@ -433,32 +438,36 @@ def score_timeline(tl: dict) -> dict:
     candidates: list[Candidate] = []
     rejected: list[dict] = []  # every moment that did NOT become a clip, with the reason (diagnostics)
 
-    def reject(group, reason: str, score: float | None = None) -> None:
-        rejected.append({"peak": round(_peak_of(group), 2), "reason": reason,
-                         "score": None if score is None else round(score, 1),
-                         "kinds": sorted({e.kind for e in group})})
+    def reject(group, reason: str, score: float | None = None, cand: Candidate | None = None) -> None:
+        r = {"peak": round(_peak_of(group), 2), "reason": reason,
+             "score": None if score is None else round(score, 1),
+             "kinds": sorted({e.kind for e in group})}
+        if cand is not None:  # full detail, persisted as a Candidate row (stats keep only the summary)
+            r["detail"] = {"start": cand.start, "end": cand.end, "score": cand.score, "breakdown": cand.breakdown,
+                           "features": cand.features, "transcript": cand.transcript[:1500]}
+        rejected.append(r)
 
     for group in cluster(events):
         kinds = {e.kind for e in group}
-        if not (kinds & ACOUSTIC) and sum(e.strength for e in group if e.kind in ("keyword", "laughter")) < 4.0:
-            reject(group, "text_only")  # ordinary conversation: words without acoustic reaction
-            continue
         cand = _build_candidate(group, grid, base, spread, words, settings, data_start, t_to, existing)
+        if not (kinds & ACOUSTIC) and sum(e.strength for e in group if e.kind in ("keyword", "laughter")) < 4.0:
+            reject(group, "text_only", cand=cand)  # ordinary conversation: words without acoustic reaction
+            continue
         if cand is None:
             reject(group, "too_short")
             continue
         if cand.score < settings.min_score:
-            reject(group, "below_min_score", cand.score)
+            reject(group, "below_min_score", cand.score, cand)
             continue
         if any(_overlap(cand.start, cand.end, c["start"], c["end"]) >= settings.dedup_overlap for c in existing):
-            reject(group, "duplicate", cand.score)
+            reject(group, "duplicate", cand.score, cand)
             continue
         if any(_jaccard(cand.transcript, c.get("transcript", "")) >= 0.6 for c in existing if c.get("transcript")):
-            reject(group, "duplicate", cand.score)
+            reject(group, "duplicate", cand.score, cand)
             continue
         recent = [c for c in existing if cand.peak - c.get("peak", c["start"]) < 3600]
         if len(recent) >= settings.max_clips_per_hour and cand.score < min(100, settings.min_score + 20):
-            reject(group, "rate_limit", cand.score)
+            reject(group, "rate_limit", cand.score, cand)
             continue
         meta = suggest_metadata(cand.transcript, cand.kinds, tl.get("streamer") or {}, settings.language)
         cand.title, cand.title_suggestions = meta["title"], meta["suggestions"]
@@ -473,6 +482,7 @@ def score_timeline(tl: dict) -> dict:
         "rejected": rejected,
         "min_score": settings.min_score,
         "scored_until": round(limit, 3),
+        "scoring_version": SCORING_VERSION,
     }
 
 
@@ -574,6 +584,7 @@ def _build_candidate(group, grid, base, spread, words, settings: AISettings, dat
         breakdown["intensity"] = round(intensity * 0.4, 2)
         breakdown["reaction"] = round(reaction * 0.5, 2)
     total = weighted_total(breakdown, settings)
+    raw_total = total
     if game_only:
         total *= 0.6
         reasons.append("Penalidade: o pico de volume vem do jogo (explosão/tiro), sem reação do streamer")
@@ -587,10 +598,32 @@ def _build_candidate(group, grid, base, spread, words, settings: AISettings, dat
         reasons.append("Momento longo: limitado à duração máxima")
     if not reasons:
         reasons.append("Variação acústica acima do normal")
+    pi = grid.i(peak) if grid.n else 0
+    yam = {f"yam_{c}": (round(v, 3) if math.isfinite(v := grid.cat(c, pi - 12, pi + 12)) else None)
+           for c in ACOUSTIC_CATS} if grid.n and grid.has_cats else {f"yam_{c}": None for c in ACOUSTIC_CATS}
+    dur = max(1e-6, end - start)
+    features = {
+        **{f"dim_{k}": v for k, v in breakdown.items() if v is not None},
+        "delta_db": round(float(delta), 2), "z_max": round(float(zmax), 2), "rise_db": round(float(rise), 2),
+        "kw_weight": round(float(kw_weight), 2),
+        **{f"n_{k}": len(v) for k, v in has.items()}, "n_loudness_spike": len(spikes), "n_events": len(group),
+        "scream_by_yamnet": int(any(e.data.get("by") == "yamnet" for e in has["scream"])),
+        "cat_surprise": cats.count("surprise"), "cat_humor": cats.count("humor"),
+        "cat_tension": cats.count("tension"), "cat_other": sum(1 for c in cats if c not in ("surprise", "humor", "tension")),
+        "group_span_s": round(last - first, 2), "duration_s": round(dur, 2),
+        "pre_words": len(pre_words), "post_words": len(post_words), "words_per_s": round(len(clip_words) / dur, 3),
+        "pre_speech_ratio": round(pre_speech / max(1.0, peak - start), 3),
+        "start_snapped": int(start_snapped), "end_snapped": int(end_snapped), "truncated": int(truncated),
+        "uncorroborated": int(uncorroborated), "game_only": int(game_only),
+        "low_reaction": int(intensity < 3 and reaction < 3 and humor < 3),
+        "similarity_prev": round(float(sim), 3), "dominant_repeat": int(recent_kinds.count(dominant) >= 2),
+        "raw_total": round(float(raw_total), 2), "score": round(float(total), 2),
+        **yam,
+    }
     return Candidate(
         start=round(start, 2), end=round(end, 2), peak=round(peak, 2), score=round(total, 1),
         breakdown=breakdown, reasons=reasons, transcript=transcript,
-        kinds=sorted({e.kind for e in group}),
+        kinds=sorted({e.kind for e in group}), features=features,
     )
 
 

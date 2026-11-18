@@ -142,6 +142,61 @@ def job_fail(jid: int, body: FailIn, worker: str = Depends(worker_auth), db: Ses
 # --- monitor -----------------------------------------------------------------------
 
 
+# --- evaluation dataset media (Phase 3) -------------------------------------------------
+
+
+@router.get("/examples/{eid}/media-spec")
+def example_media_spec(eid: int, _: str = Depends(worker_auth), db: Session = Depends(get_db)):
+    from ..evaluation import media as ds_media
+
+    try:
+        return ds_media.media_spec(db, eid)
+    except ds_media.NotAvailable as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.put("/examples/{eid}/media")
+async def example_media_upload(eid: int, request: Request, start: float, duration: float,
+                               auth: tuple[str, str] = Depends(worker_auth_upload), db: Session = Depends(get_db)):
+    from ..evaluation import media as ds_media
+
+    try:
+        dest = ds_media.media_dest(db, eid)
+    except ds_media.NotAvailable as exc:
+        raise HTTPException(404, str(exc)) from exc
+    size = await _receive(request, dest, MAX_VIDEO_BYTES, auth[1])
+    ds_media.store_media(db, eid, dest, size, start, duration)
+    db.commit()
+    return {"ok": True, "bytes": size}
+
+
+class ExampleFailIn(BaseModel):
+    error: str = Field("", max_length=2000)
+
+
+@router.post("/examples/{eid}/media-failed")
+def example_media_failed(eid: int, body: ExampleFailIn, _: str = Depends(worker_auth), db: Session = Depends(get_db)):
+    from ..evaluation import media as ds_media
+
+    ds_media.mark_failed(db, eid, body.error)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/examples/{eid}/source")
+def example_clip_source(eid: int, _: str = Depends(worker_auth), db: Session = Depends(get_db)):
+    """Clip source stored in the API (examples of clips whose segments are gone)."""
+    from fastapi.responses import FileResponse
+
+    from ..evaluation import media as ds_media
+
+    try:
+        path = ds_media.clip_source_path(db, eid)
+    except ds_media.NotAvailable as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(path, media_type="video/mp4")
+
+
 @router.get("/monitor/targets")
 def monitor_targets(min_interval: float = 60.0, _: str = Depends(worker_auth), db: Session = Depends(get_db)):
     return pipeline.monitor_targets(db, max(10.0, min_interval))

@@ -18,7 +18,7 @@ from ..db import get_db, init_engine, session_scope
 from ..migrate import upgrade_db
 from ..models import Clip, StreamSession, User, Worker
 from ..security import hash_password
-from . import routes_admin, routes_auth, routes_clips, routes_internal, routes_streamers
+from . import routes_admin, routes_auth, routes_clips, routes_internal, routes_review, routes_streamers
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +86,7 @@ def create_app(run_maintenance: bool = True) -> FastAPI:
     app.include_router(routes_streamers.router)
     app.include_router(routes_clips.router)
     app.include_router(routes_admin.router)
+    app.include_router(routes_review.router)
     app.include_router(routes_internal.router)
 
     @app.get("/healthz", include_in_schema=False)

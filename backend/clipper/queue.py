@@ -34,6 +34,7 @@ JOB_ROLES: dict[str, str] = {
     "score": "scoring",
     "vision_analyze": "vision",
     "render": "render",
+    "dataset_media": "render",  # Phase 3: extract + re-encode media of evaluation examples (206)
 }
 
 TERMINAL = {"done", "dead", "cancelled"}

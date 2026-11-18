@@ -66,6 +66,21 @@ class AISettings(BaseModel):
     retention_rejected_days: int = Field(3, ge=0)
     retention_unreviewed_days: int = Field(14, ge=0)
     retention_approved_days: int = Field(0, ge=0)
+    # Phase 3 - evaluation dataset (human review), retention and quota of its media
+    dataset_enabled: bool = True
+    dataset_max_per_hour: int = Field(10, ge=0, le=60, description="non-clip examples per session-hour")
+    dataset_retention_days: int = Field(21, ge=0, description="media of unreviewed examples; 0 = keep")
+    dataset_reviewed_retention_days: int = Field(0, ge=0, description="media of reviewed examples; 0 = keep")
+    dataset_quota_gb: float = Field(20.0, ge=0.5, le=2000)
+    # Phase 3 - temporal memory and narrative continuity
+    memory_enabled: bool = True
+    memory_window_seconds: float = Field(180.0, ge=30, le=900)
+    merge_gap_seconds: float = Field(20.0, ge=0, le=120)
+    # Phase 3 - queue pressure: when the vision queue is this deep, weak candidates skip the VLM
+    vision_queue_max: int = Field(6, ge=1, le=200)
+    vision_stale_minutes: int = Field(20, ge=2, le=240)
+    # Phase 3 - learned ranker: off | shadow (computed and shown, never decides) | active
+    ranker_mode: Literal["off", "shadow", "active"] = "shadow"
     # auto-publish is a future module: always disabled in this build
     auto_publish: Literal[False] = False
     weights: ScoreWeights = Field(default_factory=ScoreWeights)

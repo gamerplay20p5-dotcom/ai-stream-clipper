@@ -60,6 +60,10 @@ ANSWER_REGEX = (
     rf'"confidence": (0(\.[0-9]{{1,2}})?|1(\.0)?)\}}'
 )
 
+import hashlib as _hashlib
+
+PROMPT_VERSION = "vlm-" + _hashlib.sha1((PROMPT + ANSWER_REGEX).encode()).hexdigest()[:10]
+
 REPAIR = "Sua resposta anterior não era um JSON válido. Responda novamente APENAS com o objeto JSON pedido."
 
 

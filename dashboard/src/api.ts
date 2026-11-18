@@ -322,3 +322,85 @@ export type AISettings = {
   auto_publish: false;
   weights: Record<string, number>;
 };
+
+// ---- Phase 3: editorial evaluation --------------------------------------------------------
+export type ReviewData = {
+  id: number;
+  reviewer: string;
+  rating: string;
+  category: string;
+  editorial_reasons: string[];
+  technical_issues: string[];
+  description: string;
+  notes: string;
+  context_quality: number | null;
+  ideal_duration: number | null;
+  event_start: number | null;
+  event_peak: number | null;
+  event_end: number | null;
+  short_start: number | null;
+  short_end: number | null;
+  updated_at: string;
+};
+
+export type ExampleAI = {
+  decision: string;
+  score: number | null;
+  candidate_score?: number | null;
+  ranker_score?: number | null;
+  min_score?: number | null;
+  start: number | null;
+  end: number | null;
+  peak: number | null;
+  heuristic_start?: number | null;
+  heuristic_end?: number | null;
+  breakdown?: Record<string, number | null>;
+  kinds?: string[];
+  reasons?: string[];
+  title?: string;
+  provider?: string;
+  clip_id?: number;
+  clip_status?: string;
+  fallback_reason?: string;
+  visual?: { summary?: string; key_event?: string; model?: string; device?: string; interest?: number;
+    events?: { t: number; label: string }[] } | null;
+  director?: { adjustments?: string[]; explanation?: string } | null;
+};
+
+export type Example = {
+  id: number;
+  clip_id: number | null;
+  candidate_id: number | null;
+  session_id: number | null;
+  streamer_id: number | null;
+  streamer_name: string;
+  platform: string;
+  stratum: string;
+  stratum_label: string;
+  priority: number;
+  split: "train" | "val";
+  is_test: boolean;
+  media_start: number;
+  media_end: number;
+  media_state: "pending" | "ready" | "failed" | "expired";
+  media_error: string;
+  ai: ExampleAI;
+  created_at: string;
+  reviewed_at: string | null;
+  review: ReviewData | null;
+  context?: { transcript?: string; words?: [number, string][]; session_title?: string;
+    acoustic_events?: { t: number; kind: string; strength: number; phrase?: string; source?: string }[];
+    disagreement?: { audio_score: number; visual_interest: number } };
+  provenance?: Record<string, unknown>;
+  features?: Record<string, number | null> | null;
+  clip_exists?: boolean;
+};
+
+export type Taxonomy = {
+  ratings: Record<string, string>;
+  editorial_reasons: Record<string, string>;
+  technical_issues: Record<string, string>;
+  categories: Record<string, string>;
+  strata: Record<string, string>;
+  providers: Record<string, string>;
+};

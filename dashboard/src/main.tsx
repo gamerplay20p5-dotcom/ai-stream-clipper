@@ -7,6 +7,7 @@ import Layout from "./components/Layout";
 import "./index.css";
 import Clips from "./pages/Clips";
 import Diagnostics from "./pages/Diagnostics";
+import Evaluation from "./pages/Evaluation";
 import Infrastructure from "./pages/Infrastructure";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
@@ -49,6 +50,7 @@ function App() {
           <Route path="ia" element={<Settings />} />
           <Route path="infra" element={<Infrastructure />} />
           <Route path="diagnostico" element={<Diagnostics />} />
+          <Route path="avaliacao" element={<Evaluation />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       ) : (

@@ -172,6 +172,8 @@ class Clip(Base):
     is_test: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # TESTE MANUAL: excluded from metrics
     heuristic_start: Mapped[float | None] = mapped_column(Float, nullable=True)  # Phase-1 bounds, kept for comparison
     heuristic_end: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Phase 3: versions of code/models/settings that produced the clip
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
     version: Mapped[int] = mapped_column(Integer, default=0)
     source_path: Mapped[str] = mapped_column(String(512), default="")
     source_start: Mapped[float] = mapped_column(Float, default=0.0)
@@ -243,3 +245,112 @@ class AppSetting(Base):
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 - editorial evaluation, human feedback and learning
+# ---------------------------------------------------------------------------
+
+
+class Candidate(Base):
+    """Every moment the scorer evaluated (accepted or not), with its observable features.
+    Rejected moments are what makes false negatives, active learning and a ranker possible."""
+
+    __tablename__ = "candidates"
+    __table_args__ = (Index("ix_candidates_session_peak", "session_id", "peak"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("stream_sessions.id", ondelete="CASCADE"))
+    streamer_id: Mapped[int] = mapped_column(ForeignKey("streamers.id", ondelete="CASCADE"), index=True)
+    peak: Mapped[float] = mapped_column(Float)
+    start: Mapped[float | None] = mapped_column(Float, nullable=True)
+    end: Mapped[float | None] = mapped_column(Float, nullable=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    decision: Mapped[str] = mapped_column(String(24), index=True)  # accepted | text_only | below_min_score | ...
+    kinds: Mapped[list] = mapped_column(JSON, default=list)
+    breakdown: Mapped[dict] = mapped_column(JSON, default=dict)
+    features: Mapped[dict] = mapped_column(JSON, default=dict)
+    transcript: Mapped[str] = mapped_column(Text, default="")
+    situation: Mapped[str] = mapped_column(String(64), default="")  # temporal memory label at the peak
+    clip_id: Mapped[int | None] = mapped_column(ForeignKey("clips.id", ondelete="SET NULL"), nullable=True, index=True)
+    scoring_version: Mapped[str] = mapped_column(String(32), default="")
+    ranker_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # shadow ranker probability
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class EvalExample(Base):
+    """A reviewable example of the evaluation dataset: a frozen snapshot of what the system saw
+    and decided, plus its own (re-encoded) media so it outlives the capture buffer and the clip."""
+
+    __tablename__ = "eval_examples"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int | None] = mapped_column(ForeignKey("candidates.id", ondelete="SET NULL"), nullable=True,
+                                                     unique=True)
+    clip_id: Mapped[int | None] = mapped_column(ForeignKey("clips.id", ondelete="SET NULL"), nullable=True, index=True)
+    session_id: Mapped[int | None] = mapped_column(ForeignKey("stream_sessions.id", ondelete="SET NULL"), nullable=True,
+                                                   index=True)
+    streamer_id: Mapped[int | None] = mapped_column(ForeignKey("streamers.id", ondelete="SET NULL"), nullable=True)
+    streamer_name: Mapped[str] = mapped_column(String(255), default="")
+    platform: Mapped[str] = mapped_column(String(20), default="")
+    stratum: Mapped[str] = mapped_column(String(32), index=True)  # why it was selected (active learning)
+    priority: Mapped[float] = mapped_column(Float, default=0.0)  # higher = more useful to review now
+    split: Mapped[str] = mapped_column(String(8), default="train", index=True)  # train | val (by session)
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False)  # manual test clip: never a training positive
+    # window of the media (session seconds) and the AI decision inside it
+    media_start: Mapped[float] = mapped_column(Float, default=0.0)
+    media_end: Mapped[float] = mapped_column(Float, default=0.0)
+    ai: Mapped[dict] = mapped_column(JSON, default=dict)  # score, decision, bounds, breakdown, dimensions, provider
+    context: Mapped[dict] = mapped_column(JSON, default=dict)  # transcript, acoustic events, visual, memory
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)  # versions of code, models, settings
+    ai_runs: Mapped[list] = mapped_column(JSON, default=list)  # re-evaluations with newer AI versions
+    media_state: Mapped[str] = mapped_column(String(16), default="pending", index=True)  # pending|ready|failed|expired
+    media_path: Mapped[str] = mapped_column(String(512), default="")
+    media_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    media_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class Review(Base):
+    """Human editorial judgement of an example (one current review per reviewer)."""
+
+    __tablename__ = "reviews"
+    __table_args__ = (UniqueConstraint("example_id", "reviewer", name="uq_review_example_reviewer"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    example_id: Mapped[int] = mapped_column(ForeignKey("eval_examples.id", ondelete="CASCADE"), index=True)
+    reviewer: Mapped[str] = mapped_column(String(255))
+    rating: Mapped[str] = mapped_column(String(24))  # excellent|good|fair|bad|should_not_exist
+    category: Mapped[str] = mapped_column(String(32), default="")  # what kind of moment it is
+    editorial_reasons: Mapped[list] = mapped_column(JSON, default=list)
+    technical_issues: Mapped[list] = mapped_column(JSON, default=list)
+    description: Mapped[str] = mapped_column(Text, default="")  # objective description of what happens
+    notes: Mapped[str] = mapped_column(Text, default="")
+    context_quality: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 0-10
+    ideal_duration: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # human timestamps (session seconds)
+    event_start: Mapped[float | None] = mapped_column(Float, nullable=True)
+    event_peak: Mapped[float | None] = mapped_column(Float, nullable=True)
+    event_end: Mapped[float | None] = mapped_column(Float, nullable=True)
+    short_start: Mapped[float | None] = mapped_column(Float, nullable=True)
+    short_end: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ai_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)  # the AI result that was judged
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class RankerModel(Base):
+    """A trained lightweight ranker. Never used for decisions until an admin promotes it after
+    validation; production keeps the heuristic ranking otherwise."""
+
+    __tablename__ = "ranker_models"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64))
+    kind: Mapped[str] = mapped_column(String(32), default="logistic")
+    status: Mapped[str] = mapped_column(String(16), default="candidate", index=True)  # candidate|shadow|active|archived
+    feature_names: Mapped[list] = mapped_column(JSON, default=list)
+    params: Mapped[dict] = mapped_column(JSON, default=dict)  # weights, normalisation, threshold
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)  # validation metrics vs heuristic baseline
+    n_train: Mapped[int] = mapped_column(Integer, default=0)
+    n_val: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

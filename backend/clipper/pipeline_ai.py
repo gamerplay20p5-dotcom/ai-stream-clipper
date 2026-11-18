@@ -160,6 +160,13 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
     meta.update({"worker": worker, "at": utcnow().isoformat() + "Z", "mode": decision.mode,
                  "vision_fallback": bool(visual is None or visual.fallback)})
     clip.analysis_meta = meta
+    prov = dict(clip.provenance or {})
+    prov["analysis"] = {k: meta.get(k) for k in ("vision_model", "vision_device", "vision_provider", "narrative_provider",
+                                                  "prompt_version", "max_new_tokens", "frames", "fallback_reason",
+                                                  "director_version") if k in meta}
+    prov["analysis"]["run"] = clip.analysis_runs + 1
+    prov["analysis"]["worker"] = worker
+    clip.provenance = prov
     if heuristic:
         clip.vision = heuristic
         if heuristic.get("webcam_region") and not clip.webcam_region:
@@ -193,6 +200,13 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
     clip.analysis_runs += 1
     # done = some visual analysis ran (multimodal or heuristic); multimodal vs fallback lives in analysis_meta
     clip.vision_state = "done" if (visual is not None or heuristic) else "skipped"
+    from .evaluation.dataset import refresh_clip_snapshot
+
+    try:
+        with db.begin_nested():
+            refresh_clip_snapshot(db, clip)
+    except Exception:
+        log.exception("dataset snapshot refresh failed (clip unaffected)")
 
     if settings.director_enabled and not decision.keep and not clip.is_test:
         clip.status = "rejected"
