@@ -285,6 +285,7 @@ class AnalysisIn(BaseModel):
     language: str = ""
     skipped: bool = False
     extra: dict = Field(default_factory=dict)  # Phase 2: yamnet categories + pitch
+    speech_turns: list[dict] | None = None  # Phase 5 E: [{start, end, text, emb: [[256] x 1 or 3]}]
 
 
 @router.post("/sessions/{sid}/analysis")

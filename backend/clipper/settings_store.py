@@ -88,6 +88,26 @@ class AISettings(BaseModel):
     deep_review_max_frames: int = Field(12, ge=6, le=16)
     retrospective_enabled: bool = True
     retrospective_max_per_session: int = Field(5, ge=0, le=30)
+    # Phase 5 stage E - who is talking (voice embeddings on the audio worker)
+    speakers_enabled: bool = True
+    # Phase 5 stage E - smart captions
+    caption_mode: Literal["streamer_highlight", "streamer_only", "all"] = "streamer_highlight"
+    caption_font: Literal["", "Noto Sans", "DejaVu Sans", "Noto Serif"] = ""
+    caption_size_pct: int = Field(100, ge=60, le=160)
+    caption_position: Literal["low", "middle", "high"] = "low"
+    caption_animation: Literal["highlight", "pop", "none"] = "highlight"
+    caption_active_color: str = Field("", pattern=r"^(#[0-9a-fA-F]{6})?$")
+    caption_emphasis_color: str = Field("", pattern=r"^(#[0-9a-fA-F]{6})?$")
+    caption_other_color: str = Field("#9AD7FF", pattern=r"^#[0-9a-fA-F]{6}$")
+    # Phase 5 stage E - channel branding (discreet; nothing is added unless filled in)
+    brand_name: str = Field("", max_length=40)
+    brand_watermark: bool = False
+    brand_watermark_position: Literal["top_left", "top_right", "bottom_left"] = "top_right"
+    brand_watermark_opacity: float = Field(0.45, ge=0.1, le=1.0)
+    brand_cta: str = Field("", max_length=80, description="end-card text, e.g. 'Siga para mais cortes'")
+    brand_cta_seconds: float = Field(3.0, ge=1.5, le=6.0)
+    brand_hashtags: list[str] = Field(default_factory=list, max_length=8)
+    brand_description_footer: str = Field("", max_length=500)
     # Phase 5 - score-based storage lifecycle (media only; rows and labels are always kept)
     cleanup_enabled: bool = False
     cleanup_dry_run: bool = True

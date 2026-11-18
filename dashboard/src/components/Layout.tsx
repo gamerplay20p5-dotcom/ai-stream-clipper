@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Brain, Clapperboard, ClipboardCheck, Gauge, HardDrive, LogOut, Radio, Send, Server, SlidersHorizontal } from "lucide-react";
+import { Activity, Brain, Clapperboard, ClipboardCheck, Gauge, HardDrive, LogOut, Radio, ScrollText, Send, Server, SlidersHorizontal } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api, type Stats } from "../api";
 
@@ -14,6 +14,7 @@ const nav = [
   { to: "/diagnostico", label: "Diagnóstico", icon: Activity },
   { to: "/armazenamento", label: "Armazenamento", icon: HardDrive },
   { to: "/infra", label: "Infraestrutura", icon: Server },
+  { to: "/patch-notes", label: "Patch notes", icon: ScrollText },
 ];
 
 export default function Layout({ email }: { email: string }) {

@@ -5,6 +5,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type Clip, type Streamer } from "../api";
 import AnalysisPanel, { AnalysisStatus } from "../components/AnalysisPanel";
 import PublishPanel from "../components/PublishPanel";
+import CaptionEditor from "../components/CaptionEditor";
 import { StorageFlags } from "./Storage";
 import { ClipFrame, ClipStatus, Empty, ErrorNote, Meter, PageHeader, ScoreMark } from "../components/ui";
 import { dimensionLabel, platformName, seconds, timecode } from "../lib/format";
@@ -165,7 +166,7 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
       <div className="mt-5 grid gap-5 sm:grid-cols-[minmax(0,240px)_1fr]">
         <div>
           {c.has_video ? (
-            <video key={c.version} className="aspect-short w-full rounded-lg bg-black" controls preload="metadata"
+            <video key={c.version} data-clip-video className="aspect-short w-full rounded-lg bg-black" controls preload="metadata"
               poster={c.has_thumbnail ? `/api/clips/${c.id}/thumbnail?v=${c.version}` : undefined}
               src={`/api/clips/${c.id}/video?v=${c.version}`} />
           ) : (
@@ -228,6 +229,8 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
       </section>
 
       <AnalysisPanel clip={c} busy={action.isPending} onReanalyze={() => action.mutate("reanalyze")} />
+
+      <CaptionEditor clipId={c.id} onSaved={invalidate} />
 
       <ClipEditor clip={c} onSaved={invalidate} />
     </aside>

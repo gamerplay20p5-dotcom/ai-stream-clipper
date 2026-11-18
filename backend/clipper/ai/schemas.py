@@ -106,6 +106,8 @@ class NarrativeResult(BaseModel):
     justification: str = Field("", max_length=600)
     titles: list[str] = Field(default_factory=list, max_length=5)
     hook: str = Field("", max_length=160)
+    description: str = Field("", max_length=400)
+    hashtags: list[str] = Field(default_factory=list, max_length=6)
     latency_s: float = 0.0
     fallback: bool = False
 

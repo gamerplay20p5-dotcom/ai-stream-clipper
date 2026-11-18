@@ -105,3 +105,13 @@ def test_monitor_report_creates_session_and_capture_job(admin, client):
     jobs = admin.get("/api/jobs?type=capture").json()
     assert sum(1 for j in jobs if j["payload"].get("session_id") == r1.json()["session_id"]) == 1
     admin.delete(f"/api/streamers/{sid}", headers=CSRF)
+
+
+def test_patch_notes_list_the_current_version(admin):
+    from clipper import __version__
+
+    r = admin.get("/api/patch-notes")
+    assert r.status_code == 200 and r.json()["current"] == __version__
+    notes = r.json()["notes"]
+    assert notes and all({"version", "date", "title", "items"} <= set(n) for n in notes)
+    assert notes[0]["version"] == __version__  # every release ships its own note

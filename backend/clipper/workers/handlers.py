@@ -84,17 +84,41 @@ async def handle_audio(ctx: JobContext) -> dict:
                                           s.whisper_model_dir, s.concurrency_audio)
     tr = await asyncio.to_thread(transcriber.transcribe, samples, p.get("language") or "auto")
     stt = time.monotonic() - t0
-    await ctx.client.post(f"/internal/sessions/{sid}/analysis", {
+    words = [[w.start, w.end, w.word, w.probability] for w in tr.words]
+    turns, spk_s = await asyncio.to_thread(_speech_turns, samples, words, s)
+    body = {
         "segment_idx": idx,
         "features": feats.as_dict(),
-        "words": [[w.start, w.end, w.word, w.probability] for w in tr.words],
+        "words": words,
         "speech_ratio": tr.speech_ratio,
         "language": tr.language,
         "extra": extra,
-    })
+    }
+    if turns is not None:
+        body["speech_turns"] = turns
+    await ctx.client.post(f"/internal/sessions/{sid}/analysis", body)
     return {"words": len(tr.words), "stt_seconds": round(stt, 2), "realtime_factor":
             round(stt / max(0.1, feats.duration), 3), "model": transcriber.name,
-            "yamnet_seconds": yamnet_s, "acoustic_model": "yamnet" if extra.get("yamnet") else "none"}
+            "yamnet_seconds": yamnet_s, "acoustic_model": "yamnet" if extra.get("yamnet") else "none",
+            "speaker_turns": len(turns or []), "speaker_seconds": spk_s}
+
+
+def _speech_turns(samples, words: list, settings) -> tuple[list | None, float]:
+    """Voice embedding per spoken turn (None = speaker model not installed on this worker)."""
+    from ..ai.speaker import embed_turns, get_embedder
+
+    if not words:
+        return [], 0.0
+    emb = get_embedder(settings.models_dir, threads=2)
+    if emb is None:
+        return None, 0.0
+    t0 = time.monotonic()
+    try:
+        out = embed_turns(samples, words, emb)
+    except Exception as exc:  # pragma: no cover - never lose the transcription for this
+        log.warning("speaker embedding failed", extra={"err": str(exc)[:200]})
+        return None, 0.0
+    return out, round(time.monotonic() - t0, 2)
 
 
 def _acoustic_extra(samples, settings) -> tuple[dict, float]:
@@ -238,11 +262,19 @@ async def handle_vision(ctx: JobContext) -> dict:
     # 4. narrative (the text model consumes facts, never pixels)
     t0 = time.monotonic()
     clip_words = [w[2] for w in spec["words"] if decision.start_abs <= w[0] < decision.end_abs]
+    # the streamer's own speech first: other voices (radio, NPCs) are context, not the subject
+    sp = list(spec.get("word_speakers") or [])
+    sp = sp if len(sp) == len(spec["words"]) else [""] * len(spec["words"])
+    own = [w[2] for w, s in zip(spec["words"], sp) if decision.start_abs <= w[0] < decision.end_abs
+           and not s.startswith("other:")]
+    others = [w[2] for w, s in zip(spec["words"], sp) if decision.start_abs <= w[0] < decision.end_abs
+              and s.startswith("other:")]
     narr = await asyncio.to_thread(
         narrative.write, manager, ctx.payload.get("narrative_model") or settings.narrative_model,
-        vision_model=model if not visual.fallback else None, transcript=" ".join(clip_words), visual=visual,
+        vision_model=model if not visual.fallback else None, transcript=" ".join(own), visual=visual,
         decision=decision, game=(spec.get("streamer") or {}).get("game", ""),
-        fallback_titles=list(spec.get("title_suggestions") or []))
+        fallback_titles=list(spec.get("title_suggestions") or []), others=" ".join(others),
+        story=_story_text(spec.get("story") or {}, w0))
     timings["narrative_s"] = round(time.monotonic() - t0, 2)
 
     # 5. edit plan
@@ -337,12 +369,13 @@ async def handle_render(ctx: JobContext) -> dict:
     s = ctx.settings
     rs = RenderSpec(
         source=src, source_start=src_start, start=float(spec["start"]), end=float(spec["end"]),
-        peak=float(spec["peak"]), words=[SubWord(float(w[0]), float(w[1]), str(w[2])) for w in spec["words"]],
+        peak=float(spec["peak"]), words=[SubWord(float(w[0]), float(w[1]), str(w[2]), str(w[3]) if len(w) > 3 else "")
+                                         for w in spec["words"]],
         title=spec.get("title", ""), caption_style=spec.get("caption_style", "bold"),
         layout=spec.get("layout", "auto"), webcam_region=spec.get("webcam_region"),
         show_title=bool(spec.get("show_title", True)), preset=spec.get("preset", "veryfast"),
         crf=int(spec.get("crf", 21)), fps=int(spec.get("fps", 30)), threads=s.ffmpeg_threads,
-        plan=spec.get("edit_plan"),
+        plan=spec.get("edit_plan"), captions=spec.get("captions"),
     )
     try:
         res = await render(rs, ctx.workdir / "render")

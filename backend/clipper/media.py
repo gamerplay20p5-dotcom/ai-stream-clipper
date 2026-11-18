@@ -60,6 +60,14 @@ def run_sync(args: list[str], *, cwd: Path | None = None, timeout: float = 1800)
     return p.stdout.decode(errors="replace")
 
 
+def run_bytes(args: list[str], *, timeout: float = 60) -> bytes:
+    """Run a tool and return its raw stdout (e.g. ffmpeg writing to pipe:1)."""
+    p = subprocess.run(args, capture_output=True, timeout=timeout)
+    if p.returncode != 0:
+        raise MediaError(f"{Path(args[0]).name} exited {p.returncode}: {p.stderr.decode(errors='replace')[-800:]}")
+    return p.stdout
+
+
 async def probe(path: Path) -> dict:
     out = await run([FFPROBE, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
                     timeout=60)

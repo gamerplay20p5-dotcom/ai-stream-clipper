@@ -48,6 +48,9 @@ MODELS: dict[str, ModelSpec] = {
         max_new_tokens=256),
     # --- audio ---------------------------------------------------------------------------------
     "yamnet": ModelSpec("yamnet", "audio", "yamnet", "zeropointnine/yamnet-onnx", "yamnet", 0.02, 0.0),
+    # speaker embeddings (who is talking): WeSpeaker ResNet34 trained on VoxCeleb, Apache-2.0, CPU
+    "wespeaker-resnet34": ModelSpec("wespeaker-resnet34", "speaker", "wespeaker-resnet34",
+                                    "Wespeaker/wespeaker-voxceleb-resnet34", "wespeaker", 0.03, 0.0),
 }
 
 
@@ -67,6 +70,8 @@ def is_installed(key: str) -> bool:
     p = model_path(key)
     if spec.kind == "audio":
         return (p / "yamnet.onnx").exists()
+    if spec.kind == "speaker":
+        return (p / "voxceleb_resnet34.onnx").exists()
     return (p / "openvino_tokenizer.xml").exists() and (p / "openvino_detokenizer.xml").exists() and any(
         p.glob("openvino_*model.xml"))
 

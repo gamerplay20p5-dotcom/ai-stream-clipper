@@ -68,6 +68,14 @@ def stats(db: Session = Depends(get_db), _: CurrentUser = Depends(current_user))
     }
 
 
+@router.get("/patch-notes")
+def patch_notes(_: CurrentUser = Depends(current_user)):
+    from .. import __version__
+    from ..patch_notes import NOTES
+
+    return {"current": __version__, "notes": NOTES}
+
+
 @router.get("/settings")
 def get_ai_settings(db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
     return load_ai_settings(db).model_dump()

@@ -124,6 +124,7 @@ class TranscriptWord(Base):
     end: Mapped[float] = mapped_column(Float)
     word: Mapped[str] = mapped_column(String(128))
     probability: Mapped[float] = mapped_column(Float, default=1.0)
+    speaker: Mapped[str] = mapped_column(String(16), default="")  # streamer | other:N | unknown | overlap | ""
 
 
 class Event(Base):
@@ -520,3 +521,38 @@ class LearningRun(Base):
     profile: Mapped[dict] = mapped_column(JSON, default=dict)
     detail: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 stage E - who is talking
+# ---------------------------------------------------------------------------
+
+
+class SpeechTurn(Base):
+    """One spoken sentence with its voice embedding and the assigned speaker label."""
+
+    __tablename__ = "speech_turns"
+    __table_args__ = (Index("ix_speech_turns_session_start", "session_id", "start"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("stream_sessions.id", ondelete="CASCADE"))
+    segment_idx: Mapped[int] = mapped_column(Integer)
+    start: Mapped[float] = mapped_column(Float)
+    end: Mapped[float] = mapped_column(Float)
+    emb: Mapped[list] = mapped_column(JSON, default=list)
+    label: Mapped[str] = mapped_column(String(16), default="unknown")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    text: Mapped[str] = mapped_column(Text, default="")
+
+
+class SpeakerProfile(Base):
+    """The streamer's voice: a hypothesis (most speech time) until the owner confirms it."""
+
+    __tablename__ = "speaker_profiles"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    streamer_id: Mapped[int] = mapped_column(ForeignKey("streamers.id", ondelete="CASCADE"), unique=True)
+    centroid: Mapped[list] = mapped_column(JSON, default=list)
+    n: Mapped[int] = mapped_column(Integer, default=0)
+    confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    source: Mapped[str] = mapped_column(String(32), default="auto")  # auto | confirmed_cluster | reference
+    sample: Mapped[dict] = mapped_column(JSON, default=dict)  # {session_id, start, end, text}
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

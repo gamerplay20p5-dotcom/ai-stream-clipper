@@ -192,3 +192,67 @@ def download(cid: int, request: Request, db: Session = Depends(get_db), user: Cu
     audit(db, request, user, "clip.download", f"clip:{cid}")
     db.commit()
     return FileResponse(_file(c.video_path), media_type="video/mp4", filename=f"{slug}-{cid}.mp4")
+
+
+# --- Phase 5 stage E: caption preview and manual correction ---------------------------------
+class CapWord(BaseModel):
+    start: float
+    end: float
+    text: str = Field(min_length=1, max_length=120)
+    speaker: str = Field("", pattern=r"^(|streamer|unknown|other:\d{1,3})$")
+
+
+class CaptionsIn(BaseModel):
+    words: list[CapWord] = Field(max_length=3000)
+    rerender: bool = True
+
+
+@router.get("/{cid}/captions")
+def get_captions(cid: int, db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+    from ..pipeline import caption_options, caption_words
+
+    c = _get(db, cid)
+    words = caption_words(db, c, c.start - 0.5, c.end)
+    cap = (c.provenance or {}).get("captions") or {}
+    return {"clip_id": c.id, "start": c.start, "end": c.end, "override": bool(cap.get("words")),
+            "edited_by": cap.get("by"), "edited_at": cap.get("at"),
+            "options": caption_options(db, c, load_ai_settings(db)), "caption_style": c.caption_style,
+            "words": [{"start": round(w[0], 3), "end": round(w[1], 3), "text": w[2], "speaker": w[3]} for w in words]}
+
+
+@router.put("/{cid}/captions")
+def put_captions(cid: int, body: CaptionsIn, request: Request, db: Session = Depends(get_db),
+                 user: CurrentUser = Depends(require_admin)):
+    from ..db import utcnow
+
+    c = _get(db, cid)
+    words = sorted(body.words, key=lambda w: w.start)
+    for w in words:
+        if not (c.start - 1.0 <= w.start <= c.end + 1.0) or w.end < w.start or w.end - w.start > 10:
+            raise HTTPException(422, "word times must be inside the clip")
+    prov = dict(c.provenance or {})
+    prov["captions"] = {"words": [[round(w.start, 3), round(w.end, 3), w.text.strip(), w.speaker] for w in words],
+                        "by": user.email, "at": utcnow().isoformat()}
+    c.provenance = prov
+    audit(db, request, user, "clip.captions", f"clip:{cid}", {"words": len(words)})
+    if body.rerender and c.status not in ("rendering", "analyzing", "candidate", "waiting"):
+        c.version += 1
+        enqueue_render(db, c)
+    db.commit()
+    return ser.clip(c)
+
+
+@router.delete("/{cid}/captions")
+def reset_captions(cid: int, request: Request, db: Session = Depends(get_db),
+                   user: CurrentUser = Depends(require_admin)):
+    """Back to the automatic transcript (the correction is kept in the audit log details count only)."""
+    c = _get(db, cid)
+    prov = dict(c.provenance or {})
+    if prov.pop("captions", None) is not None:
+        c.provenance = prov
+        audit(db, request, user, "clip.captions_reset", f"clip:{cid}")
+        if c.status not in ("rendering", "analyzing", "candidate", "waiting"):
+            c.version += 1
+            enqueue_render(db, c)
+    db.commit()
+    return ser.clip(c)

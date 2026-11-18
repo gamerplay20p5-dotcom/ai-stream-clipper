@@ -156,6 +156,73 @@ export default function Settings() {
           <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.show_title_overlay} onChange={bool("show_title_overlay")} />
         </Row>
       </Section>
+      <Section title="Legendas inteligentes">
+        <Row label="Reconhecer quem está falando" hint="Separa a voz do streamer das outras (rádio, personagens). Confirme a voz na página Streamers.">
+          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.speakers_enabled} onChange={bool("speakers_enabled")} />
+        </Row>
+        <Row label="O que legendar" hint="“Só o streamer” vale apenas depois que você confirmar a voz; antes disso as outras vozes aparecem menores.">
+          <select className="field" value={s.caption_mode} onChange={sel("caption_mode")}>
+            <option value="streamer_highlight">Streamer em destaque, outras vozes menores</option>
+            <option value="streamer_only">Só a fala do streamer</option>
+            <option value="all">Todas as falas no mesmo estilo</option>
+          </select>
+        </Row>
+        <Row label="Fonte">
+          <select className="field" value={s.caption_font} onChange={sel("caption_font")}>
+            <option value="">Padrão (Noto Sans)</option><option>Noto Sans</option><option>DejaVu Sans</option><option>Noto Serif</option>
+          </select>
+        </Row>
+        <Row label="Tamanho" hint="100% é o tamanho atual.">
+          <div className="flex items-center gap-3">
+            <input type="range" min={60} max={160} step={5} value={s.caption_size_pct} onChange={num("caption_size_pct")} className="w-full accent-[#F2B33D]" />
+            <span className="w-12 text-right text-sm">{s.caption_size_pct}%</span>
+          </div>
+        </Row>
+        <Row label="Posição" hint="Sempre dentro da área segura dos botões do Shorts, Reels e TikTok.">
+          <select className="field" value={s.caption_position} onChange={sel("caption_position")}>
+            <option value="low">Embaixo</option><option value="middle">Meio</option><option value="high">Alto</option>
+          </select>
+        </Row>
+        <Row label="Animação">
+          <select className="field" value={s.caption_animation} onChange={sel("caption_animation")}>
+            <option value="highlight">Palavra falada em destaque</option><option value="pop">Destaque com pulo</option><option value="none">Sem animação</option>
+          </select>
+        </Row>
+        <Row label="Cores" hint="Palavra falada · palavra de ênfase · outras vozes. Vazio usa a cor do estilo.">
+          <div className="flex items-center gap-3">
+            <input type="color" aria-label="Cor da palavra falada" value={s.caption_active_color || "#FFE500"} onChange={(e) => setS({ ...s, caption_active_color: e.target.value.toUpperCase() })} />
+            <input type="color" aria-label="Cor de ênfase" value={s.caption_emphasis_color || "#7AFF66"} onChange={(e) => setS({ ...s, caption_emphasis_color: e.target.value.toUpperCase() })} />
+            <input type="color" aria-label="Cor das outras vozes" value={s.caption_other_color} onChange={(e) => setS({ ...s, caption_other_color: e.target.value.toUpperCase() })} />
+            <button type="button" className="btn-quiet px-2 py-1 text-xs" onClick={() => setS({ ...s, caption_active_color: "", caption_emphasis_color: "", caption_other_color: "#9AD7FF" })}>Restaurar</button>
+          </div>
+        </Row>
+      </Section>
+      <Section title="Identidade do canal">
+        <Row label="Nome do canal" hint="Usado na marca d'água.">
+          <input className="field" maxLength={40} value={s.brand_name} onChange={(e) => setS({ ...s, brand_name: e.target.value })} />
+        </Row>
+        <Row label="Marca d'água discreta" hint="Texto pequeno e semitransparente, longe das legendas.">
+          <div className="flex flex-wrap items-center gap-3">
+            <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.brand_watermark} onChange={bool("brand_watermark")} />
+            <select className="field max-w-[180px]" value={s.brand_watermark_position} onChange={sel("brand_watermark_position")}>
+              <option value="top_right">Canto superior direito</option><option value="top_left">Canto superior esquerdo</option><option value="bottom_left">Canto inferior esquerdo</option>
+            </select>
+            <input type="range" min={0.1} max={1} step={0.05} value={s.brand_watermark_opacity} onChange={num("brand_watermark_opacity")} className="w-28 accent-[#F2B33D]" aria-label="Opacidade" />
+          </div>
+        </Row>
+        <Row label="Chamada no final do vídeo" hint="Ex.: “Siga para mais cortes”. Vazio não adiciona nada.">
+          <div className="flex items-center gap-3">
+            <input className="field" maxLength={80} value={s.brand_cta} onChange={(e) => setS({ ...s, brand_cta: e.target.value })} />
+            <input type="number" className="field w-20" min={1.5} max={6} step={0.5} value={s.brand_cta_seconds} onChange={num("brand_cta_seconds")} aria-label="Segundos" />
+          </div>
+        </Row>
+        <Row label="Hashtags do canal" hint="Separadas por espaço; entram depois das hashtags do corte.">
+          <input className="field" key={s.brand_hashtags.join(" ")} defaultValue={s.brand_hashtags.join(" ")} onBlur={(e) => setS({ ...s, brand_hashtags: e.target.value.split(/[\s,]+/).map((t) => t.replace(/^#/, "")).filter(Boolean).slice(0, 8) })} />
+        </Row>
+        <Row label="Rodapé da descrição" hint="Divulgação cruzada: outras redes, agenda das lives…">
+          <textarea className="field min-h-[70px]" maxLength={500} value={s.brand_description_footer} onChange={(e) => setS({ ...s, brand_description_footer: e.target.value })} />
+        </Row>
+      </Section>
       <Section title="Limites de processamento">
         <Row label="Renderizações em paralelo (todos os servidores)"><input type="number" className="field" min={1} max={16} value={s.max_parallel_renders} onChange={num("max_parallel_renders")} /></Row>
         <Row label="Análises de áudio em paralelo"><input type="number" className="field" min={1} max={32} value={s.max_parallel_audio} onChange={num("max_parallel_audio")} /></Row>

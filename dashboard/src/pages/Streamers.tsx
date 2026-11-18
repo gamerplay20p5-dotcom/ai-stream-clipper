@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, FlaskConical, RefreshCw, Square, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import VoicePanel from "../components/VoicePanel";
 import { Link } from "react-router-dom";
 import { api, type Streamer } from "../api";
 import TestClipPanel from "../components/TestClipPanel";
@@ -162,6 +163,7 @@ function StreamerRow({ s }: { s: Streamer }) {
               </ul>
             ) : <p className="text-sm text-ink-muted">Nenhuma transmissão capturada ainda.</p>}
           </div>
+          <VoicePanel streamerId={s.id} />
         </div>
       )}
     </li>

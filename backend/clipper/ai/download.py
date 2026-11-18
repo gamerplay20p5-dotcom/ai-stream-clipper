@@ -26,7 +26,10 @@ def download(key: str) -> None:
         return
     dst.mkdir(parents=True, exist_ok=True)
     print(f"{key}: downloading {spec.hf_repo} (~{spec.approx_size_gb} GB) -> {dst}")
-    snapshot_download(spec.hf_repo, local_dir=str(dst))
+    if spec.kind == "speaker":  # only the ONNX export (the repo also has a PyTorch checkpoint)
+        snapshot_download(spec.hf_repo, local_dir=str(dst), allow_patterns=["*.onnx", "config.yaml", "README.md"])
+    else:
+        snapshot_download(spec.hf_repo, local_dir=str(dst))
     if spec.kind in ("vlm", "llm") and not (dst / "openvino_tokenizer.xml").exists():
         print(f"{key}: converting tokenizer to OpenVINO format")
         # same as the `convert_tokenizer` console script, run with this interpreter

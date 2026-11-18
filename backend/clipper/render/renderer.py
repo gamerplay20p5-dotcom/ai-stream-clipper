@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import media
-from .subtitles import SubWord, build_ass
+from .subtitles import CaptionOptions, SubWord, build_ass
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ class RenderSpec:
     fps: int = 30
     threads: int = 4
     plan: dict | None = None  # EditPlan (clip-relative times)
+    captions: dict | None = None  # CaptionOptions fields (Phase 5 E)
 
 
 @dataclass
@@ -162,6 +163,12 @@ def build_filter(layout: str, src_w: int, src_h: int, webcam: dict | None, fps: 
     )
 
 
+def caption_options(raw: dict | None) -> CaptionOptions:
+    """Unknown keys are ignored (an older API or a newer worker never breaks the render)."""
+    known = set(CaptionOptions.__dataclass_fields__) - {"extra"}
+    return CaptionOptions(**{k: v for k, v in (raw or {}).items() if k in known})
+
+
 def caption_margin(layout: str) -> int:
     # distance from the bottom edge to the caption baseline
     if layout == "split":
@@ -217,14 +224,15 @@ async def render(spec: RenderSpec, workdir: Path) -> RenderResult:
     if src_dur and offset + duration > src_dur + 0.5:
         duration = max(1.0, src_dur - offset)
 
-    words = [SubWord(w.start - spec.start, w.end - spec.start, w.text) for w in spec.words
+    words = [SubWord(w.start - spec.start, w.end - spec.start, w.text, w.speaker) for w in spec.words
              if spec.start <= w.start < spec.start + duration]
     title = plan.get("title", spec.title) if plan else spec.title
     title = title if (spec.show_title and layout != "split") else ""
     want_subs = caption_style != "none" or bool(title)
     if want_subs:
         ass = build_ass(words, style=caption_style, margin_v=caption_margin(layout), title=title,
-                        duration=duration, emphasis=set(plan.get("emphasis_words") or []))
+                        duration=duration, emphasis=set(plan.get("emphasis_words") or []),
+                        opts=caption_options(spec.captions))
         (workdir / "subs.ass").write_text(ass, encoding="utf-8")
         applied.append(f"captions:{caption_style}")
     if plan.get("zooms"):

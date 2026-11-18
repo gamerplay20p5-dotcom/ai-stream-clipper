@@ -96,6 +96,13 @@ def _words(db: Session, session_id: int, a: float, b: float) -> list[list]:
     return [[r[0], r[1], r[2]] for r in rows]
 
 
+def _word_speakers(db: Session, session_id: int, a: float, b: float) -> list[str]:
+    """Speaker label per word, aligned with :func:`_words` (kept apart: the director reads 3-tuples)."""
+    return [r[0] or "" for r in db.execute(
+        select(TranscriptWord.speaker).where(TranscriptWord.session_id == session_id, TranscriptWord.start >= a,
+                                             TranscriptWord.start < b).order_by(TranscriptWord.start)).all()]
+
+
 def _limits(db: Session, clip: Clip, settings: AISettings) -> dict:
     lo, hi = media_bounds(db, clip)
     streamer = db.get(Streamer, clip.streamer_id)
@@ -133,6 +140,7 @@ def ai_spec(db: Session, clip: Clip, source_location: dict) -> dict:
         "window": [w0, w1],
         "transcript": clip.transcript,
         "words": _words(db, clip.session_id, w0, w1),
+        "word_speakers": _word_speakers(db, clip.session_id, w0, w1),
         "acoustic": _acoustic(db, clip.session_id, w0, w1),
         "candidate": {"score": clip.score, "breakdown": clip.score_breakdown or {}, "reasons": clip.reasons or [],
                       "kinds": clip.kinds or []},
@@ -220,8 +228,10 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
         clip.title_suggestions = list(dict.fromkeys(narrative.titles + list(clip.title_suggestions or [])))[:6]
         if first:
             clip.title = narrative.titles[0][:255]
-        if narrative.justification and first:
-            clip.description = narrative.justification + "\n\n" + (clip.description or "")
+        if first and (narrative.description or narrative.justification):
+            clip.description = (narrative.description or narrative.justification) + "\n\n" + (clip.description or "")
+        if narrative.hashtags:
+            clip.hashtags = list(dict.fromkeys(list(narrative.hashtags) + list(clip.hashtags or [])))[:10]
     clip.analysis_runs += 1
     # done = some visual analysis ran (multimodal or heuristic); multimodal vs fallback lives in analysis_meta
     clip.vision_state = "done" if (visual is not None or heuristic) else "skipped"

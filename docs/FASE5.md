@@ -32,11 +32,70 @@ Cada etapa é implantada sozinha, com backup do banco antes de migrações e tag
 | v0.5.x | Etapa A ligada ao pipeline (situações e julgamento editorial); Etapa C (ciclo de armazenamento em simulação) |
 | seguintes | Etapa B (reassistir e pós-live); Etapa E (legendas do streamer, títulos, marca); Etapa F (semiautomático, relatórios) |
 
+## Etapa E (v0.5.5): quem está falando, legendas, metadados e marca
+
+**Diarização.** O worker de áudio agrupa as palavras do Whisper em falas, com corte em pausas de mais de 0,7 s ou a cada 8 s. Para cada fala, calcula a impressão de voz com o WeSpeaker ResNet34 (ONNX, CPU, licença Apache-2.0); falas de 3 s ou mais também são medidas por metade. A API então rotula cada fala:
+- `streamer`;
+- `other:N`, um grupo estável de outra voz: amigos no rádio ou personagens do jogo;
+- `unknown`, quando há dúvida (nunca forçado);
+- `overlap`, quando uma metade da fala é claramente do streamer e a outra claramente de outra pessoa.
+
+O volume da voz nunca é usado. O perfil do streamer começa como **hipótese**: é a voz com mais tempo de fala, depois de 5 minutos, e só se tiver 40% ou mais da fala agrupada. O perfil vira certeza apenas quando você confirma em **Streamers → Voz do streamer**, ouvindo trechos. "Não é o streamer" descarta a voz e a lembra.
+
+**Legendas.** Cada grupo de palavras pertence a um só locutor. As cores e o tamanho dependem de quem fala e do modo escolhido:
+
+| Locutor | Modo "destaque" (padrão) | Modo "só o streamer" | Modo "todas" |
+|---|---|---|---|
+| Streamer | estilo principal, palavra falada em amarelo | estilo principal | mesmo estilo para todos |
+| Outras vozes | 22% menores, cor própria | ocultas, se a voz estiver confirmada | mesmo estilo para todos |
+
+Sem voz confirmada, o modo "só o streamer" não oculta nada, porque uma hipótese errada apagaria falas.
+
+Outros ajustes:
+- fonte (só as instaladas), tamanho, posição dentro da área segura, animação e cores;
+- pontuação no estilo de vídeo curto: mantém ? ! e ..., e remove vírgulas e pontos finais;
+- correção manual no corte, com prévia sobre o vídeo, nova renderização e opção de voltar à transcrição automática.
+
+**Metadados.** O modelo de texto recebe separadamente:
+- a fala do streamer;
+- as outras vozes;
+- a memória da história.
+
+Ele devolve descrição e hashtags. O texto muda por plataforma:
+
+| Plataforma | Texto |
+|---|---|
+| YouTube | descrição, créditos, rodapé, hashtags e #Shorts |
+| Instagram | título na primeira linha, depois descrição e hashtags |
+| TikTok | legenda curta |
+
+A situação da história vira hashtag (#perseguicao, #tiroteio…).
+
+**Marca.** Nome do canal, marca d'água em texto discreta (semitransparente, longe das legendas), chamada no fim do vídeo, hashtags e rodapé da descrição. Nada é adicionado enquanto não for preenchido.
+
+**Validação reproduzível.**
+- *Amostra:* 12 cortes reais já renderizados, de 2 streamers e 3 lives, com 387 s de áudio, processados pelo mesmo caminho do worker. O roteiro está em `docs/benchmarks/etapa_e.md`.
+
+| Medida | Resultado |
+|---|---|
+| Separação entre streamers: falas de um rotuladas como o outro | 0 de 27 e 0 de 39 |
+| Semelhança (cosseno) entre os dois perfis | 0,29, bem abaixo do limite de 0,55 |
+| Fala atribuída à voz dominante | 74% e 68% |
+| Fala que ficou como "não identificado" | 10% e 13% |
+| Custo da impressão de voz | cerca de 0,4 s por segmento de 10 s, com 2 threads (Whisper small: cerca de 5,5 s no mesmo notebook) |
+| Legendas | 12 de 12 arquivos ASS renderizados pelo libass sem erro |
+
+- *Exemplo visto:* a fala de um personagem do jogo, que também aparecia na legenda do próprio jogo, saiu como "outra voz".
+- *Limitação:* ainda não há rótulos humanos de locutor. A taxa de acerto por fala **não está medida**: a confirmação no painel existe para isso.
+- *Limitação:* amigos no rádio e vozes do jogo ficam no mesmo tipo `other:N`.
+
+**Espaço.** Cada fala guarda a impressão de voz (cerca de 2 a 5 kB em JSON), o que dá uns 2 a 5 MB por hora de live no Postgres.
+
 ## Riscos
 
 - **Poucos rótulos:** com 31 decisões humanas no início, qualquer conclusão é um indício. O painel mostra o tamanho de cada amostra e os intervalos de confiança.
 - **Mídia já perdida:** o buffer de captura dura 30 minutos, então a revisão pós-live só alcança o que ainda existe: mídia dos cortes, mídia do dataset e os 30 minutos finais.
-- **Separar a voz do streamer da fala do jogo:** sem identificação de locutor, essa separação é aproximada.
+- **Separar a voz do streamer da fala do jogo:** desde a v0.5.5 há identificação de locutor; a precisão por fala ainda depende da sua confirmação da voz.
 
 ---
 
@@ -44,3 +103,4 @@ Cada etapa é implantada sozinha, com backup do banco antes de migrações e tag
 - **New:** a bounded temporal story memory (`ai/story.py`), editorial criteria with preliminary/final scores and confidence, a re-watch job, and a media lifecycle (quarantine → purge) that keeps rows and labels.
 - **v0.5.0:** clip approvals and rejections become human labels, and a low-priority learning job keeps the preference profile and the shadow ranker up to date.
 - **Defaults:** destructive features start disabled or in dry-run.
+- **v0.5.5 (stage E):** speaker diarization (WeSpeaker ONNX on CPU; streamer voice is a hypothesis until the owner confirms it; uncertain speech stays `unknown`), speaker-aware captions with manual correction, per-platform metadata from the streamer's own speech and the story memory, and optional branding (watermark, end card, hashtags, footer).

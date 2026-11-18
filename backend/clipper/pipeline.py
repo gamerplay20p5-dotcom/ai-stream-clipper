@@ -272,8 +272,22 @@ def post_analysis(db: Session, session_id: int, idx: int, data: dict) -> None:
                                   probability=float(w[3]) if len(w) > 3 else 1.0))
         seg.analysis_state = "done"
     db.flush()
+    if not data.get("skipped") and data.get("speech_turns") is not None and load_ai_settings(db).speakers_enabled:
+        _speakers_safely(db, sess, idx, seg.start, data.get("speech_turns") or [])
     _advance_analyzed(db, sess)
     _maybe_enqueue_score(db, sess)
+
+
+def _speakers_safely(db: Session, sess: StreamSession, idx: int, seg_start: float, turns: list) -> None:
+    """Speaker labels are an enrichment: a failure there must never lose the segment's analysis."""
+    from .pipeline_speakers import store_turns
+
+    try:
+        with db.begin_nested():
+            store_turns(db, sess, idx, seg_start, turns)
+    except Exception as exc:  # pragma: no cover - defensive
+        log.warning("speaker labelling failed", extra={"session_id": sess.id, "segment_idx": idx,
+                                                       "err": str(exc)[:200]})
 
 
 def _advance_analyzed(db: Session, sess: StreamSession) -> None:
@@ -683,12 +697,7 @@ def render_spec(db: Session, clip_id: int) -> dict:
     if loc.get("clamped"):
         start = max(start, clip.source_start)
         end = min(end, clip.source_start + clip.source_duration)
-    words = db.execute(
-        select(TranscriptWord.start, TranscriptWord.end, TranscriptWord.word)
-        .where(TranscriptWord.session_id == clip.session_id, TranscriptWord.start >= start - 0.5,
-               TranscriptWord.start < end)
-        .order_by(TranscriptWord.start)
-    ).all()
+    words = [[w[0], w[1], w[2], w[3]] for w in caption_words(db, clip, start - 0.5, end)]
     return {
         **loc,
         "clip_id": clip.id,
@@ -700,12 +709,44 @@ def render_spec(db: Session, clip_id: int) -> dict:
         "caption_style": clip.caption_style,
         "layout": clip.layout,
         "webcam_region": clip.webcam_region,
-        "words": [[w[0], w[1], w[2]] for w in words],
+        "words": words,
+        "captions": caption_options(db, clip, settings),
         "show_title": settings.show_title_overlay,
         "edit_plan": effective_plan(clip, settings),
         "preset": settings.export_preset,
         "crf": settings.export_crf,
         "fps": settings.export_fps,
+    }
+
+
+def caption_words(db: Session, clip: Clip, a: float, b: float) -> list[tuple[float, float, str, str]]:
+    """Words for the clip's captions: the owner's corrected captions when present, else the transcript."""
+    override = ((clip.provenance or {}).get("captions") or {}).get("words")
+    if override:
+        return [(float(w[0]), float(w[1]), str(w[2]), str(w[3]) if len(w) > 3 else "") for w in override
+                if a <= float(w[0]) < b]
+    rows = db.execute(
+        select(TranscriptWord.start, TranscriptWord.end, TranscriptWord.word, TranscriptWord.speaker)
+        .where(TranscriptWord.session_id == clip.session_id, TranscriptWord.start >= a, TranscriptWord.start < b)
+        .order_by(TranscriptWord.start)
+    ).all()
+    return [(r[0], r[1], r[2], r[3] or "") for r in rows]
+
+
+def caption_options(db: Session, clip: Clip, settings) -> dict:
+    from .pipeline_speakers import profile_for
+
+    prof = profile_for(db, clip.streamer_id)
+    return {
+        "mode": settings.caption_mode, "font": settings.caption_font, "size_pct": settings.caption_size_pct,
+        "position": settings.caption_position, "animation": settings.caption_animation,
+        "active_color": settings.caption_active_color, "emphasis_color": settings.caption_emphasis_color,
+        "other_color": settings.caption_other_color,
+        "streamer_confirmed": bool(prof is not None and prof.confirmed),
+        "watermark": settings.brand_name if settings.brand_watermark else "",
+        "watermark_position": settings.brand_watermark_position,
+        "watermark_opacity": settings.brand_watermark_opacity,
+        "cta": settings.brand_cta, "cta_seconds": settings.brand_cta_seconds,
     }
 
 

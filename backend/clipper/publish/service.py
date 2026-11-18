@@ -263,23 +263,53 @@ def credit_line(streamer: Streamer | None) -> str:
     return f"🎥 Créditos: {streamer.display_name or streamer.channel} ({where}) — {streamer.url}"
 
 
+SITUATION_TAGS = {"police_chase": "perseguicao", "shootout": "tiroteio", "conflict": "treta",
+                  "funny_conversation": "resenha", "scare": "susto"}
+# per platform: how many hashtags read well, caption limit
+PLATFORM_RULES = {"youtube": {"tags": 8, "limit": 4900}, "instagram": {"tags": 6, "limit": 2150},
+                  "tiktok": {"tags": 5, "limit": 2150}}
+
+
+def _story_tag(db: Session, clip: Clip) -> str:
+    if not clip.situation_id:
+        return ""
+    from ..models import SituationRow
+
+    row = db.get(SituationRow, clip.situation_id)
+    return SITUATION_TAGS.get(row.kind, "") if row is not None and row.status != "discarded" else ""
+
+
 def suggest_metadata(db: Session, clip: Clip, platform: str, rule: PublishRule | None = None) -> dict:
+    """Title, caption and tags for one platform: the clip's own text (written from the streamer's
+    speech and the story memory), the publishing rule's templates and the channel branding."""
+    from ..settings_store import load_ai_settings
+
+    settings = load_ai_settings(db)
+    pr = PLATFORM_RULES.get(platform, PLATFORM_RULES["youtube"])
     streamer = db.get(Streamer, clip.streamer_id)
     tpl = ((rule.templates or {}).get(platform) if rule else None) or {}
     name = (streamer.display_name if streamer else "") or ""
     title = (tpl.get("title") or "{title}").replace("{title}", clip.title or "Corte").replace("{streamer}", name)
     tags = [t.lstrip("#") for t in (clip.hashtags or [])][:12]
+    story = _story_tag(db, clip)
     extra = [t.lstrip("#") for t in re.split(r"[\s,]+", tpl.get("hashtags", "")) if t.strip()]
-    tags = list(dict.fromkeys(tags + extra))[:15]
+    brand = [t.lstrip("#") for t in settings.brand_hashtags if t.strip()]
+    tags = list(dict.fromkeys(([story] if story else []) + tags + extra + brand))[:15]
     body = (tpl.get("description") or "{description}").replace("{description}", clip.description or "").replace(
         "{streamer}", name)
-    hashtag_line = " ".join(f"#{t}" for t in tags[:8])
+    hashtag_line = " ".join(f"#{t}" for t in tags[:pr["tags"]])
+    footer = settings.brand_description_footer.strip()
     if platform == "youtube":
         title = title[:95] + (" #Shorts" if "#shorts" not in title.lower() and len(title) <= 92 else "")
         if "#Shorts" not in hashtag_line:
             hashtag_line = (hashtag_line + " #Shorts").strip()
-    desc = "\n\n".join(x for x in (body.strip(), credit_line(streamer), hashtag_line) if x)
-    return {"title": title[:100] if platform == "youtube" else title[:150], "description": desc[:4900],
+        parts = (body.strip(), credit_line(streamer), footer, hashtag_line)
+    elif platform == "tiktok":  # short caption: the hook first, the long description is not read there
+        parts = (title.strip(), credit_line(streamer), hashtag_line)
+    else:  # instagram: first line is what shows under the Reel
+        parts = (title.strip(), body.strip(), credit_line(streamer), footer, hashtag_line)
+    desc = "\n\n".join(x for x in parts if x)
+    return {"title": title[:100] if platform == "youtube" else title[:150], "description": desc[:pr["limit"]],
             "tags": tags, "credit": credit_line(streamer)}
 
 
