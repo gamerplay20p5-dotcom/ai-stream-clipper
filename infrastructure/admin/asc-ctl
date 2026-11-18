@@ -32,7 +32,7 @@ import sys
 import tarfile
 import tempfile
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 CONF_FILE = "/etc/asc/asc-ctl.conf"
 ENV_FILE = "/etc/asc/asc.env"
 LOG_FILE = "/var/log/asc-ctl.log"
@@ -43,7 +43,13 @@ DATA_ROOT = "/opt/asc"
 DATA_DIRS = ("models", "test-media", "bench")
 CONTAINER_UID = 10001
 ALLOWED_PORTS = {"8780", "8781"}
-ALLOWED_BIND_PREFIXES = ("/opt/asc/", "/etc/asc/tls")
+ALLOWED_BIND_PREFIXES = ("/opt/asc/", "/etc/asc/tls", "/etc/asc/tunnel")
+# Cloudflare Tunnel connector (210 only): official image, pinned version (>= 2025.4.0 for --token-file)
+TUNNEL_DIR = "/etc/asc/tunnel"
+TUNNEL_TOKEN = "/etc/asc/tunnel/token"
+TUNNEL_UID = 65532  # "nonroot" user of the cloudflare/cloudflared image
+CLOUDFLARED_IMAGE_RE = re.compile(r"^(docker\.io/)?cloudflare/cloudflared:20[2-9][0-9]\.[0-9]{1,2}\.[0-9]{1,3}$")
+TUNNEL_TOKEN_RE = re.compile(r"^[A-Za-z0-9+/=_-]{60,4096}$")
 IMAGE_RE = re.compile(r"^(ai-stream-clipper(-vision)?:[A-Za-z0-9._-]{1,40}|postgres:16(\.[0-9]+)*(-bookworm)?)$")
 OWN_IMAGE_RE = re.compile(r"^(docker\.io/library/)?ai-stream-clipper(-vision)?:[A-Za-z0-9._-]{1,40}$")
 TAG_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
@@ -56,7 +62,7 @@ ENV_KEYS = {
     "ASC_VISION_PROVIDER", "ASC_AI_MODELS", "ASC_AI_ALLOW_CPU_FALLBACK", "ASC_WHISPER_MODEL", "ASC_WHISPER_CPU_THREADS",
     "ASC_CONCURRENCY_AUDIO", "ASC_CONCURRENCY_RENDER", "ASC_FFMPEG_THREADS", "ASC_MAX_CONCURRENT_CAPTURES",
     "ASC_BUFFER_SECONDS", "ASC_MAX_SESSION_HOURS", "ASC_MAX_CAPTURE_DISK_GB", "ASC_ALLOW_FILE_SOURCES",
-    "ASC_CAPTURE_QUALITY", "ASC_OIDC_ISSUER", "ASC_OIDC_CLIENT_ID",
+    "ASC_CAPTURE_QUALITY", "ASC_OIDC_ISSUER", "ASC_OIDC_CLIENT_ID", "ASC_CLOUDFLARED_TAG",
 }
 SECRET_KEYS = {"ASC_INTERNAL_SECRET", "ASC_JWT_SECRET", "ASC_DB_PASSWORD", "ASC_ADMIN_PASSWORD", "ASC_METRICS_TOKEN"}
 COMPOSE_SUBCOMMANDS = {"config", "up", "down", "stop", "start", "restart", "ps", "logs", "pull", "images"}
@@ -205,7 +211,15 @@ def check_policy(cfg: dict, conf: dict) -> list[str]:
         cname = s.get("container_name")
         if cname is not None and not str(cname).startswith("asc-"):
             v.append(f"{p}: container_name must start with asc-")
-        if not IMAGE_RE.match(str(s.get("image", ""))):
+        image = str(s.get("image", ""))
+        if CLOUDFLARED_IMAGE_RE.match(image):
+            if svc != "tunnel" or s.get("container_name") != "asc-tunnel" or conf["SERVER"] != "210":
+                v.append(f"{p}: cloudflared only as service 'tunnel' (asc-tunnel) on 210")
+            if s.get("ports") or s.get("devices") or s.get("group_add"):
+                v.append(f"{p}: the tunnel connector publishes no ports and gets no devices")
+            if not s.get("read_only") or "ALL" not in [str(c) for c in _as_list(s.get("cap_drop"))]:
+                v.append(f"{p}: tunnel must be read_only with cap_drop ALL")
+        elif not IMAGE_RE.match(image):
             v.append(f"{p}: image {s.get('image')!r} not allowed")
         for d in _as_list(s.get("devices")):
             src = d.get("source") if isinstance(d, dict) else str(d).split(":")[0]
@@ -238,6 +252,8 @@ def check_policy(cfg: dict, conf: dict) -> list[str]:
                     v.append(f"{p}: bind mount {src} outside /opt/asc or /etc/asc/tls")
                 if src.startswith("/etc/asc/tls") and not vol.get("read_only"):
                     v.append(f"{p}: {src} must be read-only")
+                if src.startswith(TUNNEL_DIR) and (svc != "tunnel" or not vol.get("read_only")):
+                    v.append(f"{p}: {src} only read-only in the tunnel service")
             elif t == "volume":
                 if vol.get("source") not in top_vols:
                     v.append(f"{p}: volume {vol.get('source')} not declared by the project")
@@ -249,15 +265,17 @@ def check_policy(cfg: dict, conf: dict) -> list[str]:
     return v
 
 
-def compose_cmd(conf: dict, resolved: str | None, profile: bool) -> list[str]:
+def compose_cmd(conf: dict, resolved: str | None, profile) -> list[str]:
+    """``profile``: bool (gpu, legacy callers) or a list of profile names (gpu, tunnel)."""
     base = [DOCKER, "compose", "-p", "asc"]
     if resolved:
         base += ["-f", resolved]
     else:
         base += ["-f", os.path.join(repo(conf), "infrastructure", "compose", f"server-{conf['SERVER']}.yml"),
                  "--env-file", ENV_FILE]
-    if profile:
-        base += ["--profile", "gpu"]
+    profiles = (["gpu"] if profile else []) if isinstance(profile, bool) else list(profile)
+    for name in profiles:
+        base += ["--profile", name]
     return base
 
 
@@ -283,14 +301,18 @@ def cmd_compose(conf: dict, args: list[str]) -> int:
     if not args or args[0] not in COMPOSE_SUBCOMMANDS:
         raise Denied(f"compose subcommand must be one of {sorted(COMPOSE_SUBCOMMANDS)}")
     sub, rest = args[0], args[1:]
-    profile = False
+    profile: list[str] = []
     tail = "200"
     services = []
     i = 0
     while i < len(rest):
         a = rest[i]
         if a == "--gpu":
-            profile = True
+            profile.append("gpu")
+        elif a == "--tunnel":
+            if conf["SERVER"] != "210":
+                raise Denied("the tunnel profile exists only on 210")
+            profile.append("tunnel")
         elif a == "--tail" and i + 1 < len(rest) and rest[i + 1].isdigit():
             tail = rest[i + 1]
             i += 1
@@ -661,12 +683,49 @@ def cmd_status(conf: dict, args: list[str]) -> int:
     return 0
 
 
+def cmd_tunnel_token_install(conf: dict, args: list[str]) -> int:
+    """Read the Cloudflare Tunnel token from STDIN (paste + Ctrl-D, or `< file`); never from argv."""
+    if conf["SERVER"] != "210":
+        raise Denied("tunnel token only on 210")
+    if args:
+        raise Denied("the token is read from stdin, never from arguments (they end up in logs and ps)")
+    if sys.stdin.isatty():
+        import getpass
+
+        token = getpass.getpass("Cole o token do túnel (não aparece na tela) e Enter: ")
+    else:
+        token = sys.stdin.read(8192)
+    token = token.strip()
+    if not TUNNEL_TOKEN_RE.match(token):
+        raise Denied("this does not look like a Cloudflare Tunnel token")
+    os.makedirs(TUNNEL_DIR, mode=0o755, exist_ok=True)
+    os.chmod(TUNNEL_DIR, 0o755)
+    tmp = TUNNEL_TOKEN + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o400)
+    with os.fdopen(fd, "w") as f:
+        f.write(token)
+    os.chown(tmp, TUNNEL_UID, TUNNEL_UID)
+    os.replace(tmp, TUNNEL_TOKEN)
+    import hashlib
+
+    print(f"token instalado em {TUNNEL_TOKEN} (0400, uid {TUNNEL_UID}); sha256 {hashlib.sha256(token.encode()).hexdigest()[:12]}…")
+    return 0
+
+
+def cmd_tunnel_token_remove(conf: dict, args: list[str]) -> int:
+    if os.path.exists(TUNNEL_TOKEN):
+        os.unlink(TUNNEL_TOKEN)
+    print("token removido")
+    return 0
+
+
 COMMANDS = {
     "status": cmd_status, "compose": cmd_compose, "exec": cmd_exec, "build": cmd_build, "images": cmd_images,
     "image-save": cmd_image_save, "image-load": cmd_image_load, "image-rm": cmd_image_rm,
     "env-install": cmd_env_install, "env-show": cmd_env_show, "set-tag": cmd_set_tag, "tls-init": cmd_tls_init,
     "tls-install-ca": cmd_tls_install_ca, "init": cmd_init, "models": cmd_models, "gpu-validate": cmd_gpu_validate,
     "test-media-add": cmd_test_media_add, "backup-db": cmd_backup_db,
+    "tunnel-token-install": cmd_tunnel_token_install, "tunnel-token-remove": cmd_tunnel_token_remove,
 }
 
 

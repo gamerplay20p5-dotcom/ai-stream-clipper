@@ -55,7 +55,7 @@ services:
       options: { max-size: "20m", max-file: "5" }
 
   api:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.2}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.3}
     container_name: asc-api
     <<: *hardening
     command: ["api", "--host", "0.0.0.0", "--port", "8780"]
@@ -88,7 +88,7 @@ services:
         limits: { cpus: "2", memory: 2g }
 
   worker-scoring:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.2}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.3}
     container_name: asc-worker-scoring
     <<: *hardening
     command: ["worker", "--roles", "scoring"]
@@ -111,7 +111,7 @@ services:
   # Phase 4 auto publisher: own service, DB access (tokens never cross the worker API), rendered
   # videos read-only, outbound HTTPS to the official YouTube / TikTok / Instagram APIs.
   worker-publisher:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.2}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.4.3}
     container_name: asc-worker-publisher
     <<: *hardening
     command: ["publisher"]
@@ -127,10 +127,36 @@ services:
       resources:
         limits: { cpus: "1", memory: 1g }
 
+  # Cloudflare Tunnel connector (profile "tunnel": started only with `asc-ctl compose up --tunnel`).
+  # Outbound-only (no published port). The public hostname clipper.friendhost.com.br forwards ONLY
+  # /api/publish/oauth/<platform>/callback to https://api:8780 (ingress rules live in the Cloudflare
+  # dashboard; everything else answers 404). The token is a root-installed file
+  # (`asc-ctl tunnel-token-install`, read from stdin) mounted read-only - never an env var or argument.
+  tunnel:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:${ASC_CLOUDFLARED_TAG:-2025.4.0}
+    container_name: asc-tunnel
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    read_only: true
+    command: ["tunnel", "--no-autoupdate", "run", "--token-file", "/etc/asc/tunnel/token"]
+    volumes:
+      - { type: bind, source: /etc/asc/tunnel/token, target: /etc/asc/tunnel/token, read_only: true }
+      - { type: bind, source: /etc/asc/tls/ca.crt, target: /etc/asc/tls/ca.crt, read_only: true }
+    networks: [asc_net]
+    depends_on: { api: { condition: service_healthy } }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256m }
+
   # GPU vision/AI worker (Intel Arc A750). Only the render node is passed through.
   worker-vision:
     profiles: ["gpu"]
-    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.4.2}
+    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.4.3}
     container_name: asc-worker-vision
     <<: *hardening
     command: ["worker", "--roles", "vision"]

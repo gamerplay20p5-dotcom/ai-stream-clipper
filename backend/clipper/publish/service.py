@@ -96,7 +96,7 @@ def get_app(db: Session, platform: str) -> App:
     return App(platform, row.client_id, crypto.decrypt(row.client_secret_enc), row.redirect_uri, row.config_id or "")
 
 
-def start_oauth(db: Session, platform: str, user: str) -> dict:
+def start_oauth(db: Session, platform: str, user: str, return_to: str = "") -> dict:
     app = get_app(db, platform)
     if platform == "instagram" and not app.config_id:
         # apps created with "API do Instagram (login unificado)" only accept the Facebook Login for
@@ -106,9 +106,21 @@ def start_oauth(db: Session, platform: str, user: str) -> dict:
     db.query(OAuthState).filter(OAuthState.created_at < utcnow() - STATE_TTL).delete()
     state = secrets.token_urlsafe(24)
     verifier, challenge = pkce_pair()
-    db.add(OAuthState(state=state, platform=platform, verifier_enc=crypto.encrypt(verifier), created_by=user))
+    db.add(OAuthState(state=state, platform=platform, created_by=user,
+                      verifier_enc=crypto.encrypt({"v": verifier, "r": return_to[:300]})))
     return {"auth_url": provider(platform).auth_url(app, state, challenge), "state": state,
             "redirect_uri": app.redirect_uri}
+
+
+def _state_data(st: OAuthState) -> dict:
+    data = crypto.decrypt(st.verifier_enc)
+    return data if isinstance(data, dict) else {"v": data, "r": ""}  # states created before v0.4.3
+
+
+def return_to(db: Session, state: str) -> str:
+    """Panel origin (scheme://host:port) that started this authorization, '' if unknown."""
+    st = db.get(OAuthState, state) if state else None
+    return _state_data(st).get("r", "") if st is not None else ""
 
 
 def parse_redirect(text: str) -> tuple[str, str]:
@@ -129,7 +141,7 @@ def finish_oauth(db: Session, platform: str, code: str, state: str, user: str | 
     if st is None or st.platform != platform or st.created_at < utcnow() - STATE_TTL:
         raise PublishRefused(["autorização expirada ou inválida: comece de novo em Conectar conta"])
     user = user or st.created_by
-    verifier = crypto.decrypt(st.verifier_enc)
+    verifier = _state_data(st)["v"]
     db.delete(st)  # one-shot (replay protection)
     app = get_app(db, platform)
     prov = provider(platform)

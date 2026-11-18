@@ -28,7 +28,8 @@ def _iso(dt):
 def _public_base() -> str:
     import os
 
-    return os.environ.get("ASC_PUBLIC_URL", "https://192.168.1.210:8780").rstrip("/")
+    # public hostname served by the Cloudflare Tunnel (only the OAuth callbacks are routed there)
+    return os.environ.get("ASC_PUBLIC_URL", "https://clipper.friendhost.com.br").rstrip("/")
 
 
 def _refused(exc: PublishRefused) -> HTTPException:
@@ -127,7 +128,8 @@ def delete_app(platform: str, request: Request, db: Session = Depends(get_db), u
 @router.post("/oauth/{platform}/start")
 def oauth_start(platform: str, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
     try:
-        out = service.start_oauth(db, platform, user.email)
+        origin = f"{request.url.scheme}://{request.url.netloc}"  # the panel the admin is using
+        out = service.start_oauth(db, platform, user.email, origin)
     except PublishRefused as exc:
         raise _refused(exc) from exc
     audit(db, request, user, "publish.oauth_start", platform)
@@ -164,19 +166,21 @@ def oauth_callback(platform: str, request: Request, db: Session = Depends(get_db
 
     if platform not in PLATFORMS:
         raise HTTPException(404, "unknown platform")
+    back = ""
     try:
         code, state = service.parse_redirect(str(request.url))
+        back = service.return_to(db, state)
         acct = service.finish_oauth(db, platform, code, state, None)
     except PublishRefused as exc:
         db.commit()
-        return RedirectResponse(f"/publicacao?erro={quote('; '.join(exc.problems)[:300])}", status_code=303)
+        return RedirectResponse(f"{back}/publicacao?erro={quote('; '.join(exc.problems)[:300])}", status_code=303)
     from ..models import AuditLog
 
     db.add(AuditLog(user_email=acct.connected_by, action="publish.connect", target=f"account:{acct.id}",
                     details={"platform": platform, "name": acct.name, "via": "callback"},
                     ip=request.client.host if request.client else ""))
     db.commit()
-    return RedirectResponse("/publicacao?conectado=1", status_code=303)
+    return RedirectResponse(f"{back}/publicacao?conectado=1", status_code=303)
 
 
 @router.delete("/accounts/{aid}")

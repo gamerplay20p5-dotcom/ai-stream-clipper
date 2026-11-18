@@ -94,3 +94,47 @@ def test_image_archive_tag_allowlist():
     assert asc_ctl.OWN_IMAGE_RE.match("docker.io/library/ai-stream-clipper-vision:0.2.1")
     for bad in ("postgres:16", "ghcr.io/ptero-eggs/games:valheim", "ai-stream-clipper:x;rm", "caddy:2"):
         assert not asc_ctl.OWN_IMAGE_RE.match(bad)
+
+
+TUNNEL = {
+    "container_name": "asc-tunnel", "image": "cloudflare/cloudflared:2025.4.0", "read_only": True,
+    "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],
+    "command": ["tunnel", "--no-autoupdate", "run", "--token-file", "/etc/asc/tunnel/token"],
+    "volumes": [{"type": "bind", "source": "/etc/asc/tunnel/token", "target": "/etc/asc/tunnel/token", "read_only": True},
+                {"type": "bind", "source": "/etc/asc/tls/ca.crt", "target": "/etc/asc/tls/ca.crt", "read_only": True}],
+    "deploy": {"resources": {"limits": {"cpus": 0.5, "memory": "268435456"}}},
+}
+
+
+def test_tunnel_connector_is_allowed_only_in_its_exact_shape():
+    cfg = copy.deepcopy(GOOD)
+    cfg["services"]["tunnel"] = copy.deepcopy(TUNNEL)
+    assert asc_ctl.check_policy(cfg, CONF) == []
+    bad = {
+        "unpinned image": ("image", "cloudflare/cloudflared:latest"),
+        "other image": ("image", "evil/cloudflared:2025.4.0"),
+        "published port": ("ports", [{"host_ip": "192.168.1.210", "published": "8780", "target": 8780}]),
+        "writable fs": ("read_only", False),
+        "caps kept": ("cap_drop", []),
+        "writable token": ("volumes", [{"type": "bind", "source": "/etc/asc/tunnel/token", "target": "/t",
+                                        "read_only": False}]),
+        "renamed": ("container_name", "asc-other"),
+    }
+    for label, (k, v) in bad.items():
+        c = copy.deepcopy(cfg)
+        c["services"]["tunnel"][k] = v
+        assert asc_ctl.check_policy(c, CONF), f"policy accepted: {label}"
+    # never on 201/206, and the token dir cannot be mounted by other services
+    assert asc_ctl.check_policy(cfg, {**CONF, "SERVER": "206", "LAN_IP": "192.168.1.206"})
+    c = copy.deepcopy(GOOD)
+    c["services"]["api"]["volumes"].append({"type": "bind", "source": "/etc/asc/tunnel", "target": "/x", "read_only": True})
+    assert asc_ctl.check_policy(c, CONF)
+
+
+def test_tunnel_token_never_from_arguments():
+    import pytest
+
+    with pytest.raises(asc_ctl.Denied):
+        asc_ctl.cmd_tunnel_token_install(CONF, ["eyJhIjoiYiJ9" * 10])
+    with pytest.raises(asc_ctl.Denied):
+        asc_ctl.cmd_tunnel_token_install({**CONF, "SERVER": "201"}, [])

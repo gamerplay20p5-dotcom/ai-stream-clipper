@@ -65,7 +65,7 @@ def test_callback_without_cookie_connects_every_shared_account(admin, app, fake_
                   headers=CSRF)
     assert r.status_code == 200, r.text
     ov = admin.get("/api/publish/overview").json()["apps"]["instagram"]
-    assert ov["config_id"] == "987654321" and ov["callback_url"] == CALLBACK and "meta-secret" not in str(ov)
+    assert ov["config_id"] == "987654321" and ov["callback_url"].startswith("https://clipper.friendhost.com.br/") and "meta-secret" not in str(ov)
     assert admin.put("/api/publish/apps/instagram", json={"redirect_uri": CALLBACK, "config_id": "abc"},
                      headers=CSRF).status_code == 422
     start = admin.post("/api/publish/oauth/instagram/start", headers=CSRF).json()
@@ -75,7 +75,7 @@ def test_callback_without_cookie_connects_every_shared_account(admin, app, fake_
 
     anon = TestClient(app, follow_redirects=False)  # no session cookie
     r = anon.get(f"/api/publish/oauth/instagram/callback?code=AQB&state={start['state']}")
-    assert r.status_code == 303 and r.headers["location"] == "/publicacao?conectado=1"
+    assert r.status_code == 303 and r.headers["location"].endswith("/publicacao?conectado=1")
     with session_scope() as db:
         accts = db.query(PublishAccount).filter(PublishAccount.platform == "instagram").all()
         ids = {a.external_id for a in accts}
@@ -111,3 +111,18 @@ def test_wrong_app_can_be_removed(admin):
             a.status = "revoked"
     assert admin.delete("/api/publish/apps/tiktok", headers=CSRF).status_code == 200
     assert not admin.get("/api/publish/overview").json()["apps"]["tiktok"]["configured"]
+
+
+def test_public_callback_returns_the_browser_to_the_lan_panel(admin, app, fake_meta):
+    admin.put("/api/publish/apps/instagram", json={"client_id": "1234567890", "client_secret": "meta-secret",
+                                                   "redirect_uri": "https://clipper.friendhost.com.br/api/publish/oauth/instagram/callback",
+                                                   "config_id": "987654321"}, headers=CSRF)
+    start = admin.post("/api/publish/oauth/instagram/start", headers=CSRF).json()
+    from fastapi.testclient import TestClient
+
+    public = TestClient(app, base_url="https://clipper.friendhost.com.br", follow_redirects=False)
+    r = public.get(f"/api/publish/oauth/instagram/callback?code=AQB&state={start['state']}")
+    assert r.status_code == 303
+    assert r.headers["location"] == "http://testserver/publicacao?conectado=1"  # origin that started the flow
+    assert admin.get("/api/publish/overview").json()["apps"]["instagram"]["callback_url"] == \
+        "https://clipper.friendhost.com.br/api/publish/oauth/instagram/callback"
