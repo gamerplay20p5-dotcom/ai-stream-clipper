@@ -106,6 +106,8 @@ class AudioFeature(Base):
     loudness_db: Mapped[list] = mapped_column(JSON, default=list)
     centroid_hz: Mapped[list] = mapped_column(JSON, default=list)
     flux: Mapped[list] = mapped_column(JSON, default=list)
+    # Phase 2: {"yamnet": {"hop", "cats": {cat: [...]}}, "pitch_hz": [...], "pitch_hop": 0.25}
+    extra: Mapped[dict] = mapped_column(JSON, default=dict)
     speech_ratio: Mapped[float] = mapped_column(Float, default=0.0)
     language: Mapped[str] = mapped_column(String(8), default="")
 
@@ -159,6 +161,14 @@ class Clip(Base):
     webcam_region: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     vision: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     vision_state: Mapped[str] = mapped_column(String(16), default="none")  # none|pending|done|skipped
+    # Phase 2 - multimodal analysis, director decision and structured edit plan
+    analysis: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # VisualAnalysis + narrative
+    decision: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # DirectorDecision
+    edit_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # EditPlan
+    analysis_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # models, devices, timings, fallback
+    analysis_runs: Mapped[int] = mapped_column(Integer, default=0)
+    heuristic_start: Mapped[float | None] = mapped_column(Float, nullable=True)  # Phase-1 bounds, kept for comparison
+    heuristic_end: Mapped[float | None] = mapped_column(Float, nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=0)
     source_path: Mapped[str] = mapped_column(String(512), default="")
     source_start: Mapped[float] = mapped_column(Float, default=0.0)

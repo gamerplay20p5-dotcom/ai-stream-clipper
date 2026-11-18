@@ -14,7 +14,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from .. import pipeline, queue, storage
+from sqlalchemy import select
+
+from .. import pipeline, pipeline_ai, queue, routing, storage
 from ..config import get_settings
 from ..db import get_db, utcnow
 from ..models import Clip, Job, Worker
@@ -94,8 +96,13 @@ def claim(body: ClaimIn, worker: str = Depends(worker_auth), db: Session = Depen
     if w is None:
         raise HTTPException(409, "worker not registered")
     allowed = [t for t in body.types if queue.JOB_ROLES.get(t) in (w.roles or [])]
+    accept = None
+    if "vision_analyze" in allowed:
+        online = list(db.scalars(select(Worker).where(Worker.status == "online")))
+        accept = routing.vision_acceptor(w, online, utcnow())
     jobs = queue.claim(db, worker, allowed, has_gpu=bool((w.capabilities or {}).get("gpu")), limit=body.limit,
-                       lease_seconds=pipeline.lease_seconds(), global_limits=pipeline.global_limits(db))
+                       lease_seconds=pipeline.lease_seconds(), global_limits=pipeline.global_limits(db),
+                       accept=accept)
     db.commit()
     return [{"id": j.id, "type": j.type, "payload": j.payload, "attempts": j.attempts} for j in jobs]
 
@@ -219,6 +226,7 @@ class AnalysisIn(BaseModel):
     speech_ratio: float = 0.0
     language: str = ""
     skipped: bool = False
+    extra: dict = Field(default_factory=dict)  # Phase 2: yamnet categories + pitch
 
 
 @router.post("/sessions/{sid}/analysis")
@@ -271,6 +279,31 @@ def vision_spec(cid: int, _: str = Depends(worker_auth), db: Session = Depends(g
 class VisionIn(BaseModel):
     result: dict | None = None
     error: str = Field("", max_length=2000)
+
+
+class AnalysisResultIn(BaseModel):
+    decision: dict
+    edit_plan: dict
+    visual: dict | None = None
+    narrative: dict | None = None
+    heuristic_vision: dict | None = None
+    meta: dict = Field(default_factory=dict)
+
+
+@router.post("/clips/{cid}/analysis")
+def post_ai_analysis(cid: int, body: AnalysisResultIn, worker: str = Depends(worker_auth),
+                     db: Session = Depends(get_db)):
+    clip = _clip_or_404(db, cid)
+    if clip.vision_state != "pending":
+        return {"ok": False, "stale": True}  # already decided (timeout fallback or newer run)
+    try:
+        pipeline_ai.apply_analysis(db, clip, body.model_dump(), worker=worker)
+    except ValueError as exc:  # schema validation failed -> continue without the AI result
+        db.rollback()
+        clip = _clip_or_404(db, cid)
+        pipeline_ai.direct_without_vision(db, clip, f"resultado de IA inválido: {exc}"[:200])
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/clips/{cid}/vision")

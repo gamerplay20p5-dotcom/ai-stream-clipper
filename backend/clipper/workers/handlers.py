@@ -77,6 +77,7 @@ async def handle_audio(ctx: JobContext) -> dict:
     feats = await asyncio.to_thread(compute_features, samples, sr)
     ctx.check_cancel()
     s = ctx.settings
+    extra, yamnet_s = await asyncio.to_thread(_acoustic_extra, samples, s)
     model = p.get("whisper_model") or s.whisper_model
     t0 = time.monotonic()
     transcriber = await asyncio.to_thread(get_transcriber, model, s.whisper_compute_type, s.whisper_cpu_threads,
@@ -89,9 +90,25 @@ async def handle_audio(ctx: JobContext) -> dict:
         "words": [[w.start, w.end, w.word, w.probability] for w in tr.words],
         "speech_ratio": tr.speech_ratio,
         "language": tr.language,
+        "extra": extra,
     })
     return {"words": len(tr.words), "stt_seconds": round(stt, 2), "realtime_factor":
-            round(stt / max(0.1, feats.duration), 3), "model": transcriber.name}
+            round(stt / max(0.1, feats.duration), 3), "model": transcriber.name,
+            "yamnet_seconds": yamnet_s, "acoustic_model": "yamnet" if extra.get("yamnet") else "none"}
+
+
+def _acoustic_extra(samples, settings) -> tuple[dict, float]:
+    """YAMNet categories + voice pitch for one segment (both optional, CPU)."""
+    from ..ai.acoustic import get_classifier, pitch_track
+
+    extra: dict = {"pitch_hz": pitch_track(samples), "pitch_hop": 0.25}
+    t0 = time.monotonic()
+    if settings.yamnet_enabled:
+        clf = get_classifier(settings.models_dir)
+        if clf is not None:
+            y = clf.classify(samples)
+            extra["yamnet"] = {"hop": y["hop"], "cats": y["cats"], "top": y["top"]}
+    return extra, round(time.monotonic() - t0, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -124,10 +141,21 @@ async def handle_score(ctx: JobContext) -> dict:
 
 
 async def handle_vision(ctx: JobContext) -> dict:
-    from ..analysis.vision import get_provider, sample_frames
+    """Phase 2 AI analysis: heuristic vision (always) + multimodal model (when available)
+    + automatic director + narrative + edit plan. A missing model never fails the clip:
+    the worker falls back and reports why."""
+    from ..ai import director, edit_plan, narrative
+    from ..ai.manager import ModelUnavailable, get_manager
+    from ..ai.schemas import VisualAnalysis, VisualEvent
+    from ..ai.vlm import FrameInput, VLMAnalyzer
+    from ..analysis.vision import HeuristicVisionProvider, sample_frames
+    from ..scoring.engine import weighted_total
+    from ..settings_store import AISettings
 
     clip_id = int(ctx.payload["clip_id"])
     spec = await ctx.client.get(f"/internal/clips/{clip_id}/vision-spec")
+    timings: dict[str, float] = {}
+    t_all = time.monotonic()
     try:
         src, src_start = await obtain_source(ctx, clip_id, spec)
     except JobError as exc:
@@ -135,18 +163,122 @@ async def handle_vision(ctx: JobContext) -> dict:
             await ctx.client.post(f"/internal/clips/{clip_id}/vision", {"result": None, "error": str(exc)})
             return {"skipped": str(exc)}
         raise
+    timings["fetch_s"] = round(time.monotonic() - t_all, 2)
     s = ctx.settings
-    provider_name = ctx.payload.get("provider") or s.vision_provider
-    provider = await asyncio.to_thread(get_provider, provider_name, s.openvino_model_dir, s.openvino_device)
-    rel0 = spec["start"] - src_start
-    frames = await asyncio.to_thread(sample_frames, src, rel0, spec["end"] - src_start, spec["peak"] - src_start,
-                                     float(ctx.payload.get("frame_interval", 1.0)))
+    settings = AISettings.model_validate(spec["settings"])
+    w0, w1 = float(spec["window"][0]), float(spec["window"][1])
+    info = await media.probe(src)
+    src_dur = media.duration_of(info)
+    w0 = max(w0, src_start)
+    w1 = min(w1, src_start + src_dur) if src_dur else w1
+    span = max(1.0, w1 - w0)
+    peak_rel = float(spec["peak"]) - w0
+
+    # 1. heuristic vision over the whole window (scene cuts, motion centroid, face track)
     t0 = time.monotonic()
-    result = await asyncio.to_thread(provider.analyze, frames, spec["peak"] - spec["start"], spec.get("transcript", ""))
-    result.latency_s = round(time.monotonic() - t0, 3)
-    await ctx.client.post(f"/internal/clips/{clip_id}/vision", {"result": result.as_dict()})
-    return {"provider": result.provider, "visual_score": result.visual_score, "frames": result.frames_analyzed,
-            "latency_s": result.latency_s}
+    frames = await asyncio.to_thread(sample_frames, src, w0 - src_start, w1 - src_start, peak_rel + (w0 - src_start),
+                                     float(ctx.payload.get("frame_interval", 1.0)), 90)
+    for f in frames:  # sample_frames returns times relative to its start argument (= window start)
+        f.t = round(f.t, 3)
+    heur = await asyncio.to_thread(HeuristicVisionProvider().analyze, frames, peak_rel, spec.get("transcript", ""))
+    timings["heuristic_vision_s"] = round(time.monotonic() - t0, 2)
+    heur_d = heur.as_dict()
+
+    # 2. multimodal model
+    model = ctx.payload.get("model")
+    manager = get_manager(s.openvino_device, s.ai_allow_cpu_fallback)
+    visual: VisualAnalysis | None = None
+    fallback_reason = ""
+    words_rel = [(w[0] - w0, w[1] - w0, w[2]) for w in spec["words"]]
+    cues = _audio_cues(spec, w0)
+    if model and (not s.ai_models or model in s.ai_models):
+        t0 = time.monotonic()
+        try:
+            analyzer = VLMAnalyzer(manager, model)
+            visual = await asyncio.to_thread(
+                analyzer.analyze, [FrameInput(f.t, f.image) for f in frames], peak_rel, span, (w0, w1), words_rel, cues)
+        except ModelUnavailable as exc:
+            fallback_reason = str(exc)[:300]
+        timings["vlm_s"] = round(time.monotonic() - t0, 2)
+    elif model:
+        fallback_reason = f"modelo {model} não habilitado neste worker"
+    else:
+        fallback_reason = "provedor heurístico selecionado"
+    if visual is None:
+        visual = VisualAnalysis(
+            provider=heur.provider, model="", device="CPU", action=min(10.0, heur.visual_score),
+            events=[VisualEvent(t=c, label="mudança brusca de cena", importance=5)
+                    for c in heur.scene_changes if 0 <= c <= span][:12],
+            frame_times=[round(f.t, 2) for f in frames][:60], window_abs=(w0, w1), fallback=True,
+            notes=[f"multimodal indisponível: {fallback_reason}"] if fallback_reason else [])
+
+    # 3. director
+    cand_d = spec["candidate"]
+    breakdown = dict(cand_d.get("breakdown") or {})
+    breakdown["visual"] = round(heur.visual_score, 2)
+    base = weighted_total(breakdown, settings)
+    cand = director.Candidate(float(spec["start"]), float(spec["end"]), float(spec["peak"]), base, breakdown,
+                              list(cand_d.get("reasons") or []), list(cand_d.get("kinds") or []))
+    ac = spec.get("acoustic") or {}
+    track = director.AcousticTrack([(t, c) for t, c in ac.get("frames", [])], [(t, p) for t, p in ac.get("pitch", [])])
+    motion = [(w0 + m[0], m[1]) for m in (heur.extra or {}).get("motion", [])]
+    decision = director.decide(cand, spec["words"], track, visual, director.Limits(**spec["limits"]), motion=motion)
+    if visual.fallback:
+        decision.reasons.append("Análise multimodal indisponível: decisão com áudio + visão heurística")
+
+    # 4. narrative (the text model consumes facts, never pixels)
+    t0 = time.monotonic()
+    clip_words = [w[2] for w in spec["words"] if decision.start_abs <= w[0] < decision.end_abs]
+    narr = await asyncio.to_thread(
+        narrative.write, manager, ctx.payload.get("narrative_model") or settings.narrative_model,
+        vision_model=model if not visual.fallback else None, transcript=" ".join(clip_words), visual=visual,
+        decision=decision, game=(spec.get("streamer") or {}).get("game", ""),
+        fallback_titles=list(spec.get("title_suggestions") or []))
+    timings["narrative_s"] = round(time.monotonic() - t0, 2)
+
+    # 5. edit plan
+    first = not spec.get("analysis_runs")
+    title = narr.titles[0] if (not narr.fallback and narr.titles and first) else spec.get("title", "")
+    motion_cx = [(w0 + m[0], m[2]) for m in (heur.extra or {}).get("motion", [])]
+    faces = [{**f, "t": w0 + f["t"]} for f in (heur.extra or {}).get("face_track", [])]
+    layout = spec.get("layout")
+    plan = edit_plan.build(decision, template_key=settings.edit_template, title=title, transcript_words=clip_words,
+                           visual=visual, motion_cx=motion_cx,
+                           webcam_region=spec.get("webcam_region") or heur.webcam_region, face_track=faces,
+                           layout_override=None if layout in (None, "auto") else layout,
+                           normalize_audio=settings.normalize_audio, zoom_intensity=settings.zoom_intensity)
+    plan.base_start_abs = decision.start_abs
+    timings["total_s"] = round(time.monotonic() - t_all, 2)
+    snap = manager.snapshot()
+    heur_summary = {k: v for k, v in heur_d.items() if k != "extra"}
+    heur_summary.update({"motion_points": len((heur.extra or {}).get("motion", [])), "faces": len(faces)})
+    await ctx.client.post(f"/internal/clips/{clip_id}/analysis", {
+        "decision": decision.model_dump(), "edit_plan": plan.model_dump(), "visual": visual.model_dump(),
+        "narrative": narr.model_dump(), "heuristic_vision": heur_summary,
+        "meta": {"vision_model": None if visual.fallback else model, "vision_device": visual.device,
+                 "vision_provider": visual.provider, "narrative_provider": narr.provider,
+                 "fallback_reason": fallback_reason, "timings": timings, "frames_sampled": len(frames),
+                 "frames_to_model": 0 if visual.fallback else len(visual.frame_times),
+                 "model_state": (snap.get("models") or {}).get(model or "", {})},
+    })
+    return {"mode": decision.mode, "keep": decision.keep, "score": decision.score, "vision": visual.provider,
+            "narrative": narr.provider, "timings": timings}
+
+
+def _audio_cues(spec: dict, w0: float) -> list[str]:
+    """Short, factual acoustic hints for the VLM prompt (window-relative seconds)."""
+    names = {"laughter": "risada", "scream": "grito", "shout": "fala gritada", "game_impact": "explosão/impacto",
+             "gunfire": "tiros", "vehicle": "veículo/sirene", "crowd": "torcida"}
+    cues: list[str] = []
+    last: dict[str, float] = {}
+    for t, cats in (spec.get("acoustic") or {}).get("frames", []):
+        for c, label in names.items():
+            if cats.get(c, 0) >= 0.4 and t - last.get(c, -99.0) > 3:
+                cues.append(f"{label} em {t - w0:.1f}s")
+                last[c] = t
+    for r in (spec.get("candidate") or {}).get("reasons", [])[:3]:
+        cues.append(r)
+    return cues[:10]
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +301,7 @@ async def handle_render(ctx: JobContext) -> dict:
         layout=spec.get("layout", "auto"), webcam_region=spec.get("webcam_region"),
         show_title=bool(spec.get("show_title", True)), preset=spec.get("preset", "veryfast"),
         crf=int(spec.get("crf", 21)), fps=int(spec.get("fps", 30)), threads=s.ffmpeg_threads,
+        plan=spec.get("edit_plan"),
     )
     try:
         res = await render(rs, ctx.workdir / "render")
@@ -183,7 +316,7 @@ async def handle_render(ctx: JobContext) -> dict:
     r = await ctx.client.upload(f"/internal/clips/{clip_id}/video", res.video,
                                 params={"version": version, "seconds": f"{res.seconds:.2f}", "layout": res.layout})
     return {"seconds": round(res.seconds, 2), "duration": round(res.duration, 2), "layout": res.layout,
-            "stale": bool(r.get("stale"))}
+            "stale": bool(r.get("stale")), "applied": res.applied, "audio": res.audio}
 
 
 # ---------------------------------------------------------------------------

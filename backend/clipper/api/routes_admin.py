@@ -121,6 +121,28 @@ def infrastructure(db: Session = Depends(get_db), _: CurrentUser = Depends(curre
     }
 
 
+@router.get("/ai/models")
+def ai_models(db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+    """Model catalogue + where each model is installed/loaded and how it performs."""
+    from ..ai.registry import MODELS
+
+    workers = [w for w in db.scalars(select(Worker)) if {"vision", "audio"} & set(w.roles or [])]
+    out = []
+    for key, spec in MODELS.items():
+        hosts = []
+        for w in workers:
+            caps, metrics = w.capabilities or {}, w.metrics or {}
+            st = ((metrics.get("ai") or {}).get("models") or {}).get(key)
+            if key in (caps.get("ai_models") or []) or key in (caps.get("acoustic_models") or []) or st:
+                hosts.append({"worker": w.id, "host_label": w.host_label, "online": w.status == "online",
+                              "gpu": bool(caps.get("gpu")), "gpu_name": caps.get("gpu_name", ""),
+                              "vram_total_gb": caps.get("vram_total_gb"),
+                              "loaded": (metrics.get("ai") or {}).get("loaded") == key, "stats": st})
+        out.append({"key": key, "kind": spec.kind, "family": spec.family, "size_gb": spec.approx_size_gb,
+                    "min_vram_gb": spec.min_vram_gb, "hf_repo": spec.hf_repo, "notes": spec.notes, "workers": hosts})
+    return out
+
+
 @router.get("/jobs")
 def list_jobs(status: str | None = None, type: str | None = None, limit: int = 100,
               db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):

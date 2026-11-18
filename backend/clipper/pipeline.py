@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from . import queue
@@ -22,7 +22,7 @@ from .settings_store import AISettings, load_ai_settings
 
 log = logging.getLogger(__name__)
 
-SOURCE_MARGIN_S = 6.0
+SOURCE_MARGIN_S = 15.0  # room for the director to extend context / resolution
 TIMELINE_LOOKBACK_S = 150.0
 
 
@@ -249,7 +249,8 @@ def post_analysis(db: Session, session_id: int, idx: int, data: dict) -> None:
         db.add(AudioFeature(
             session_id=session_id, segment_idx=idx, start=seg.start, hop=float(feats.get("hop", 0.25)),
             loudness_db=feats.get("loudness_db", []), centroid_hz=feats.get("centroid_hz", []),
-            flux=feats.get("flux", []), speech_ratio=float(data.get("speech_ratio", 0.0)),
+            flux=feats.get("flux", []), extra=data.get("extra") or {},
+            speech_ratio=float(data.get("speech_ratio", 0.0)),
             language=str(data.get("language", ""))[:8],
         ))
         for w in data.get("words", []):
@@ -331,7 +332,7 @@ def timeline(db: Session, session_id: int) -> dict:
         "settings": eff,
         "streamer": streamer_info(streamer) if streamer else {},
         "features": [{"start": f.start, "hop": f.hop, "loudness_db": f.loudness_db, "centroid_hz": f.centroid_hz,
-                      "flux": f.flux, "speech_ratio": f.speech_ratio} for f in feats],
+                      "flux": f.flux, "speech_ratio": f.speech_ratio, "extra": f.extra or {}} for f in feats],
         "words": [[w[0], w[1], w[2], w[3]] for w in words],
         "clips": [{"id": c.id, "start": c.start, "end": c.end, "peak": c.peak, "score": c.score,
                    "transcript": c.transcript, "kinds": c.kinds or []} for c in clips],
@@ -342,11 +343,21 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
     sess = db.get(StreamSession, session_id)
     if sess is None:
         raise NotFound("session")
-    if abs(sess.scored_until - from_scored_until) > 1e-6:
-        raise Conflict("session was scored concurrently")
     new_until = float(result.get("scored_until", sess.scored_until))
-    if new_until < sess.scored_until:
+    if new_until < from_scored_until:
         raise Conflict("scored_until must be monotonic")
+    # Atomic compare-and-set on the watermark: two concurrent scorers that read the same
+    # value can no longer both insert the same clip (race found in a real multi-job run).
+    swapped = db.execute(
+        update(StreamSession)
+        .where(StreamSession.id == session_id,
+               StreamSession.scored_until >= from_scored_until - 1e-6,
+               StreamSession.scored_until <= from_scored_until + 1e-6)
+        .values(scored_until=max(new_until, from_scored_until))
+    ).rowcount
+    if swapped != 1:
+        raise Conflict("session was scored concurrently")
+    db.refresh(sess)
     settings = load_ai_settings(db)
     for e in result.get("events", []):
         db.add(Event(session_id=session_id, t=float(e["t"]), duration=float(e.get("duration", 0)),
@@ -371,25 +382,16 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
         db.flush()
         _route_new_clip(db, clip, settings)
         created.append(clip.id)
-    sess.scored_until = new_until
     return created
 
 
 def _route_new_clip(db: Session, clip: Clip, settings: AISettings) -> None:
+    from . import pipeline_ai
+
     if settings.vision_enabled:
-        clip.status = "analyzing"
-        clip.vision_state = "pending"
-        sess = db.get(StreamSession, clip.session_id)
-        queue.enqueue(
-            db, "vision_analyze",
-            {"clip_id": clip.id, "session_id": clip.session_id, "provider": settings.vision_provider,
-             "frame_interval": settings.vision_frame_interval,
-             "segment_base_url": sess.segment_base_url if sess else ""},
-            idempotency_key=f"vision:{clip.id}", priority=60, max_attempts=2,
-            requires_gpu=settings.vision_provider == "openvino_vlm",
-        )
+        pipeline_ai.enqueue_analysis(db, clip, settings)
     else:
-        enqueue_render(db, clip)
+        pipeline_ai.direct_without_vision(db, clip, "análise visual desativada nas configurações")
 
 
 def enqueue_render(db: Session, clip: Clip) -> Job:
@@ -408,8 +410,9 @@ def vision_spec(db: Session, clip_id: int) -> dict:
     clip = db.get(Clip, clip_id)
     if clip is None:
         raise NotFound("clip")
-    return {**_source_location(db, clip), "clip_id": clip.id, "start": clip.start, "end": clip.end,
-            "peak": clip.peak, "transcript": clip.transcript}
+    from . import pipeline_ai
+
+    return pipeline_ai.ai_spec(db, clip, _source_location(db, clip))
 
 
 def post_vision(db: Session, clip_id: int, result: dict | None, error: str = "") -> None:
@@ -429,19 +432,21 @@ def post_vision(db: Session, clip_id: int, result: dict | None, error: str = "")
         clip.reasons = list(clip.reasons or []) + [f"Visual: {r}" for r in result.get("reasons", [])[:3]]
         if result.get("webcam_region") and not clip.webcam_region:
             clip.webcam_region = result["webcam_region"]
+        enqueue_render(db, clip)
     else:
-        clip.vision_state = "skipped"
-        clip.reasons = list(clip.reasons or []) + [f"Análise visual indisponível ({error[:80]})" if error
-                                                   else "Análise visual indisponível"]
-    enqueue_render(db, clip)
+        from . import pipeline_ai
+
+        pipeline_ai.direct_without_vision(db, clip, error or "worker visual indisponível")
 
 
 def vision_timeouts(db: Session) -> int:
     settings = load_ai_settings(db)
     cutoff = utcnow() - timedelta(seconds=settings.vision_timeout_seconds)
     n = 0
-    for clip in db.scalars(select(Clip).where(Clip.vision_state == "pending", Clip.created_at < cutoff)):
-        job = db.scalar(select(Job).where(Job.idempotency_key == f"vision:{clip.id}"))
+    from .pipeline_ai import vision_key
+
+    for clip in db.scalars(select(Clip).where(Clip.vision_state == "pending", Clip.updated_at < cutoff)):
+        job = db.scalar(select(Job).where(Job.idempotency_key == vision_key(clip)))
         if job is not None and job.status == "running":
             continue  # a worker is on it; its lease protects against hangs
         if job is not None:
@@ -450,7 +455,7 @@ def vision_timeouts(db: Session) -> int:
         n += 1
     # vision jobs that died -> continue without vision
     for clip in db.scalars(select(Clip).where(Clip.vision_state == "pending")):
-        job = db.scalar(select(Job).where(Job.idempotency_key == f"vision:{clip.id}"))
+        job = db.scalar(select(Job).where(Job.idempotency_key == vision_key(clip)))
         if job is not None and job.status == "dead":
             post_vision(db, clip.id, None, job.last_error[:80])
             n += 1
@@ -486,6 +491,8 @@ def _source_location(db: Session, clip: Clip) -> dict:
 
 
 def render_spec(db: Session, clip_id: int) -> dict:
+    from .pipeline_ai import effective_plan
+
     clip = db.get(Clip, clip_id)
     if clip is None:
         raise NotFound("clip")
@@ -514,6 +521,7 @@ def render_spec(db: Session, clip_id: int) -> dict:
         "webcam_region": clip.webcam_region,
         "words": [[w[0], w[1], w[2]] for w in words],
         "show_title": settings.show_title_overlay,
+        "edit_plan": effective_plan(clip, settings),
         "preset": settings.export_preset,
         "crf": settings.export_crf,
         "fps": settings.export_fps,

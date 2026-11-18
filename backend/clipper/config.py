@@ -82,10 +82,22 @@ class Settings(BaseSettings):
     whisper_cpu_threads: int = 4
     whisper_model_dir: Path | None = None
 
-    # --- vision worker ---------------------------------------------------
-    vision_provider: str = "heuristic"  # heuristic | openvino_vlm
-    openvino_model_dir: Path | None = None
-    openvino_device: str = "GPU"
+    # --- vision / AI worker ---------------------------------------------
+    vision_provider: str = "heuristic"  # heuristic | openvino_vlm (default when the job does not say)
+    openvino_model_dir: Path | None = None  # legacy single-model path (Phase 1)
+    openvino_device: str = "GPU"  # preferred device; CPU is used as fallback
+    models_dir: Path = Path("./data/models")
+    ai_allow_cpu_fallback: bool = True
+    # models this worker is allowed to serve (comma list); empty = every installed model
+    ai_models: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    yamnet_enabled: bool = True
+
+    @field_validator("ai_models", mode="before")
+    @classmethod
+    def _split_models(cls, v):
+        if isinstance(v, str):
+            return [m.strip() for m in v.split(",") if m.strip()]
+        return v
 
     @field_validator("worker_roles", mode="before")
     @classmethod

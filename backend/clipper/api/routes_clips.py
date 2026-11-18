@@ -96,6 +96,21 @@ def rerender(cid: int, request: Request, db: Session = Depends(get_db), user: Cu
     return ser.clip(c)
 
 
+@router.post("/{cid}/reanalyze")
+def reanalyze(cid: int, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
+    """Manual reprocessing: run the multimodal analysis + director again (bounds restart
+    from the heuristic candidate). Editing without re-analysis is ``/rerender``."""
+    c = _get(db, cid)
+    if c.status in ("rendering", "analyzing", "candidate"):
+        raise HTTPException(409, "clip is already being processed")
+    from ..pipeline_ai import reanalyze as do_reanalyze
+
+    do_reanalyze(db, c)
+    audit(db, request, user, "clip.reanalyze", f"clip:{cid}", {"run": c.analysis_runs})
+    db.commit()
+    return ser.clip(c)
+
+
 @router.post("/{cid}/approve")
 def approve(cid: int, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
     c = _get(db, cid)

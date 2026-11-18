@@ -15,6 +15,7 @@ Design:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import timedelta
 
 from sqlalchemy import func, select, update
@@ -90,6 +91,7 @@ def claim(
     limit: int = 1,
     lease_seconds: int = 90,
     global_limits: dict[str, int] | None = None,
+    accept: Callable[[Job], bool] | None = None,
 ) -> list[Job]:
     """Atomically claim up to ``limit`` runnable jobs of the given types."""
     if not types or limit <= 0:
@@ -106,13 +108,14 @@ def claim(
         allowed = [t for t in allowed if running.get(t, 0) < global_limits.get(t, 1 << 30)]
         if not allowed:
             return []
-    q = select(Job.id).where(Job.status == "queued", Job.type.in_(allowed), Job.run_after <= now)
+    q = select(Job).where(Job.status == "queued", Job.type.in_(allowed), Job.run_after <= now)
     if not has_gpu:
         q = q.where(Job.requires_gpu.is_(False))
     q = q.order_by(Job.priority, Job.id).limit(limit * 4)
     if db.get_bind().dialect.name == "postgresql":
         q = q.with_for_update(skip_locked=True)
-    ids = list(db.scalars(q))
+    candidates = list(db.scalars(q))
+    ids = [j.id for j in candidates if accept is None or accept(j)]
     claimed: list[Job] = []
     for jid in ids:
         if len(claimed) >= limit:

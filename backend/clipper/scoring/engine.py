@@ -58,12 +58,28 @@ class Candidate:
     hashtags: list[str] = field(default_factory=list)
 
 
+ACOUSTIC_CATS = ("speech", "laughter", "scream", "shout", "game_impact", "gunfire", "vehicle", "music", "crowd")
+
+
 @dataclass
 class Grid:
     t0: float
     loud: np.ndarray
     cent: np.ndarray
     flux: np.ndarray
+    cats: dict = field(default_factory=dict)  # YAMNet category -> array aligned to HOP (NaN = unknown)
+
+    def cat(self, name: str, a: int, b: int) -> float:
+        arr = self.cats.get(name)
+        if arr is None:
+            return float("nan")
+        seg = arr[max(0, a):max(a + 1, b + 1)]
+        seg = seg[~np.isnan(seg)]
+        return float(seg.max()) if len(seg) else float("nan")
+
+    @property
+    def has_cats(self) -> bool:
+        return any(np.isfinite(v).any() for v in self.cats.values())
 
     def t(self, i: int) -> float:
         return self.t0 + i * HOP
@@ -86,7 +102,19 @@ def build_grid(features: list[dict], t_from: float, t_to: float) -> Grid:
     loud = np.full(n, np.nan)
     cent = np.full(n, np.nan)
     flux = np.full(n, np.nan)
+    cats = {c: np.full(n, np.nan) for c in ACOUSTIC_CATS}
     for f in features:
+        y = ((f.get("extra") or {}).get("yamnet")) or {}
+        if y.get("cats"):
+            yhop = float(y.get("hop", 0.48))
+            for c, vals in y["cats"].items():
+                if c not in cats:
+                    continue
+                for k, v in enumerate(vals):
+                    a = int(round((float(f["start"]) + k * yhop - t_from) / HOP))
+                    b = int(round((float(f["start"]) + (k + 2) * yhop - t_from) / HOP))  # 0.96 s window
+                    for idx in range(max(0, a), min(n, b)):
+                        cats[c][idx] = v if np.isnan(cats[c][idx]) else max(cats[c][idx], v)
         hop = float(f.get("hop", HOP)) or HOP
         ld = np.asarray(f.get("loudness_db") or [], dtype=float)
         cd = np.asarray(f.get("centroid_hz") or [], dtype=float)
@@ -97,7 +125,7 @@ def build_grid(features: list[dict], t_from: float, t_to: float) -> Grid:
                 loud[idx] = ld[k]
                 cent[idx] = cd[k] if k < len(cd) else np.nan
                 flux[idx] = fx[k] if k < len(fx) else np.nan
-    return Grid(t_from, loud, cent, flux)
+    return Grid(t_from, loud, cent, flux, cats)
 
 
 def rolling_baseline(x: np.ndarray, window: int, guard: int) -> tuple[np.ndarray, np.ndarray]:
@@ -190,8 +218,16 @@ def detect_events(grid: Grid, words: list[Word], region: tuple[float, float], se
         pre_i = max(0, a - 4)
         pre_level = np.nanmean(grid.loud[pre_i:a]) if a > pre_i else np.nan
         rise = float(np.nanmax(grid.loud[a:b + 1]) - pre_level) if not np.isnan(pre_level) else delta_db
+        source = "unknown"
+        if grid.has_cats:
+            voice_react = max(grid.cat("laughter", a, b), grid.cat("scream", a, b), grid.cat("shout", a, b))
+            speech = grid.cat("speech", a, b)
+            game = max(grid.cat("game_impact", a, b), grid.cat("gunfire", a, b))
+            voice = voice_react >= 0.3 or speech >= 0.5
+            gamey = game >= 0.3
+            source = "mixed" if voice and gamey else "voice" if voice else "game" if gamey else "other"
         events.append(Ev(round(peak_t, 2), round(dur, 2), "loudness_spike", round(zmax, 2),
-                         {"delta_db": round(delta_db, 1), "rise_db": round(rise, 1)}))
+                         {"delta_db": round(delta_db, 1), "rise_db": round(rise, 1), "source": source}))
         # scream: loud and bright, or a bright burst immediately before the loud reaction
         seg_c = grid.cent[a:b + 1]
         bright_spike = cent_med > 0 and np.nanmean(seg_c) > 1.35 * cent_med
@@ -214,6 +250,17 @@ def detect_events(grid: Grid, words: list[Word], region: tuple[float, float], se
             if words_in_quiet <= 1:
                 events.append(Ev(round(lead, 2), 0.0, "silence_break", round(min(10.0, longest * 3), 2),
                                  {"quiet_seconds": round(longest, 2)}))
+
+    # classifier-based voice reactions (YAMNet): laughter and screams/shouts
+    if grid.has_cats:
+        for name, cats_, kind in (("laughter", ("laughter",), "laughter"), ("scream", ("scream", "shout"), "scream")):
+            arr = np.nanmax(np.vstack([np.nan_to_num(grid.cats[c], nan=0.0) for c in cats_]), axis=0)
+            for a, b in _runs(arr >= 0.4, max_gap=1):
+                dur = (b - a + 1) * HOP
+                t_a = grid.t(a)
+                if dur >= 0.5 and r0 <= t_a < r1:
+                    events.append(Ev(round(t_a, 2), round(dur, 2), kind, round(float(arr[a:b + 1].max()) * 10, 2),
+                                     {"by": "yamnet", "label": name}))
 
     # sustained modulated energy (laughter / excited burst) via flux
     if np.isfinite(grid.flux).any():
@@ -502,7 +549,22 @@ def _build_candidate(group, grid, base, spread, words, settings: AISettings, dat
         "visual": None,  # filled by the vision worker when available
         "chat": None,  # chat analysis not available in this build
     }
+    # Phase 2 rule (only when acoustic classes exist): loudness is not emotion. A spike counts
+    # as a streamer reaction only when corroborated by reaction words, laughter or screams.
+    sources = {e.data.get("source") for e in spikes}
+    corroborated = bool(has["keyword"] or has["laughter"] or any(e.data.get("by") == "yamnet" for e in has["scream"]))
+    uncorroborated = bool(spikes) and grid.has_cats and not corroborated
+    game_only = uncorroborated and sources <= {"game"}
+    if uncorroborated:
+        breakdown["intensity"] = round(intensity * 0.4, 2)
+        breakdown["reaction"] = round(reaction * 0.5, 2)
     total = weighted_total(breakdown, settings)
+    if game_only:
+        total *= 0.6
+        reasons.append("Penalidade: o pico de volume vem do jogo (explosão/tiro), sem reação do streamer")
+    elif uncorroborated:
+        total *= 0.6
+        reasons.append("Penalidade: pico de volume sem reação confirmada do streamer (pode ser som do jogo)")
     if intensity < 3 and reaction < 3 and humor < 3:
         total *= 0.6
         reasons.append("Penalidade: pouca reação/intensidade (provável conversa normal)")

@@ -62,19 +62,39 @@ async def _run_worker(roles: list[str], stop_event=None) -> None:
         server = uvicorn.Server(uvicorn.Config(create_segment_app(s, store), host=s.segment_server_bind,
                                                port=s.segment_server_port, log_config=None, access_log=False))
     if "audio" in roles:
+        from .ai.registry import installed as installed_models
+
         specs.append(RoleSpec("audio_analyze", handlers.handle_audio, s.concurrency_audio))
         extra_caps["whisper_model"] = s.whisper_model
+        extra_caps["acoustic_models"] = installed_models("audio") if s.yamnet_enabled else []
     if "scoring" in roles:
         specs.append(RoleSpec("score", handlers.handle_score, s.concurrency_scoring))
+    metrics_hook = None
     if "vision" in roles:
+        from .ai.manager import get_manager, gpu_memory
+        from .ai.registry import installed
+
         specs.append(RoleSpec("vision_analyze", handlers.handle_vision, s.concurrency_vision))
-        extra_caps["vision_provider"] = s.vision_provider
+        models = [m for m in installed() if not s.ai_models or m in s.ai_models]
+        vram = gpu_memory()
+        extra_caps.update({
+            "vision_provider": s.vision_provider, "ai_models": models, "vision_concurrency": s.concurrency_vision,
+            "ai_device": s.openvino_device, "cpu_fallback": s.ai_allow_cpu_fallback,
+            "vram_total_gb": round(vram.get("total_bytes", 0) / 1024**3, 2), "gpu_name": vram.get("name", ""),
+        })
+        manager = get_manager(s.openvino_device, s.ai_allow_cpu_fallback)
+
+        def metrics_hook() -> dict:
+            mem = gpu_memory() if s.gpu_device or s.openvino_device == "GPU" else {}
+            return {"ai": manager.snapshot(), "vram_used_bytes": mem.get("used_bytes"),
+                    "vram_total_bytes": mem.get("total_bytes")}
     if "render" in roles:
         specs.append(RoleSpec("render", handlers.handle_render, s.concurrency_render))
     if "monitor" in roles:
         background.append(handlers.monitor_loop)
 
-    rt = WorkerRuntime(s, roles, specs, background=background, base_url=base_url, extra_caps=extra_caps)
+    rt = WorkerRuntime(s, roles, specs, background=background, base_url=base_url, extra_caps=extra_caps,
+                       metrics_hook=metrics_hook)
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:

@@ -40,9 +40,18 @@ class AISettings(BaseModel):
     dedup_overlap: float = Field(0.35, ge=0.0, le=1.0)
     # vision
     vision_enabled: bool = True
-    vision_provider: Literal["heuristic", "openvino_vlm"] = "heuristic"
+    # openvino_vlm = multimodal model (falls back to heuristics when no worker serves it)
+    vision_provider: Literal["heuristic", "openvino_vlm"] = "openvino_vlm"
+    vision_model: Literal["qwen3-vl-2b-int4", "qwen3-vl-4b-int4", "internvl2-1b-int4"] = "qwen3-vl-2b-int4"
     vision_frame_interval: float = Field(1.0, ge=0.2, le=10.0)
     vision_timeout_seconds: int = Field(300, ge=30, le=3600)
+    analysis_context_seconds: float = Field(10.0, ge=0, le=30)  # extra footage around the candidate
+    # editorial text: same_as_vision reuses the loaded VLM (no second model in VRAM)
+    narrative_model: Literal["qwen3-1.7b-int4", "qwen3-0.6b-int4", "same_as_vision", "template"] = "qwen3-1.7b-int4"
+    director_enabled: bool = True
+    edit_template: Literal["padrao", "dinamico", "minimalista"] = "padrao"
+    normalize_audio: bool = True
+    zoom_intensity: float = Field(1.0, ge=0.0, le=1.5)
     # render
     export_preset: Literal["ultrafast", "veryfast", "faster", "fast", "medium", "slow"] = "veryfast"
     export_crf: int = Field(21, ge=14, le=32)

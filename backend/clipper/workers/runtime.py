@@ -60,7 +60,8 @@ class RoleSpec:
 class WorkerRuntime:
     def __init__(self, settings: Settings, roles: list[str], specs: list[RoleSpec],
                  background: list[Callable[[WorkerRuntime], Awaitable[None]]] | None = None,
-                 base_url: str = "", extra_caps: dict | None = None):
+                 base_url: str = "", extra_caps: dict | None = None,
+                 metrics_hook: Callable[[], dict] | None = None):
         settings.require_secrets("internal_secret")
         self.settings = settings
         self.worker_id = settings.resolved_worker_id()
@@ -69,6 +70,7 @@ class WorkerRuntime:
         self.background = background or []
         self.base_url = base_url
         self.extra_caps = extra_caps or {}
+        self.metrics_hook = metrics_hook
         self.client = InternalClient(settings.api_url, settings.internal_secret, self.worker_id)
         self.running: dict[int, JobContext] = {}
         self._stop = asyncio.Event()
@@ -97,8 +99,13 @@ class WorkerRuntime:
         sysinfo.psutil.cpu_percent(interval=None)
         while not self._stop.is_set():
             try:
-                await self.client.post("/internal/workers/heartbeat",
-                                       {"metrics": sysinfo.metrics(self.workdir, len(self.running))})
+                m = sysinfo.metrics(self.workdir, len(self.running))
+                if self.metrics_hook is not None:
+                    try:
+                        m.update(self.metrics_hook())
+                    except Exception as exc:  # metrics must never break the heartbeat
+                        log.warning("metrics hook failed", extra={"err": str(exc)[:200]})
+                await self.client.post("/internal/workers/heartbeat", {"metrics": m})
                 HEARTBEAT_FILE.write_text(str(time.time()))  # read by `clipper healthcheck`
             except InternalError as exc:
                 if exc.status == 409:
