@@ -1,0 +1,405 @@
+{
+ "model": "qwen3-vl-2b-int4",
+ "device_requested": "GPU",
+ "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+ "gpu": {
+  "total_bytes": 7456825344,
+  "used_bytes": 0,
+  "name": "Intel(R) UHD Graphics (iGPU)"
+ },
+ "runs": [
+  {
+   "video": "gameplay_event.mp4",
+   "event": "silêncio, grito e reação verbal",
+   "clip_worthy": true,
+   "window": [
+    2.04,
+    40.91
+   ],
+   "wall_s": 108.42,
+   "rss_gb": 3.38,
+   "rss_delta_gb": 3.16,
+   "vram": {
+    "total_bytes": 7456825344,
+    "used_bytes": 2392209205,
+    "name": "Intel(R) UHD Graphics (iGPU)"
+   },
+   "error": "",
+   "device": "GPU",
+   "latency_s": 63.93,
+   "summary": "Teste de qualidade visual com cores vibrantes e padrões de teste.",
+   "key_event": "Teste de qualidade visual com cores vibrantes e padrões de teste.",
+   "scores": {
+    "funny": 0.0,
+    "unexpected": 0.0,
+    "important": 10.0,
+    "action": 10.0
+   },
+   "interest": 10.0,
+   "events": [
+    {
+     "t": 0.0,
+     "label": "Teste de qualidade visual com cores vibrantes e padrões de teste.",
+     "importance": 10.0
+    },
+    {
+     "t": 12.0,
+     "label": "Teste de qualidade visual com cores vibrantes e padrões de teste.",
+     "importance": 10.0
+    },
+    {
+     "t": 20.7,
+     "label": "Teste de qualidade visual com cores vibrantes e padrões de teste.",
+     "importance": 10.0
+    },
+    {
+     "t": 21.7,
+     "label": "Teste de qualidade visual com cores vibrantes e padrões de teste.",
+     "importance": 10.0
+    },
+    {
+     "t": 22.0,
+     "label": "Teste de qualidade visual com cores vibrantes e padrões de teste.",
+     "importance": 10.0
+    },
+    {
+     "t": 22.3,
+     "label": "Teste de qualidade visual com cores vibrantes e padrões de teste.",
+     "importance": 10.0
+    },
+    {
+     "t": 26.3,
+     "label": "Teste de qualidade visual com cores vibrantes e padrões de teste.",
+     "importance": 10.0
+    },
+    {
+     "t": 38.3,
+     "label": "Teste de qualidade visual com cores vibrantes e padrões de teste.",
+     "importance": 10.0
+    }
+   ],
+   "climax_abs": 24.34,
+   "setup_abs": 2.039999999999999,
+   "climax_error_s": 0.3,
+   "setup_error_s": 12.2
+  },
+  {
+   "video": "chase_crash.mp4",
+   "event": "perseguição termina em batida e o streamer reage",
+   "clip_worthy": true,
+   "window": [
+    13.36,
+    48.3
+   ],
+   "wall_s": 53.65,
+   "rss_gb": 3.38,
+   "rss_delta_gb": -0.0,
+   "vram": {
+    "total_bytes": 7456825344,
+    "used_bytes": 2392229873,
+    "name": "Intel(R) UHD Graphics (iGPU)"
+   },
+   "error": "",
+   "device": "GPU",
+   "latency_s": 53.63,
+   "summary": "Teste de qualidade de vídeo com cores e padrões visuais em tela.",
+   "key_event": "test de qualidade de vídeo",
+   "scores": {
+    "funny": 0.0,
+    "unexpected": 0.0,
+    "important": 10.0,
+    "action": 10.0
+   },
+   "interest": 10.0,
+   "events": [
+    {
+     "t": 0.0,
+     "label": "início do teste de qualidade de vídeo",
+     "importance": 5.0
+    },
+    {
+     "t": 11.0,
+     "label": "correção de cores e padrões na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 20.0,
+     "label": "aparecimento de elementos gráficos na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 21.7,
+     "label": "movimento de elementos na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 22.0,
+     "label": "aparecimento de elementos na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 22.3,
+     "label": "movimento de elementos na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 24.3,
+     "label": "movimento de elementos na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 34.0,
+     "label": "final do teste de qualidade de vídeo",
+     "importance": 5.0
+    }
+   ],
+   "climax_abs": 35.66,
+   "setup_abs": 13.36,
+   "climax_error_s": 0.3,
+   "setup_error_s": 1.03
+  },
+  {
+   "video": "loud_game_noise.mp4",
+   "event": "explosão do jogo",
+   "clip_worthy": false,
+   "window": [
+    0.0,
+    30.0
+   ],
+   "wall_s": 52.83,
+   "rss_gb": 3.37,
+   "rss_delta_gb": 0.0,
+   "vram": {
+    "total_bytes": 7456825344,
+    "used_bytes": 2392237757,
+    "name": "Intel(R) UHD Graphics (iGPU)"
+   },
+   "error": "",
+   "device": "GPU",
+   "latency_s": 52.77,
+   "summary": "Teste de qualidade da tela com cores e formas em movimento.",
+   "key_event": "testes de qualidade da tela",
+   "scores": {
+    "funny": 0.0,
+    "unexpected": 0.0,
+    "important": 10.0,
+    "action": 10.0
+   },
+   "interest": 10.0,
+   "events": [
+    {
+     "t": 0.0,
+     "label": "início do teste de qualidade da tela",
+     "importance": 5.0
+    },
+    {
+     "t": 9.3,
+     "label": "cores e formas em movimento",
+     "importance": 5.0
+    },
+    {
+     "t": 11.7,
+     "label": "cores e formas em movimento",
+     "importance": 5.0
+    },
+    {
+     "t": 12.0,
+     "label": "cores e formas em movimento",
+     "importance": 5.0
+    },
+    {
+     "t": 12.3,
+     "label": "cores e formas em movimento",
+     "importance": 5.0
+    },
+    {
+     "t": 13.3,
+     "label": "cores e formas em movimento",
+     "importance": 5.0
+    },
+    {
+     "t": 19.0,
+     "label": "cores e formas em movimento",
+     "importance": 5.0
+    },
+    {
+     "t": 29.0,
+     "label": "fim do teste de qualidade da tela",
+     "importance": 5.0
+    }
+   ],
+   "climax_abs": 19.0,
+   "setup_abs": 0.0,
+   "climax_error_s": 7.0,
+   "setup_error_s": null
+  },
+  {
+   "video": "loud_game_noise.mp4",
+   "event": "tiros do jogo",
+   "clip_worthy": false,
+   "window": [
+    2.0,
+    42.0
+   ],
+   "wall_s": 59.64,
+   "rss_gb": 3.39,
+   "rss_delta_gb": 0.0,
+   "vram": {
+    "total_bytes": 7456825344,
+    "used_bytes": 2392245641,
+    "name": "Intel(R) UHD Graphics (iGPU)"
+   },
+   "error": "",
+   "device": "GPU",
+   "latency_s": 59.59,
+   "summary": "um jogo de vídeo com testes de cores e animações em tela",
+   "key_event": "um jogo de vídeo com testes de cores e animações em tela",
+   "scores": {
+    "funny": 0.0,
+    "unexpected": 0.0,
+    "important": 10.0,
+    "action": 10.0
+   },
+   "interest": 10.0,
+   "events": [
+    {
+     "t": 0.0,
+     "label": "início do jogo",
+     "importance": 5.0
+    },
+    {
+     "t": 12.0,
+     "label": "mudança na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 20.7,
+     "label": "mudança na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 21.7,
+     "label": "mudança na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 22.0,
+     "label": "mudança na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 22.3,
+     "label": "mudança na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 27.3,
+     "label": "mudança na tela",
+     "importance": 5.0
+    },
+    {
+     "t": 39.3,
+     "label": "fim do jogo",
+     "importance": 5.0
+    }
+   ],
+   "climax_abs": 24.3,
+   "setup_abs": 2.0,
+   "climax_error_s": 0.3,
+   "setup_error_s": null
+  },
+  {
+   "video": "loud_game_noise.mp4",
+   "event": "explosão do jogo",
+   "clip_worthy": false,
+   "window": [
+    11.0,
+    44.92
+   ],
+   "wall_s": 41.8,
+   "rss_gb": 3.38,
+   "rss_delta_gb": 0.0,
+   "vram": {
+    "total_bytes": 7456825344,
+    "used_bytes": 2392253525,
+    "name": "Intel(R) UHD Graphics (iGPU)"
+   },
+   "error": "",
+   "device": "GPU",
+   "latency_s": 41.78,
+   "summary": "Teste de vídeo com cores e formas animadas, com uma tela de testes de TV.",
+   "key_event": "teste de vídeo com cores e formas animadas",
+   "scores": {
+    "funny": 0.0,
+    "unexpected": 0.0,
+    "important": 10.0,
+    "action": 10.0
+   },
+   "interest": 10.0,
+   "events": [
+    {
+     "t": 0.0,
+     "label": "início do teste de vídeo",
+     "importance": 10.0
+    },
+    {
+     "t": 10.0,
+     "label": "correção de cores e forma",
+     "importance": 5.0
+    },
+    {
+     "t": 19.7,
+     "label": "forma de cor vermelha e verde",
+     "importance": 5.0
+    },
+    {
+     "t": 21.7,
+     "label": "forma de cor azul e verde",
+     "importance": 5.0
+    },
+    {
+     "t": 22.0,
+     "label": "forma de cor azul e verde",
+     "importance": 5.0
+    },
+    {
+     "t": 22.3,
+     "label": "forma de cor azul e verde",
+     "importance": 5.0
+    },
+    {
+     "t": 24.3,
+     "label": "forma de cor azul e verde",
+     "importance": 5.0
+    },
+    {
+     "t": 33.0,
+     "label": "fim do teste de vídeo",
+     "importance": 10.0
+    }
+   ],
+   "climax_abs": 33.0,
+   "setup_abs": 11.0,
+   "climax_error_s": 0.0,
+   "setup_error_s": null
+  }
+ ],
+ "model_stats": {
+  "loaded": "qwen3-vl-2b-int4",
+  "device": "GPU",
+  "models": {
+   "qwen3-vl-2b-int4": {
+    "key": "qwen3-vl-2b-int4",
+    "device": "GPU",
+    "state": "ready",
+    "load_seconds": 44.42,
+    "calls": 5,
+    "failures": 0,
+    "last_latency_s": 41.775,
+    "avg_latency_s": 54.341,
+    "last_error": "",
+    "fell_back_to_cpu": false
+   }
+  }
+ }
+}

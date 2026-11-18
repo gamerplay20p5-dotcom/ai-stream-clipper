@@ -49,6 +49,8 @@ Para HTTPS pelo Caddy existente, sem alterar a configuração atual sem revisão
 ./infrastructure/scripts/deploy.sh 206
 ```
 
+Baixe o YAMNet (classes acústicas, 20 MB): `./infrastructure/scripts/download-models.sh 206`.
+
 Na primeira transcrição o worker de áudio baixa o modelo Whisper (`small`, cerca de 500 MB) para o volume `asc_models`. Em **Infraestrutura**, o 206 deve aparecer com três workers online.
 
 Limites (somados): 14 CPUs e 21 GiB, de 32 threads e 200 GiB. Ajuste `ASC_WHISPER_CPU_THREADS`, `ASC_CONCURRENCY_AUDIO` e os `cpus` no Compose conforme a carga observada.
@@ -58,7 +60,10 @@ Limites (somados): 14 CPUs e 21 GiB, de 32 threads e 200 GiB. Ajuste `ASC_WHISPE
 ```bash
 ./infrastructure/scripts/preflight.sh 201
 docker compose -p asc -f infrastructure/compose/server-201.yml --env-file .env.201 build
-./infrastructure/scripts/validate-gpu.sh        # precisa passar antes de subir o worker
+sudo mkdir -p /opt/asc/models && sudo chown 10001:10001 /opt/asc/models
+./infrastructure/scripts/download-models.sh 201   # Qwen3-VL-2B + Qwen3-1.7B (~2,9 GB)
+./infrastructure/scripts/validate-gpu.sh          # precisa passar antes de subir o worker
+./infrastructure/scripts/validate-gpu.sh --vlm qwen3-vl-2b-int4   # latência/VRAM reais -> registrar em FASE2.md
 ./infrastructure/scripts/deploy.sh 201
 # no 210, opcional:
 ./infrastructure/scripts/deploy.sh 210 --gpu

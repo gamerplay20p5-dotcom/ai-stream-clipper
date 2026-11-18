@@ -1,0 +1,280 @@
+{
+ "sensitivity": 0.5,
+ "min_score": 55.0,
+ "cpu": "Intel64 Family 6 Model 154 Stepping 3, GenuineIntel",
+ "whisper": "tiny",
+ "vlm": "none",
+ "device": "CPU",
+ "videos": [
+  {
+   "video": "gameplay_event.mp4",
+   "duration": 40.91,
+   "audio": {
+    "features_s": 0.19,
+    "transcription_s": 2.72,
+    "yamnet_s": 0.15,
+    "cpu_pct_avg": 302.9,
+    "cpu_pct_max": 484.3,
+    "rss_gb_max": 0.36,
+    "logical_cpus": 12
+   },
+   "phase1": {
+    "scoring_s": 0.025,
+    "clips": [
+     {
+      "start": 9.91,
+      "end": 35.35,
+      "peak": 24.0,
+      "score": 87.7
+     }
+    ],
+    "tp": 1,
+    "fn": 0,
+    "fp": 0,
+    "events": [
+     {
+      "event": "silêncio, grito e reação verbal",
+      "found": true,
+      "clip": [
+       9.91,
+       35.35
+      ],
+      "coverage": 1.0,
+      "context_error_s": 4.33,
+      "reaction_kept": true,
+      "peak_error_s": 0.04
+     }
+    ],
+    "false_positives": []
+   },
+   "phase2": {
+    "scoring_s": 0.03,
+    "heuristic_vision_s": 3.2,
+    "vlm_s": 0.0,
+    "director_s": 0.0,
+    "cpu_pct_avg": 326.0,
+    "cpu_pct_max": 364.2,
+    "rss_gb_max": 0.46,
+    "logical_cpus": 12,
+    "decisions": [
+     {
+      "decision": {
+       "start_abs": 9.91,
+       "end_abs": 35.35,
+       "peak_abs": 24.0,
+       "score": 88.7,
+       "base_score": 88.7,
+       "keep": true,
+       "mode": "audio_only",
+       "adjustments": []
+      },
+      "layout": "action",
+      "vlm_error": "",
+      "visual": null
+     }
+    ],
+    "clips": [
+     {
+      "start": 9.91,
+      "end": 35.35,
+      "peak": 24.0,
+      "score": 88.7
+     }
+    ],
+    "tp": 1,
+    "fn": 0,
+    "fp": 0,
+    "events": [
+     {
+      "event": "silêncio, grito e reação verbal",
+      "found": true,
+      "clip": [
+       9.91,
+       35.35
+      ],
+      "coverage": 1.0,
+      "context_error_s": 4.33,
+      "reaction_kept": true,
+      "peak_error_s": 0.04
+     }
+    ],
+    "false_positives": []
+   },
+   "total_s": 7.81
+  },
+  {
+   "video": "chase_crash.mp4",
+   "duration": 48.3,
+   "audio": {
+    "features_s": 0.29,
+    "transcription_s": 3.77,
+    "yamnet_s": 0.24,
+    "cpu_pct_avg": 340.4,
+    "cpu_pct_max": 365.6,
+    "rss_gb_max": 0.43,
+    "logical_cpus": 12
+   },
+   "phase1": {
+    "scoring_s": 0.026,
+    "clips": [
+     {
+      "start": 23.99,
+      "end": 47.53,
+      "peak": 37.25,
+      "score": 79.1
+     }
+    ],
+    "tp": 1,
+    "fn": 0,
+    "fp": 0,
+    "events": [
+     {
+      "event": "perseguição termina em batida e o streamer reage",
+      "found": true,
+      "clip": [
+       23.99,
+       47.53
+      ],
+      "coverage": 0.678,
+      "context_error_s": 9.6,
+      "reaction_kept": true,
+      "peak_error_s": 1.89
+     }
+    ],
+    "false_positives": []
+   },
+   "phase2": {
+    "scoring_s": 0.04,
+    "heuristic_vision_s": 2.88,
+    "vlm_s": 0.0,
+    "director_s": 0.0,
+    "cpu_pct_avg": 337.5,
+    "cpu_pct_max": 359.8,
+    "rss_gb_max": 0.48,
+    "logical_cpus": 12,
+    "decisions": [
+     {
+      "decision": {
+       "start_abs": 14.54,
+       "end_abs": 47.53,
+       "peak_abs": 37.25,
+       "score": 80.9,
+       "base_score": 80.9,
+       "keep": true,
+       "mode": "audio_only",
+       "adjustments": [
+        "Início antecipado para incluir o começo da situação (14.8s)"
+       ]
+      },
+      "layout": "action",
+      "vlm_error": "",
+      "visual": null
+     }
+    ],
+    "clips": [
+     {
+      "start": 14.54,
+      "end": 47.53,
+      "peak": 37.25,
+      "score": 80.9
+     }
+    ],
+    "tp": 1,
+    "fn": 0,
+    "fp": 0,
+    "events": [
+     {
+      "event": "perseguição termina em batida e o streamer reage",
+      "found": true,
+      "clip": [
+       14.54,
+       47.53
+      ],
+      "coverage": 1.0,
+      "context_error_s": 0.15,
+      "reaction_kept": true,
+      "peak_error_s": 1.89
+     }
+    ],
+    "false_positives": []
+   },
+   "total_s": 7.35
+  },
+  {
+   "video": "loud_game_noise.mp4",
+   "duration": 44.92,
+   "audio": {
+    "features_s": 0.21,
+    "transcription_s": 3.96,
+    "yamnet_s": 0.22,
+    "cpu_pct_avg": 314.8,
+    "cpu_pct_max": 363.1,
+    "rss_gb_max": 0.44,
+    "logical_cpus": 12
+   },
+   "phase1": {
+    "scoring_s": 0.028,
+    "clips": [
+     {
+      "start": 0.0,
+      "end": 19.04,
+      "peak": 12.0,
+      "score": 61.7
+     },
+     {
+      "start": 19.75,
+      "end": 43.79,
+      "peak": 33.0,
+      "score": 63.3
+     }
+    ],
+    "tp": 0,
+    "fn": 0,
+    "fp": 2,
+    "events": [],
+    "false_positives": [
+     [
+      0.0,
+      19.04,
+      61.7
+     ],
+     [
+      19.75,
+      43.79,
+      63.3
+     ]
+    ]
+   },
+   "phase2": {
+    "scoring_s": 0.03,
+    "heuristic_vision_s": 0.0,
+    "vlm_s": 0.0,
+    "director_s": 0.0,
+    "cpu_pct_avg": null,
+    "cpu_pct_max": null,
+    "rss_gb_max": null,
+    "logical_cpus": 12,
+    "decisions": [],
+    "clips": [],
+    "tp": 0,
+    "fn": 0,
+    "fp": 0,
+    "events": [],
+    "false_positives": []
+   },
+   "total_s": 4.55
+  }
+ ],
+ "summary": {
+  "phase1": {
+   "tp": 2,
+   "fp": 2,
+   "fn": 0
+  },
+  "phase2": {
+   "tp": 2,
+   "fp": 0,
+   "fn": 0
+  }
+ }
+}

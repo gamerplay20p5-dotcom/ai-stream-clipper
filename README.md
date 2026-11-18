@@ -11,6 +11,19 @@ O foco inicial é GTA V / GTA RP, mas nada no código depende do jogo.
 
 ## Estado atual
 
+**Versão 0.2.0 (Fase 2: inteligência multimodal).** O relatório completo, com números medidos e pendências, está em [docs/FASE2.md](docs/FASE2.md).
+
+| Fase 2 | Situação |
+|---|---|
+| Modelo multimodal real (Qwen3-VL-2B INT4, OpenVINO) no pipeline | **Validado localmente** em CPU e iGPU Intel; Arc A750 pendente |
+| Diretor automático (fala + som + visão decidem início, fim e se o corte fica) | **Testado**; benchmark: 0 falsos positivos (Fase 1: 2), contexto da perseguição de 68% para 100% |
+| Classes acústicas (YAMNet) e regra "volume não é emoção" | **Testado** |
+| Plano de edição executado pelo FFmpeg (reenquadramento, zoom, fades, loudness) | **Testado** |
+| Fallback sem worker de IA | **Testado** (o diretor roda na API) |
+| Painel: análise, modelos, reanálise | Implementado e conferido |
+
+Fase 1:
+
 | Item | Situação |
 |---|---|
 | Pipeline ponta a ponta com vídeo de teste controlado | **Funcionando e testado** (`pytest -m e2e`) |
@@ -67,8 +80,13 @@ python -m clipper worker --roles monitor,capture,audio,scoring,vision,render &
 
 ```bash
 cd backend
-python -m pytest -q              # 51 testes, incluindo o ponta a ponta (~35 s)
-python -m pytest -q -m "not e2e" # só unitários (~8 s)
+python -m pytest -q -m "not models"  # 77 testes, incluindo o ponta a ponta (~2 min)
+python -m pytest -q -m "not e2e and not models"   # unitários (~13 s)
+ASC_MODELS_DIR=../data/models python -m pytest -q -m models   # inferência real (VLM, LLM, YAMNet)
+
+# benchmarks (Fase 1 x Fase 2) nos vídeos anotados
+python -m clipper.ai.download yamnet qwen3-vl-2b-int4 qwen3-1.7b-int4
+python -m clipper.bench.pipeline_bench --vlm qwen3-vl-2b-int4 --device CPU --render --out bench.json
 ```
 
 ## Implantação

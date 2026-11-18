@@ -53,7 +53,7 @@ services:
       options: { max-size: "20m", max-file: "5" }
 
   api:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.0}
     build: { context: ../.., dockerfile: infrastructure/docker/app.Dockerfile }
     container_name: asc-api
     <<: *hardening
@@ -83,7 +83,7 @@ services:
         limits: { cpus: "2", memory: 2g }
 
   worker-scoring:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.0}
     container_name: asc-worker-scoring
     <<: *hardening
     command: ["worker", "--roles", "scoring"]
@@ -107,7 +107,7 @@ services:
   # Enable with:  --profile gpu   (after infrastructure/scripts/validate-gpu.sh passes)
   worker-vision:
     profiles: ["gpu"]
-    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.1.0}
+    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.0}
     build: { context: ../.., dockerfile: infrastructure/docker/vision-openvino.Dockerfile,
              args: { OPENVINO_IMAGE: "${ASC_OPENVINO_IMAGE:-openvino/ubuntu24_runtime:2026.2.0}" } }
     container_name: asc-worker-vision
@@ -117,9 +117,11 @@ services:
       <<: *app-env
       ASC_WORKER_ID: "210-vision-gpu"
       ASC_GPU_DEVICE: /dev/dri/renderD128
-      ASC_VISION_PROVIDER: ${ASC_VISION_PROVIDER:-heuristic}
-      ASC_OPENVINO_MODEL_DIR: /models/vlm
+      ASC_VISION_PROVIDER: ${ASC_VISION_PROVIDER:-openvino_vlm}
+      ASC_MODELS_DIR: /models
+      ASC_AI_MODELS: ${ASC_AI_MODELS:-qwen3-vl-2b-int4,qwen3-1.7b-int4}
       ASC_OPENVINO_DEVICE: GPU
+      ASC_AI_ALLOW_CPU_FALLBACK: ${ASC_AI_ALLOW_CPU_FALLBACK:-true}
     devices: ["/dev/dri/renderD128:/dev/dri/renderD128"]
     group_add: ["${ASC_RENDER_GID:?set ASC_RENDER_GID (getent group render)}"]
     volumes: ["asc_work:/data/work", "${ASC_MODELS_DIR:-/opt/asc/models}:/models:ro"]

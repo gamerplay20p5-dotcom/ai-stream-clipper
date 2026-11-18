@@ -33,7 +33,7 @@ x-health: &worker-health
 
 services:
   worker-capture:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.0}
     build: { context: ../.., dockerfile: infrastructure/docker/app.Dockerfile }
     container_name: asc-worker-capture
     <<: *hardening
@@ -57,7 +57,7 @@ services:
         limits: { cpus: "3", memory: 3g }
 
   worker-audio:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.0}
     container_name: asc-worker-audio
     <<: *hardening
     command: ["worker", "--roles", "audio"]
@@ -67,6 +67,7 @@ services:
       ASC_WHISPER_MODEL: ${ASC_WHISPER_MODEL:-small}
       ASC_WHISPER_CPU_THREADS: ${ASC_WHISPER_CPU_THREADS:-4}
       ASC_CONCURRENCY_AUDIO: ${ASC_CONCURRENCY_AUDIO:-2}
+      ASC_YAMNET_ENABLED: "true"  # acoustic classes (laughter/scream vs explosion/gunfire), ONNX on CPU
       HF_HOME: /models/hf
     volumes: ["asc_work:/data/work", "asc_models:/models"]
     networks: [asc_net]
@@ -76,7 +77,7 @@ services:
         limits: { cpus: "8", memory: 12g }
 
   worker-render:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.1.0}
+    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.2.0}
     container_name: asc-worker-render
     <<: *hardening
     command: ["worker", "--roles", "render"]

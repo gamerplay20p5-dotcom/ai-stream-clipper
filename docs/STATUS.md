@@ -63,3 +63,15 @@ Medições adicionais (manuais, nesta máquina):
 1. Implantar no 210 e no 206 com os scripts, rodar os testes contra o PostgreSQL real e acompanhar uma live de GTA RP por algumas horas, calibrando `sensitivity` e `min_score` pelos cortes aprovados e rejeitados.
 2. No 201, rodar `validate-gpu.sh` e o benchmark do VLM, e registrar os números em `VISAO_GPU.md`.
 3. Fase 6: análise de chat (IRC da Twitch, só leitura), classificador de risada, aprendizado de pesos a partir das aprovações e rejeições, e login via Authentik.
+
+---
+
+## Atualização: Fase 2 (versão 0.2.0)
+
+Veja [FASE2.md](FASE2.md). Resumo:
+
+- **77 testes** (sem modelos) + 3 testes de inferência real (`-m models`), todos aprovados nesta máquina.
+- **Modelo multimodal real** (Qwen3-VL-2B INT4) validado em CPU e iGPU Intel, inclusive pelo sistema completo (API + worker). A Arc A750 continua pendente.
+- **Benchmark:** falsos positivos de 2 para 0; contexto da perseguição de 68% para 100%; nenhuma regressão no caso da Fase 1.
+- Corrigida uma condição de corrida da Fase 1 (cortes duplicados com dois jobs de pontuação em paralelo).
+- Os itens pendentes da Fase 1 (PostgreSQL real, Docker, Twitch real) continuam pendentes.

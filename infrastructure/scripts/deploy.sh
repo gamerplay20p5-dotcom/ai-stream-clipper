@@ -23,7 +23,7 @@ if [ "${1:-}" = "--gpu" ] || [ "$SERVER" = 201 ]; then PROFILE=(--profile gpu); 
 
 # shellcheck disable=SC1090
 TAG="$(grep -E '^ASC_IMAGE_TAG=' "$ENV_FILE" | cut -d= -f2 || true)"
-TAG="${TAG:-0.1.0}"
+TAG="${TAG:-0.2.0}"
 echo "== deploying asc $TAG on $SERVER =="
 
 # remember the running tag for rollback

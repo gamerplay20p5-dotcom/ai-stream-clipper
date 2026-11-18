@@ -2,10 +2,10 @@
 # Validate Intel Arc + OpenVINO inside the vision image on 201/210 (no other container touched).
 #
 #   ./infrastructure/scripts/validate-gpu.sh                 # device probe + tiny model compile/infer
-#   ./infrastructure/scripts/validate-gpu.sh --vlm /opt/asc/models/vlm   # + VLM latency on real frames
+#   ./infrastructure/scripts/validate-gpu.sh --vlm qwen3-vl-2b-int4      # + VLM benchmark on the annotated videos
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-IMAGE="ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.1.0}"
+IMAGE="ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.0}"
 GID="$(getent group render | cut -d: -f3)"
 RUN=(docker run --rm --device /dev/dri/renderD128 --group-add "$GID" --security-opt no-new-privileges:true)
 
@@ -36,9 +36,13 @@ for prec in ("f16", "f32"):
 PY
 
 if [ "${1:-}" = "--vlm" ]; then
-  MODEL_DIR="${2:?model dir}"
-  echo "== 3. VLM on GPU: $MODEL_DIR =="
-  "${RUN[@]}" -v "$MODEL_DIR:/models/vlm:ro" -v "$ROOT/tests/fixtures:/fixtures:ro" --entrypoint python3 "$IMAGE" \
-    -m clipper.analysis.vlm_bench /models/vlm /fixtures/gameplay_event.mp4
+  MODEL="${2:-qwen3-vl-2b-int4}"
+  MODELS_DIR="${ASC_MODELS_DIR:-/opt/asc/models}"
+  OUT="bench-$(hostname)-$MODEL.json"
+  echo "== 3. VLM on GPU: $MODEL (results -> $ROOT/$OUT) =="
+  "${RUN[@]}" -v "$MODELS_DIR:/models:ro" -v "$ROOT/tests/fixtures:/fixtures:ro" -v "$ROOT:/out" \
+    -e ASC_MODELS_DIR=/models -e ASC_WORK_DIR=/tmp --entrypoint python3 "$IMAGE" \
+    -m clipper.analysis.vlm_bench --model "$MODEL" --device GPU --annotations /fixtures/annotations.json \
+    --repeat 2 --out "/out/$OUT"
 fi
 echo "== GPU validation finished =="

@@ -6,7 +6,7 @@
 #
 #   docker build -f infrastructure/docker/vision-openvino.Dockerfile \
 #     --build-arg OPENVINO_IMAGE=openvino/ubuntu24_runtime:2026.2.0 \
-#     -t ai-stream-clipper-vision:0.1.0 .
+#     -t ai-stream-clipper-vision:0.2.0 .
 #
 # NOTE: not built or run in CI (no Intel GPU there). Validate with
 #   infrastructure/scripts/validate-gpu.sh
@@ -25,8 +25,10 @@ ENV PATH=/opt/asc/bin:$PATH
 WORKDIR /app
 COPY backend/pyproject.toml ./backend/
 COPY backend/clipper ./backend/clipper
-# openvino itself comes from the base image (system site-packages); genai must match it
-RUN pip install "./backend[vision]" "openvino-genai" "pillow" && rm -rf /root/.cache
+# OpenVINO comes from the base image; GenAI/tokenizers are pinned to the same 2026.2.0 release
+RUN pip install "./backend[vision]" "openvino-genai==2026.2.0.0" "openvino-tokenizers==2026.2.0.0" \
+        "transformers>=4.57,<5" "huggingface_hub>=0.24" "pillow>=10" && rm -rf /root/.cache
+ENV ASC_MODELS_DIR=/models
 
 RUN (getent group 10001 || groupadd --gid 10001 asc) \
  && (id -u 10001 >/dev/null 2>&1 || useradd --uid 10001 --gid 10001 --home /app --shell /usr/sbin/nologin asc) \

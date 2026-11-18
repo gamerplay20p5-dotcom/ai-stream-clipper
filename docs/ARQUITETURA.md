@@ -68,3 +68,26 @@ Nenhum worker acessa o banco ou o sistema de arquivos de outra máquina.
 * Logs JSON estruturados em todos os serviços (`job_id`, `job_type`, `session_id`, `worker`).
 * `/healthz`, `/readyz` e `/metrics` (formato Prometheus, protegível por token).
 * Heartbeat de workers com CPU, memória, disco e frequência da GPU Intel; a página Infraestrutura mostra filas, tempos médios e falhas definitivas com botão de nova tentativa.
+
+## Fase 2: camada de IA
+
+```
+audio worker (206) ── PCM → loudness/centróide/fluxo + YAMNet (ONNX) + tom de voz + Whisper
+                                 │
+scoring ─ candidatos (regra: pico só vira reação com corroboração) ─┐
+                                                                    ▼
+AI worker (210 principal, 201 secundário): visão heurística → VLM (Qwen3-VL-2B INT4, OpenVINO, GPU→CPU)
+         → diretor (evidências, bordas, manter/descartar) → narrativa (Qwen3-1.7B) → plano de edição
+                                                                    │  POST /internal/clips/{id}/analysis
+API: aplica a decisão, guarda análise/plano/metadados; sem worker de IA → diretor "audio_only" na própria API
+render worker (206): executa o plano (layout action/split/gameplay, zoom ≤ 1,35x, fades, loudness linear)
+```
+
+| Decisão | Motivo |
+|---|---|
+| Contratos Pydantic entre modelo, worker, API e renderizador | Resposta de modelo que não valida é descartada, nunca "consertada" com chute |
+| `ModelManager` com um modelo pesado residente | A Arc A750 tem cerca de 8 GB por placa, sem memória compartilhada entre servidores |
+| Fallback GPU→CPU e "modelo indisponível" com motivo | O pipeline nunca trava por causa de um modelo; o painel mostra o fallback |
+| Roteamento por modelo/VRAM/latência (`routing.py`) | 201 e 210 dividem o trabalho sem duplicar modelos; o mais rápido tem prioridade |
+| Plano de edição guardado no corte, com tempos relativos | Reeditar (tempo, legenda, enquadramento) não repete a análise |
+| Diretor puro em Python | Roda no worker e também na API como fallback, com o mesmo comportamento |

@@ -8,7 +8,7 @@ name: asc
 
 services:
   worker-vision:
-    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.1.0}
+    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.0}
     build: { context: ../.., dockerfile: infrastructure/docker/vision-openvino.Dockerfile,
              args: { OPENVINO_IMAGE: "${ASC_OPENVINO_IMAGE:-openvino/ubuntu24_runtime:2026.2.0}" } }
     container_name: asc-worker-vision
@@ -26,9 +26,11 @@ services:
       ASC_WORKER_HOST_LABEL: "201"
       ASC_WORKER_ID: "201-vision-gpu"
       ASC_GPU_DEVICE: /dev/dri/renderD128
-      ASC_VISION_PROVIDER: ${ASC_VISION_PROVIDER:-heuristic}
-      ASC_OPENVINO_MODEL_DIR: /models/vlm
+      ASC_VISION_PROVIDER: ${ASC_VISION_PROVIDER:-openvino_vlm}
+      ASC_MODELS_DIR: /models
+      ASC_AI_MODELS: ${ASC_AI_MODELS:-qwen3-vl-2b-int4,qwen3-1.7b-int4}
       ASC_OPENVINO_DEVICE: GPU
+      ASC_AI_ALLOW_CPU_FALLBACK: ${ASC_AI_ALLOW_CPU_FALLBACK:-true}
       ASC_CONCURRENCY_VISION: "1"
     devices: ["/dev/dri/renderD128:/dev/dri/renderD128"]
     group_add: ["${ASC_RENDER_GID:?set ASC_RENDER_GID (getent group render)}"]

@@ -1,7 +1,7 @@
 # AI Stream Clipper - main image (API + dashboard + CPU workers).
 # One image, many roles: the container command selects api / worker roles.
 #
-#   docker build -f infrastructure/docker/app.Dockerfile -t ai-stream-clipper:0.1.0 .
+#   docker build -f infrastructure/docker/app.Dockerfile -t ai-stream-clipper:0.2.0 .
 
 # ---------- dashboard build ----------
 FROM node:20.18.0-bookworm-slim AS dashboard
@@ -21,7 +21,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ASC_STORAGE_DIR=/data/storage \
     ASC_CAPTURE_DIR=/data/capture \
     ASC_WORK_DIR=/data/work \
-    ASC_TEST_MEDIA_DIR=/data/test-media
+    ASC_TEST_MEDIA_DIR=/data/test-media \
+    ASC_MODELS_DIR=/models
 
 # ffmpeg (libx264, libass), fonts for burned-in captions, tini as PID 1
 RUN apt-get update \

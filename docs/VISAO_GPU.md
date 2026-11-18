@@ -5,11 +5,11 @@
 | Provedor | Onde roda | Estado |
 |---|---|---|
 | `heuristic` (OpenCV) | qualquer CPU | **Validado** nos testes: mudanças de cena, movimento, clarões, detecção de webcam |
-| `openvino_vlm` (OpenVINO GenAI `VLMPipeline`) | GPU Intel (201/210) | **Experimental, não validado**: código pronto, falta medir em hardware real |
+| `openvino_vlm` (OpenVINO GenAI `VLMPipeline`, Qwen3-VL-2B INT4) | GPU Intel (201/210), fallback CPU | **Validado localmente** (CPU + iGPU Intel). Arc A750 pendente |
 
-O `openvino_vlm` roda primeiro a heurística (cena, movimento, webcam) e depois pergunta ao modelo, com até 4 quadros próximos do pico e a transcrição, por uma resposta em JSON (`interest`, `event`, `funny`, `action`). A nota visual final é `0,6 × modelo + 0,4 × heurística`, e a descrição do modelo vira uma explicação no painel.
+O worker de IA sempre roda a heurística (cenas, centróide do movimento, rosto). Com `openvino_vlm`, ele também envia ao modelo até 8 quadros: metade concentrada perto do pico e o resto espalhado pela janela, cada um com o seu timestamp. Junto vão a transcrição e os sinais acústicos. A resposta é um JSON validado (`schemas.VisualAnalysis`); eventos com tempos fora dos quadros mostrados são descartados. O diretor usa essa resposta com ceticismo (ver [FASE2.md](FASE2.md)).
 
-Jobs com `openvino_vlm` são marcados `requires_gpu`. Só workers que registraram `gpu: true` os recebem. Isso exige o render node presente **e** o OpenVINO listando `GPU`, então o 206 nunca recebe esses jobs.
+**Roteamento.** Jobs de visão pedem um modelo. Só workers que o têm instalado e com VRAM suficiente os recebem, e entre eles o de menor latência medida tem prioridade. Se nenhum worker online tiver o modelo, qualquer worker de visão roda a heurística e o corte segue em frente. O 206 não tem papel de visão.
 
 ## Validação obrigatória antes de ativar
 
@@ -17,22 +17,31 @@ Jobs com `openvino_vlm` são marcados `requires_gpu`. Só workers que registrara
 # 1. dispositivo + compilação/inferência FP16/FP32 de um modelo pequeno na GPU
 ./infrastructure/scripts/validate-gpu.sh
 
-# 2. exportar um VLM leve (em uma máquina com internet; não precisa de GPU)
-pip install "optimum-intel[openvino]"
-optimum-cli export openvino --model Qwen/Qwen2-VL-2B-Instruct --weight-format int4 /opt/asc/models/vlm
+# 2. baixar os modelos para /opt/asc/models
+./infrastructure/scripts/download-models.sh 201   # baixa e converte o tokenizer quando preciso
 
 # 3. latência e memória reais no Arc A750 com quadros do vídeo de teste
-./infrastructure/scripts/validate-gpu.sh --vlm /opt/asc/models/vlm
+./infrastructure/scripts/validate-gpu.sh --vlm qwen3-vl-2b-int4
 ```
 
-Candidatos (ordem sugerida de teste, todos suportados pelo `VLMPipeline` segundo a documentação do OpenVINO GenAI; **nenhum foi medido aqui**):
+Modelos no catálogo (`backend/clipper/ai/registry.py`):
 
-1. `Qwen/Qwen2-VL-2B-Instruct` em INT4. Bom em PT-BR, cabe com folga em 8 GB.
-2. `OpenGVLab/InternVL2-1B` em INT4. O mais leve.
-3. `microsoft/Phi-3.5-vision-instruct` em INT4. Maior, testar só se os anteriores forem fracos.
+1. `qwen3-vl-2b-int4`: padrão. Exportação OpenVINO comunitária (helenai), tokenizer convertido no download. **Validado em CPU e iGPU.**
+2. `qwen3-vl-4b-int4`: exportação oficial da Intel (3,1 GB). Testar na A750 se o 2B for fraco.
+3. `internvl2-1b-int4`: oficial, 0,8 GB. Opção leve para CPU.
+
+O Qwen2.5-VL-3B não tem conversão OpenVINO publicada (só a 7B, grande demais para 8 GB com folga).
 
 Registre o resultado de `vlm_bench` (latência por chamada, RSS, resposta) nesta página. Critério sugerido para ativar no painel (Configurações da IA → Provedor): latência abaixo de 10 s por corte e JSON válido em pelo menos 9 de 10 chamadas.
 
 ## Resultados medidos
 
-_Nenhum ainda: preencher após rodar os scripts acima nos servidores 201 e 210._
+Máquina de desenvolvimento, OpenVINO 2026.2.0, Qwen3-VL-2B INT4, 8 quadros de 448 px. Detalhes em [FASE2.md](FASE2.md) e `docs/benchmarks/`.
+
+| Dispositivo | Carga | Latência por corte | Memória |
+|---|---|---|---|
+| CPU i5-12450H | 5 s | 37 – 78 s | RSS ≈ 4,8 – 5,2 GB |
+| iGPU Intel UHD (mesmo plugin GPU da Arc) | 44 s (compilação, uma vez) | 42 – 64 s | VRAM 2,39 GB |
+| **Arc A750 (201 / 210)** | _pendente_ | _pendente_ | _pendente_ |
+
+Observação: nos vídeos sintéticos o modelo descreve corretamente "tela de teste de cores". A qualidade visual só pode ser julgada com trechos reais de gameplay anotados.
