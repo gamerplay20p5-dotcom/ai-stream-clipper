@@ -369,6 +369,7 @@ class PublishApp(Base):
     client_id: Mapped[str] = mapped_column(String(512), default="")
     client_secret_enc: Mapped[str] = mapped_column(Text, default="")
     redirect_uri: Mapped[str] = mapped_column(String(1024), default="")
+    config_id: Mapped[str] = mapped_column(String(64), default="")  # Meta Unified Login configuration (not a secret)
     updated_by: Mapped[str] = mapped_column(String(255), default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

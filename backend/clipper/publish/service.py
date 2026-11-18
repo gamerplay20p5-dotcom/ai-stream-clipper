@@ -57,7 +57,8 @@ def log_event(pub: Publication, event: str, detail: str = "") -> None:
 
 
 # ------------------------------------------------------------------ apps / OAuth
-def save_app(db: Session, platform: str, client_id: str, client_secret: str | None, redirect_uri: str, user: str):
+def save_app(db: Session, platform: str, client_id: str, client_secret: str | None, redirect_uri: str, user: str,
+             config_id: str | None = None):
     provider(platform)
     row = db.get(PublishApp, platform) or PublishApp(platform=platform)
     if client_id.strip():
@@ -67,6 +68,10 @@ def save_app(db: Session, platform: str, client_id: str, client_secret: str | No
     if client_secret:  # empty = keep the stored secret
         row.client_secret_enc = crypto.encrypt(client_secret.strip())
     row.redirect_uri = redirect_uri.strip()
+    if config_id is not None:
+        if config_id.strip() and not re.match(r"^[0-9]{5,30}$", config_id.strip()):
+            raise PublishRefused(["config_id inválido (é um número, copiado da configuração do Login para Empresas)"])
+        row.config_id = config_id.strip()
     row.updated_by = user
     db.merge(row)
     return row
@@ -76,7 +81,7 @@ def get_app(db: Session, platform: str) -> App:
     row = db.get(PublishApp, platform)
     if row is None or not row.client_id or not row.client_secret_enc or not row.redirect_uri:
         raise PublishRefused([f"configure o app OAuth de {PLATFORM_NAME.get(platform, platform)} primeiro"])
-    return App(platform, row.client_id, crypto.decrypt(row.client_secret_enc), row.redirect_uri)
+    return App(platform, row.client_id, crypto.decrypt(row.client_secret_enc), row.redirect_uri, row.config_id or "")
 
 
 def start_oauth(db: Session, platform: str, user: str) -> dict:
@@ -100,10 +105,13 @@ def parse_redirect(text: str) -> tuple[str, str]:
     return code, state
 
 
-def finish_oauth(db: Session, platform: str, code: str, state: str, user: str) -> PublishAccount:
+def finish_oauth(db: Session, platform: str, code: str, state: str, user: str | None) -> PublishAccount:
+    """``user=None``: platform redirect without the panel cookie (SameSite=strict); the single-use
+    state, created by a logged-in admin minutes ago, authenticates the flow and names the admin."""
     st = db.get(OAuthState, state)
     if st is None or st.platform != platform or st.created_at < utcnow() - STATE_TTL:
         raise PublishRefused(["autorização expirada ou inválida: comece de novo em Conectar conta"])
+    user = user or st.created_by
     verifier = crypto.decrypt(st.verifier_enc)
     db.delete(st)  # one-shot (replay protection)
     app = get_app(db, platform)
@@ -113,18 +121,23 @@ def finish_oauth(db: Session, platform: str, code: str, state: str, user: str) -
         info = prov.account_info(tokens)
     except PublishError as exc:
         raise PublishRefused([str(exc)]) from exc
-    acct = db.scalar(select(PublishAccount).where(PublishAccount.platform == platform,
-                                                  PublishAccount.external_id == info["external_id"]))
-    if acct is None:
-        acct = PublishAccount(platform=platform, external_id=info["external_id"])
-        db.add(acct)
-    acct.name, acct.handle, acct.meta = info.get("name", ""), info.get("handle", ""), info.get("meta") or {}
-    acct.tokens_enc = crypto.encrypt(tokens.as_dict())
-    acct.scopes = tokens.scope.split() if " " in tokens.scope else [s for s in tokens.scope.split(",") if s]
-    acct.status, acct.last_error, acct.token_expires_at = "connected", "", tokens.expires_at
-    acct.connected_by, acct.connected_at = user, utcnow()
-    db.flush()
-    return acct
+    first = None
+    for one in [info] + list(info.get("additional") or []):  # Meta can share several accounts at once
+        tk = Tokens(tokens.access_token, tokens.refresh_token, tokens.expires_at, tokens.scope,
+                    {**tokens.extra, **(one.get("token_extra") or {})})
+        acct = db.scalar(select(PublishAccount).where(PublishAccount.platform == platform,
+                                                      PublishAccount.external_id == one["external_id"]))
+        if acct is None:
+            acct = PublishAccount(platform=platform, external_id=one["external_id"])
+            db.add(acct)
+        acct.name, acct.handle, acct.meta = one.get("name", ""), one.get("handle", ""), one.get("meta") or {}
+        acct.tokens_enc = crypto.encrypt(tk.as_dict())
+        acct.scopes = tk.scope.split() if " " in tk.scope else [s for s in tk.scope.split(",") if s]
+        acct.status, acct.last_error, acct.token_expires_at = "connected", "", tk.expires_at
+        acct.connected_by, acct.connected_at = user, utcnow()
+        db.flush()
+        first = first or acct
+    return first
 
 
 def tokens_for(db: Session, acct: PublishAccount) -> Tokens:

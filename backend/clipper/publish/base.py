@@ -28,6 +28,7 @@ class App:
     client_id: str
     client_secret: str
     redirect_uri: str
+    config_id: str = ""  # Meta Unified Login configuration
 
 
 @dataclass

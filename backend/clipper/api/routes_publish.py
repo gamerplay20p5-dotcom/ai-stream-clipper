@@ -25,6 +25,12 @@ def _iso(dt):
     return dt.isoformat() + "Z" if dt else None
 
 
+def _public_base() -> str:
+    import os
+
+    return os.environ.get("ASC_PUBLIC_URL", "https://192.168.1.210:8780").rstrip("/")
+
+
 def _refused(exc: PublishRefused) -> HTTPException:
     return HTTPException(422, {"message": "não é possível publicar", "problems": exc.problems})
 
@@ -63,6 +69,7 @@ def overview(db: Session = Depends(get_db), _: CurrentUser = Depends(current_use
         apps[pf] = {"platform": pf, "name": PLATFORM_NAME[pf], "configured": bool(row and row.client_id and row.client_secret_enc),
                     "client_id": (row.client_id[:12] + "…") if row and row.client_id else "",
                     "has_secret": bool(row and row.client_secret_enc), "redirect_uri": row.redirect_uri if row else "",
+                    "config_id": row.config_id if row else "", "callback_url": f"{_public_base()}/api/publish/oauth/{pf}/callback",
                     "validated": pf == "youtube"}
     accounts = [_account(a) for a in db.scalars(select(PublishAccount).order_by(PublishAccount.platform))]
     rules = [_rule(r) for r in db.scalars(select(PublishRule).order_by(PublishRule.id))]
@@ -76,6 +83,7 @@ class AppIn(BaseModel):
     client_id: str = Field("", max_length=512)  # empty = keep stored client id
     client_secret: str = Field("", max_length=1024)  # empty = keep stored secret
     redirect_uri: str = Field(..., max_length=1024)
+    config_id: str | None = Field(None, max_length=64)  # Instagram Unified Login (Meta)
 
     @field_validator("redirect_uri")
     @classmethod
@@ -91,7 +99,8 @@ def put_app(platform: str, body: AppIn, request: Request, db: Session = Depends(
     if platform not in PLATFORMS:
         raise HTTPException(404, "unknown platform")
     try:
-        service.save_app(db, platform, body.client_id, body.client_secret or None, body.redirect_uri, user.email)
+        service.save_app(db, platform, body.client_id, body.client_secret or None, body.redirect_uri, user.email,
+                         body.config_id)
     except PublishRefused as exc:
         raise _refused(exc) from exc
     audit(db, request, user, "publish.app", platform, {"redirect_uri": body.redirect_uri,
@@ -130,18 +139,29 @@ def oauth_finish(platform: str, body: FinishIn, request: Request, db: Session = 
 
 
 @router.get("/oauth/{platform}/callback")
-def oauth_callback(platform: str, request: Request, db: Session = Depends(get_db),
-                   user: CurrentUser = Depends(require_admin)):
-    """When the registered redirect URI points to this API (e.g. via https://localhost tunnel)."""
+def oauth_callback(platform: str, request: Request, db: Session = Depends(get_db)):
+    """Redirect URI served by this API (e.g. https://192.168.1.210:8780/api/publish/oauth/instagram/callback).
+
+    The panel cookie is SameSite=strict, so a redirect coming from facebook.com/google.com does not
+    carry it. Authentication is the OAuth ``state``: random, single use, 15 minutes, created by a
+    logged-in admin through /oauth/{platform}/start - the standard OAuth CSRF protection."""
+    from urllib.parse import quote
+
+    if platform not in PLATFORMS:
+        raise HTTPException(404, "unknown platform")
     try:
         code, state = service.parse_redirect(str(request.url))
-        acct = service.finish_oauth(db, platform, code, state, user.email)
+        acct = service.finish_oauth(db, platform, code, state, None)
     except PublishRefused as exc:
         db.commit()
-        return RedirectResponse(f"/publicacao?erro={'; '.join(exc.problems)[:300]}")
-    audit(db, request, user, "publish.connect", f"account:{acct.id}", {"platform": platform, "name": acct.name})
+        return RedirectResponse(f"/publicacao?erro={quote('; '.join(exc.problems)[:300])}", status_code=303)
+    from ..models import AuditLog
+
+    db.add(AuditLog(user_email=acct.connected_by, action="publish.connect", target=f"account:{acct.id}",
+                    details={"platform": platform, "name": acct.name, "via": "callback"},
+                    ip=request.client.host if request.client else ""))
     db.commit()
-    return RedirectResponse("/publicacao?conectado=1")
+    return RedirectResponse("/publicacao?conectado=1", status_code=303)
 
 
 @router.delete("/accounts/{aid}")

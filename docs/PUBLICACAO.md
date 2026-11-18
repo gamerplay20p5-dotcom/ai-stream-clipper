@@ -99,10 +99,16 @@ Em modo "Em teste", o Google expira o refresh token em 7 dias: reconecte quando 
   - Escopos: `user.info.basic`, `video.publish`, `video.upload`.
   - Cadastre um Redirect URI `https` e use o mesmo no painel.
   - Até a auditoria do TikTok, só é possível postar como "Só eu".
-- **Instagram:** use um app da Meta com o produto "Instagram API com login do Instagram".
-  - Permissões: `instagram_business_basic`, `instagram_business_content_publish` e `instagram_business_manage_insights`.
-  - A conta precisa ser profissional.
-- **Conexão:** para os dois, o fluxo no painel é o mesmo do YouTube: conectar, autorizar e colar o endereço final.
+- **Instagram (Login Unificado da Meta, apps novos):** em Meta for Developers → app → "API do Instagram (login unificado)":
+  - **URL de redirecionamento:** `https://192.168.1.210:8780/api/publish/oauth/instagram/callback` (HTTPS, exatamente igual).
+  - Copie o **config_id** da configuração (Login do Facebook para Empresas → Configurações).
+  - Copie o **ID do app** e a **chave secreta** em Configurações do app → Básico.
+  - No painel (Publicação → Instagram): ID do app, chave secreta, a mesma URL de redirecionamento e o config_id.
+  - A conta precisa ser profissional e, no modo Desenvolvimento, ter papel no app (testador do Instagram).
+  - O retorno chega direto ao painel, sem colar endereço. O `state` de uso único autentica o retorno, e o cookie do painel continua `SameSite=strict`.
+  - O token é de usuário do sistema da empresa (SUAT). Quando expirar, a conta precisa ser reconectada.
+  - Sem config_id, o sistema usa o fluxo antigo (login do Instagram, com escopos).
+- **Conexão:** no TikTok, o fluxo no painel é o mesmo do YouTube: conectar, autorizar e colar o endereço final. No Instagram com login unificado, o retorno é automático.
 
 ## Direitos de terceiros
 

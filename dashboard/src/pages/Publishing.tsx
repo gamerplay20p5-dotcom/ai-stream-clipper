@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api, type Streamer } from "../api";
 import { Empty, ErrorNote, PageHeader } from "../components/ui";
 
-export type PubApp = { platform: string; name: string; configured: boolean; client_id: string; has_secret: boolean; redirect_uri: string; validated: boolean };
+export type PubApp = { platform: string; name: string; configured: boolean; client_id: string; has_secret: boolean; redirect_uri: string; validated: boolean; config_id: string; callback_url: string };
 export type PubAccount = { id: number; platform: string; platform_name: string; name: string; handle: string; status: string;
   meta: { privacy_options?: string[]; quota_limit?: number }; quota: { day?: string; units?: number }; last_error: string; connected_at: string };
 type Rule = { id: number; account_id: number; streamer_id: number | null; enabled: boolean; mode: string; require_approval: boolean;
@@ -29,12 +29,13 @@ const privacyLabel: Record<string, string> = {
 const redirectHelp: Record<string, string> = {
   youtube: "Google Cloud → APIs e serviços → Credenciais → ID do cliente OAuth do tipo “App para computador”. Use http://127.0.0.1:8765/ como URI de retorno (o servidor está só na rede local; você cola o endereço final aqui).",
   tiktok: "TikTok for Developers → seu app → Login Kit + Content Posting API. Cadastre um Redirect URI https (ex.: https://localhost/asc-callback) e use o mesmo aqui.",
-  instagram: "Meta for Developers → app → Instagram API com login do Instagram. Cadastre o Redirect URI (ex.: https://localhost/asc-callback) e use o mesmo aqui.",
+  instagram: "Meta for Developers → seu app → API do Instagram (login unificado): cadastre como URL de redirecionamento exatamente o endereço do campo abaixo e copie o config_id da configuração (Login do Facebook para Empresas → Configurações). App ID e chave secreta: Configurações do app → Básico.",
 };
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "assim que possível");
 
 export default function Publishing() {
+  const qs = new URLSearchParams(window.location.search);
   const ov = useQuery({ queryKey: ["publish-overview"], queryFn: () => api.get<Overview>("/api/publish/overview"), refetchInterval: 20_000 });
   return (
     <div className="space-y-8">
@@ -43,6 +44,8 @@ export default function Publishing() {
         Envio pelas APIs oficiais. Por padrão tudo exige aprovação humana e sai como <b>privado</b>; cortes de teste manual e
         cortes rejeitados nunca são publicados automaticamente, e só streamers marcados com direito de republicação entram nas regras automáticas.
       </p>
+      {qs.get("conectado") && <p className="rounded-md border border-ok/40 bg-ok/10 px-3 py-2 text-sm text-ok">Conta conectada.</p>}
+      {qs.get("erro") && <ErrorNote error={`Conexão não concluída: ${qs.get("erro")}`} />}
       <ErrorNote error={ov.error} />
       {ov.data && <Apps apps={ov.data.apps} />}
       {ov.data && <Accounts ov={ov.data} />}
@@ -75,9 +78,11 @@ function AppCard({ app }: { app: PubApp }) {
   const qc = useQueryClient();
   const [cid, setCid] = useState("");
   const [secret, setSecret] = useState("");
-  const [uri, setUri] = useState(app.redirect_uri || (app.platform === "youtube" ? "http://127.0.0.1:8765/" : "https://localhost/asc-callback"));
+  const [uri, setUri] = useState(app.redirect_uri || (app.platform === "youtube" ? "http://127.0.0.1:8765/" : app.platform === "instagram" ? app.callback_url : "https://localhost/asc-callback"));
+  const [configId, setConfigId] = useState(app.config_id ?? "");
   const save = useMutation({
-    mutationFn: () => api.put(`/api/publish/apps/${app.platform}`, { client_id: cid || undefined, client_secret: secret, redirect_uri: uri }),
+    mutationFn: () => api.put(`/api/publish/apps/${app.platform}`, { client_id: cid || undefined, client_secret: secret, redirect_uri: uri,
+      ...(app.platform === "instagram" ? { config_id: configId } : {}) }),
     onSuccess: () => { setSecret(""); qc.invalidateQueries({ queryKey: ["publish-overview"] }); },
   });
   return (
@@ -93,6 +98,10 @@ function AppCard({ app }: { app: PubApp }) {
         <input className="field" type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={app.has_secret ? "••••• (manter)" : ""} /></label>
       <label className="mb-2 block"><span className="text-xs text-ink-muted">URI de retorno (igual ao cadastrado no console)</span>
         <input className="field" value={uri} onChange={(e) => setUri(e.target.value)} /></label>
+      {app.platform === "instagram" && (
+        <label className="mb-2 block"><span className="text-xs text-ink-muted">config_id (login unificado; vazio = login do Instagram antigo)</span>
+          <input className="field" value={configId} inputMode="numeric" onChange={(e) => setConfigId(e.target.value.trim())} /></label>
+      )}
       <ErrorNote error={save.error} />
       <button className="btn-quiet" disabled={save.isPending || (!cid && !app.client_id)} onClick={() => save.mutate()}>Salvar</button>
     </div>
