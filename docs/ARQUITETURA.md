@@ -18,7 +18,7 @@
                                              └───────────────────────┘
 ```
 
-* **210**: única máquina que fala com o banco. Expõe a API (painel + `/internal/*`) apenas no IP privado.
+* **210**: única máquina que fala com o banco. Expõe a API no IP privado; o painel e as páginas públicas também ficam em `https://clipper.howto.software` (Caddy do servidor), onde `/internal/*` responde 404.
 * **206**: tudo que é CPU contínuo. Os segmentos ficam no disco do 206; outros workers pedem só o trecho necessário (`/extract?start&end`), com SHA-256 verificado.
 * **201**: worker de visão com limite rígido de 4 CPUs / 8 GiB e peso de CPU baixo, para não competir com os servidores de jogo.
 

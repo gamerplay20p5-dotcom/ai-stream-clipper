@@ -133,10 +133,26 @@ def create_app(run_maintenance: bool = True) -> FastAPI:
     if dash and Path(dash).is_dir():
         root = Path(dash).resolve()
 
+        site = root / "site"
+        public_pages = {"privacidade": "privacidade.html", "termos": "termos.html"}
+
+        def _logged_in(request: Request) -> bool:
+            from ..security import decode_user_token
+            from .deps import COOKIE, jwt_secret
+
+            token = request.cookies.get(COOKIE)
+            return bool(token and decode_user_token(jwt_secret(), token))
+
         @app.get("/{full_path:path}", include_in_schema=False)
-        def spa(full_path: str):
+        def spa(full_path: str, request: Request):
             if full_path.startswith(("api/", "internal/")):
                 raise HTTPException(404)
+            # public pages (no login): presentation, privacy policy, terms. The dashboard itself and
+            # its authentication are unchanged: "/" serves the dashboard when a session exists.
+            page = public_pages.get(full_path.strip("/")) or ("index.html" if not full_path.strip("/") and
+                                                              not _logged_in(request) else None)
+            if page and (site / page).is_file():
+                return FileResponse(site / page, headers={"Cache-Control": "no-cache"})
             candidate = (root / full_path).resolve()
             if full_path and candidate.is_file() and root in candidate.parents:
                 headers = {"Cache-Control": "public, max-age=31536000, immutable"} if "/assets/" in \

@@ -6,7 +6,7 @@ import { Empty, ErrorNote, PageHeader } from "../components/ui";
 
 export type PubApp = { platform: string; name: string; configured: boolean; client_id: string; has_secret: boolean; redirect_uri: string; validated: boolean; config_id: string; callback_url: string; flow: string };
 export type PubAccount = { id: number; platform: string; platform_name: string; name: string; handle: string; status: string;
-  meta: { privacy_options?: string[]; quota_limit?: number }; quota: { day?: string; units?: number }; last_error: string; connected_at: string };
+  meta: { privacy_options?: string[]; upload_limit?: number; units_limit?: number }; quota: { day?: string; uploads?: number; units?: number }; last_error: string; connected_at: string };
 type Rule = { id: number; account_id: number; streamer_id: number | null; enabled: boolean; mode: string; require_approval: boolean;
   min_score: number; privacy: string; allow_public_auto: boolean; max_per_day: number; slots: string[]; timezone: string;
   templates: Record<string, { title?: string; description?: string; hashtags?: string }> };
@@ -41,7 +41,8 @@ export default function Publishing() {
     <div className="space-y-8">
       <PageHeader title="Publicação automática" />
       <p className="max-w-3xl text-sm text-ink-muted">
-        Envio pelas APIs oficiais. Por padrão tudo exige aprovação humana e sai como <b>privado</b>; cortes de teste manual e
+        Envio pelas APIs oficiais. Por padrão as regras automáticas exigem aprovação humana e usam <b>privado</b> (público
+        automático só com ativação explícita); na publicação manual você escolhe Privado, Não listado ou Público. Cortes de teste manual e
         cortes rejeitados nunca são publicados automaticamente, e só streamers marcados com direito de republicação entram nas regras automáticas.
       </p>
       {qs.get("conectado") && <p className="rounded-md border border-ok/40 bg-ok/10 px-3 py-2 text-sm text-ok">Conta conectada.</p>}
@@ -165,7 +166,7 @@ function Accounts({ ov }: { ov: Overview }) {
               <td className="py-1.5">{a.name} <span className="text-ink-muted">{a.handle}</span></td>
               <td>{a.platform_name}</td>
               <td className={a.status === "connected" ? "text-ok" : "text-tally"}>{a.status === "connected" ? "conectada" : a.status}{a.last_error && <span className="block text-[11px] text-ink-faint">{a.last_error}</span>}</td>
-              <td className="text-xs">{a.platform === "youtube" ? `${a.quota?.units ?? 0} / ${a.meta.quota_limit ?? 10000} unidades` : "—"}</td>
+              <td className="text-xs">{a.platform === "youtube" ? `${a.quota?.uploads ?? 0} / ${a.meta.upload_limit ?? 100} envios hoje` : "—"}</td>
               <td className="text-right">{a.status !== "revoked" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => confirm("Desconectar e apagar os tokens desta conta?") && disconnect.mutate(a.id)}><Trash2 className="h-3 w-3" /> Desconectar</button>}</td>
             </tr>
           ))}</tbody>

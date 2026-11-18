@@ -244,7 +244,8 @@ def test_runner_uploads_polls_and_collects_metrics(client, fake_yt, tmp_path, mo
     with session_scope() as db:
         pub = db.get(Publication, pid)
         assert pub.status == "processing" and pub.remote_id == fake_yt.video_id and fake_yt.inits == 1
-        assert db.get(PublishAccount, aid).quota["units"] == youtube.INSERT_COST
+        q = db.get(PublishAccount, aid).quota
+        assert q["uploads"] == 1 and q["units"] == 0  # 1 call in the Video Uploads bucket
     fake_yt.processing = "processed"
     runner.poll_processing()
     runner.refresh_metrics([pid])
@@ -271,3 +272,22 @@ def test_auth_failure_marks_account_and_never_loops(client, monkeypatch, tmp_pat
         with pytest.raises(PublishError):
             service.tokens_for(db, acct)
         assert acct.status == "expired"
+
+
+def test_youtube_quota_uses_the_upload_bucket_and_privacy_is_always_explicit():
+    from clipper.publish import runner as rn
+
+    a = PublishAccount(platform="youtube", external_id="q", meta={"upload_limit": 100},
+                       quota={"day": "2000-01-01", "units": 1601})  # pre-0.4.5 format, old day
+    assert rn._quota(a)["uploads"] == 0 and rn._youtube_quota_ok(a)
+    for _ in range(99):
+        rn._add_quota(a, uploads=1)
+    assert rn._youtube_quota_ok(a)  # 99 used: the 100th is still allowed
+    rn._add_quota(a, uploads=1)
+    assert not rn._youtube_quota_ok(a)
+    rn._add_quota(a, units=5)
+    assert a.quota["units"] == 5 and a.quota["uploads"] == 100
+    for priv in ("private", "unlisted", "public"):  # the API default became public: we always send it
+        assert youtube._metadata(_pub_ns(privacy=priv))["status"]["privacyStatus"] == priv
+    sched = youtube._metadata(_pub_ns(privacy="public", upload_state={"publish_at": "2026-12-01T15:00:00Z"}))
+    assert sched["status"] == {**sched["status"], "privacyStatus": "private", "publishAt": "2026-12-01T15:00:00Z"}

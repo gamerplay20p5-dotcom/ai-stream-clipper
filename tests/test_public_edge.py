@@ -53,3 +53,29 @@ def test_login_rate_limit_is_per_real_client_behind_the_proxy(app, client):
                           headers={"X-Forwarded-For": "198.51.100.77"})
     assert other.status_code == 401
     deps._attempts.clear()
+
+
+def test_public_pages_without_login_and_dashboard_with_session(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from clipper.api.app import create_app
+    from clipper.config import get_settings
+
+    (tmp_path / "site").mkdir()
+    for name in ("index.html", "privacidade.html", "termos.html"):
+        (tmp_path / "site" / name).write_text(f"<html>{name}</html>", encoding="utf-8")
+    (tmp_path / "index.html").write_text("<html>DASHBOARD</html>", encoding="utf-8")
+    monkeypatch.setattr(get_settings(), "dashboard_dir", tmp_path)
+    app = create_app(run_maintenance=False)
+    with TestClient(app) as anon:
+        assert "site/index.html" not in anon.get("/").text and "index.html" in anon.get("/").text
+        assert anon.get("/").text == "<html>index.html</html>"  # presentation for visitors
+        assert anon.get("/privacidade").text == "<html>privacidade.html</html>"
+        assert anon.get("/termos").text == "<html>termos.html</html>"
+        assert anon.get("/login").text == "<html>DASHBOARD</html>"  # login page unchanged
+        assert anon.get("/api/streamers").status_code == 401  # admin API still protected
+        from conftest import ADMIN
+
+        assert anon.post("/api/auth/login", json={"email": ADMIN[0], "password": ADMIN[1]}).status_code == 200
+        assert anon.get("/").text == "<html>DASHBOARD</html>"  # with a session "/" is the dashboard
+        assert anon.get("/privacidade").text == "<html>privacidade.html</html>"

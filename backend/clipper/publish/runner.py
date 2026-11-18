@@ -68,22 +68,33 @@ def _snapshot(pub: Publication) -> SimpleNamespace:
                            remote_status=dict(pub.remote_status or {}))
 
 
+def _quota_day() -> str:
+    from zoneinfo import ZoneInfo
+
+    from . import youtube
+
+    return utcnow().replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(youtube.QUOTA_TZ)).strftime("%Y-%m-%d")
+
+
+def _quota(acct: PublishAccount) -> dict:
+    """Today's usage. Two buckets since June 2026: uploads (videos.insert calls) and other units."""
+    q = dict(acct.quota or {})
+    if q.get("day") != _quota_day() or "uploads" not in q:  # new day, or pre-0.4.5 format
+        q = {"day": _quota_day(), "uploads": 0, "units": 0}
+    return q
+
+
 def _youtube_quota_ok(acct: PublishAccount) -> bool:
     from . import youtube
 
-    day = utcnow().strftime("%Y-%m-%d")
-    q = acct.quota or {}
-    used = q.get("units", 0) if q.get("day") == day else 0
-    limit = int((acct.meta or {}).get("quota_limit", 10000))
-    return used + youtube.INSERT_COST <= limit
+    limit = int((acct.meta or {}).get("upload_limit", youtube.UPLOAD_DAILY_LIMIT))
+    return _quota(acct)["uploads"] < limit
 
 
-def _add_quota(acct: PublishAccount, units: int) -> None:
-    day = utcnow().strftime("%Y-%m-%d")
-    q = dict(acct.quota or {})
-    if q.get("day") != day:
-        q = {"day": day, "units": 0}
-    q["units"] = q.get("units", 0) + units
+def _add_quota(acct: PublishAccount, *, uploads: int = 0, units: int = 0) -> None:
+    q = _quota(acct)
+    q["uploads"] += uploads
+    q["units"] += units
     acct.quota = q
 
 
@@ -126,7 +137,7 @@ def run_publish(job_id: int, pub_id: int) -> None:
             queue.complete(db, job_id, wid, {"deferred": "rate"})
             return
         if acct.platform == "youtube" and not _youtube_quota_ok(acct):
-            _reschedule(pub, "cota diária da YouTube Data API esgotada", 3 * 3600)
+            _reschedule(pub, "limite diário de envios da YouTube Data API atingido (bucket Video Uploads)", 3 * 3600)
             queue.complete(db, job_id, wid, {"deferred": "quota"})
             return
         try:
@@ -178,7 +189,7 @@ def run_publish(job_id: int, pub_id: int) -> None:
             if pub.status == "published":
                 pub.published_at = utcnow()
             if platform == "youtube":
-                _add_quota(acct, prov.INSERT_COST)
+                _add_quota(acct, uploads=1)
             service.log_event(pub, "uploaded", f"id remoto {res.remote_id}")
             queue.complete(db, job_id, wid, {"remote_id": res.remote_id})
             return
@@ -243,7 +254,11 @@ def refresh_metrics(force_ids: list[int] | None = None) -> None:
                 continue
             pub.metrics, pub.metrics_at = m, utcnow()
             if pub.platform == "youtube":
-                _add_quota(acct, 1)
+                _add_quota(acct, units=prov_units(pub.platform))
+
+
+def prov_units(platform: str) -> int:
+    return 1 if platform == "youtube" else 0
 
 
 def tick(state: dict) -> None:

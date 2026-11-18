@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Política de privacidade — AI Stream Clipper</title>
+  <meta name="description" content="Quais dados o AI Stream Clipper trata, por que, como protege os tokens das contas conectadas e como solicitar exclusão.">
+  <link rel="stylesheet" href="/site/site.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9' y='3' width='14' height='26' rx='3' fill='%23F2B33D'/%3E%3Ccircle cx='16' cy='16' r='3.5' fill='%23232428'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="/"><span class="mark" aria-hidden="true"></span>AI Stream Clipper</a>
+      <nav class="nav" aria-label="Páginas">
+        <a href="/">Início</a>
+        <a href="/privacidade" aria-current="page">Privacidade</a>
+        <a href="/termos">Termos</a>
+        <a class="cta" href="/login">Entrar no painel</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap doc">
+    <h1>Política de privacidade</h1>
+    <p class="meta">Vigente desde 18 de novembro de 2026 · Aplicação: AI Stream Clipper (<a href="https://clipper.howto.software/">clipper.howto.software</a>)</p>
+
+    <nav class="toc" aria-label="Sumário">
+      <ol>
+        <li><a href="#responsavel">Responsável e contato</a></li>
+        <li><a href="#dados">Dados tratados</a></li>
+        <li><a href="#google">Contas Google e YouTube</a></li>
+        <li><a href="#outras">Outras contas conectadas</a></li>
+        <li><a href="#finalidade">Finalidades</a></li>
+        <li><a href="#compartilhamento">Compartilhamento</a></li>
+        <li><a href="#seguranca">Segurança dos tokens</a></li>
+        <li><a href="#retencao">Retenção</a></li>
+        <li><a href="#desconectar">Desconexão e revogação</a></li>
+        <li><a href="#exclusao">Pedido de exclusão</a></li>
+        <li><a href="#mudancas">Alterações</a></li>
+      </ol>
+    </nav>
+
+    <h2 id="responsavel">1. Responsável e contato</h2>
+    <p>O AI Stream Clipper é uma ferramenta de uso interno operada na infraestrutura da HowTo.Software.</p>
+    <p>Responsável pelo tratamento: <span class="todo">[a confirmar: nome da pessoa ou empresa responsável]</span>.<br>
+      Contato de privacidade: <span class="todo">[a confirmar: e-mail de contato de privacidade]</span>.</p>
+
+    <h2 id="dados">2. Dados tratados</h2>
+    <table>
+      <thead><tr><th>Dado</th><th>Origem</th><th>Uso</th></tr></thead>
+      <tbody>
+        <tr><td>E-mail e senha (armazenada só como hash Argon2) dos usuários do painel</td><td>criados pelo administrador</td><td>autenticação no painel</td></tr>
+        <tr><td>Registro de auditoria: ação, usuário, data e endereço IP</td><td>uso do painel</td><td>segurança e rastreabilidade de ações administrativas</td></tr>
+        <tr><td>Cookie de sessão (<code>asc_session</code>, HttpOnly, Secure)</td><td>login</td><td>manter a sessão; não há cookies de publicidade ou analytics</td></tr>
+        <tr><td>Áudio, vídeo e transcrição de transmissões ao vivo <strong>autorizadas</strong></td><td>canais cadastrados pelo administrador</td><td>encontrar momentos e produzir os cortes</td></tr>
+        <tr><td>Cortes gerados, títulos, descrições e avaliações editoriais</td><td>produzidos pelo sistema e pelo administrador</td><td>revisão, publicação e melhoria da seleção automática</td></tr>
+        <tr><td>Dados das contas conectadas (ver seções 3 e 4)</td><td>autorização OAuth do proprietário da conta</td><td>publicar os cortes e acompanhar o resultado</td></tr>
+      </tbody>
+    </table>
+    <p>Não coletamos dados de espectadores das lives e não usamos rastreadores de terceiros. O processamento de IA ocorre nos nossos próprios servidores; o conteúdo não é enviado a serviços externos de IA.</p>
+
+    <h2 id="google">3. Contas Google e YouTube</h2>
+    <p>Quando o proprietário de um canal conecta sua conta Google, solicitamos somente:</p>
+    <ul>
+      <li><code>https://www.googleapis.com/auth/youtube.upload</code>: enviar ao canal os cortes que o proprietário aprovou ou agendou.</li>
+      <li><code>https://www.googleapis.com/auth/youtube.readonly</code>: identificar o canal conectado (ID e nome), consultar o processamento e a visibilidade dos vídeos enviados pela aplicação e ler as estatísticas públicas desses vídeos.</li>
+    </ul>
+    <p>Guardamos o ID e o nome do canal, os tokens de acesso e de atualização (cifrados) e, para cada vídeo enviado, seu ID, link, estado e estatísticas. Não lemos e-mails, contatos, arquivos nem outros dados da conta Google. A aplicação nunca edita nem apaga vídeos que ela não enviou.</p>
+    <p>O uso e a transferência, para qualquer outra aplicação, de informações recebidas das APIs do Google seguem a
+      <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener">Política de dados do usuário dos serviços de API do Google</a>, incluindo os requisitos de uso limitado.</p>
+    <p>A aplicação usa os Serviços de API do YouTube. Ao conectar um canal, você também está sujeito aos
+      <a href="https://www.youtube.com/t/terms" rel="noopener">Termos de Serviço do YouTube</a> e à
+      <a href="https://policies.google.com/privacy" rel="noopener">Política de Privacidade do Google</a>.</p>
+
+    <h2 id="outras">4. Outras contas conectadas</h2>
+    <p><strong>Instagram (Meta):</strong> com a autorização do proprietário, recebemos acesso à conta profissional compartilhada (ID e nome de usuário) para publicar Reels, consultar o estado da publicação e, quando autorizado, ler suas métricas.
+      <strong>TikTok:</strong> quando conectado, usamos a identificação do criador e a publicação de vídeos com a privacidade escolhida em cada postagem. Os tokens dessas plataformas recebem a mesma proteção descrita na seção 7.</p>
+
+    <h2 id="finalidade">5. Finalidades</h2>
+    <ul>
+      <li>Produzir cortes verticais de transmissões autorizadas e apresentá-los para revisão.</li>
+      <li>Publicar nas contas conectadas somente o que o proprietário aprovou, agendou ou configurou expressamente.</li>
+      <li>Acompanhar o estado e as métricas oficiais das publicações.</li>
+      <li>Melhorar a seleção automática de momentos com base nas avaliações feitas pelo próprio administrador.</li>
+      <li>Garantir a segurança da aplicação (autenticação, auditoria e prevenção de abuso).</li>
+    </ul>
+    <p>Não usamos dados para publicidade, criação de perfis ou venda.</p>
+
+    <h2 id="compartilhamento">6. Compartilhamento</h2>
+    <p>Não vendemos nem compartilhamos dados pessoais. Os dados só são enviados às plataformas que o próprio proprietário conectou (Google/YouTube, Meta/Instagram e TikTok), exclusivamente para executar as publicações que ele solicitou.</p>
+
+    <h2 id="seguranca">7. Segurança dos tokens e da aplicação</h2>
+    <ul>
+      <li>Tokens OAuth e segredos de aplicativos são cifrados em repouso com AES-256-GCM. Eles nunca são exibidos no painel nem registrados em logs.</li>
+      <li>A autorização usa <em>state</em> aleatório de uso único com validade de 15 minutos (proteção contra CSRF) e, quando a plataforma suporta, PKCE.</li>
+      <li>Todo acesso é feito por HTTPS. O painel exige login, a sessão usa cookie HttpOnly/Secure/SameSite=Strict e as tentativas de login são limitadas por endereço.</li>
+      <li>Os servidores da aplicação ficam em infraestrutura própria. O acesso administrativo é restrito e auditado.</li>
+    </ul>
+
+    <h2 id="retencao">8. Retenção</h2>
+    <p>Prazos atualmente configurados (o administrador pode alterá-los):</p>
+    <table>
+      <tbody>
+        <tr><td>Trechos brutos das lives (buffer de captura)</td><td>cerca de 30 minutos, regravados continuamente</td></tr>
+        <tr><td>Transcrições e dados de análise de sessões encerradas</td><td>30 dias após o fim da sessão</td></tr>
+        <tr><td>Cortes rejeitados</td><td>3 dias</td></tr>
+        <tr><td>Cortes não revisados</td><td>14 dias</td></tr>
+        <tr><td>Cortes aprovados</td><td>até a exclusão pelo administrador</td></tr>
+        <tr><td>Mídia de exemplos de avaliação não revisados</td><td>21 dias (cota máxima de 20 GB)</td></tr>
+        <tr><td>Tokens das contas conectadas</td><td>até a desconexão da conta, quando são apagados</td></tr>
+        <tr><td>Registros de publicação (IDs, links, estados) e auditoria</td><td>mantidos para rastreabilidade; podem ser excluídos a pedido (seção 10)</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="desconectar">9. Desconexão e revogação</h2>
+    <p>No painel, em <strong>Publicação → Contas conectadas → Desconectar</strong>, os tokens da conta são apagados imediatamente e as publicações agendadas são canceladas.</p>
+    <p>Você também pode revogar o acesso diretamente na plataforma:</p>
+    <ul>
+      <li>Google: <a href="https://myaccount.google.com/permissions" rel="noopener">myaccount.google.com/permissions</a></li>
+      <li>Instagram/Meta: Configurações → Apps e sites (ou Integrações comerciais)</li>
+      <li>TikTok: Configurações → Segurança → Apps com permissão</li>
+    </ul>
+
+    <h2 id="exclusao">10. Como solicitar a exclusão de dados</h2>
+    <p>Envie o pedido para <span class="todo">[a confirmar: e-mail de contato de privacidade]</span>, identificando a conta ou o canal. Excluiremos os tokens, os dados da conta conectada e os registros associados, exceto o que precisar ser mantido por obrigação legal. O pedido é respondido em até <span class="todo">[a confirmar: prazo de resposta]</span>.</p>
+
+    <h2 id="mudancas">11. Alterações</h2>
+    <p>Mudanças nesta política serão publicadas nesta página, com a data de vigência atualizada.</p>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <span>© AI Stream Clipper · clipper.howto.software</span>
+      <span><a href="/">Início</a> · <a href="/termos">Termos de uso</a> · <a href="/login">Painel</a></span>
+    </div>
+  </footer>
+</body>
+</html>

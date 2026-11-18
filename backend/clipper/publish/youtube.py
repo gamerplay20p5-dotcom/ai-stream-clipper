@@ -1,11 +1,16 @@
 """YouTube Data API v3: OAuth 2.0 (PKCE), resumable upload of vertical Shorts, status, statistics.
 
 * scopes: youtube.upload (insert) + youtube.readonly (channel, status, statistics);
-* videos.insert costs 1600 quota units (default project quota: 10 000/day) - tracked per account;
+* quota (revision history, June/Nov 2026): videos.insert costs 1 unit in its own "Video Uploads"
+  bucket - default 100 calls/day; every other method shares 10 000 units/day. Both reset at
+  midnight Pacific Time. More uploads require the YouTube API Services audit;
 * resumable protocol: the session URI is persisted before the first byte, so after a timeout
   or restart the upload is RESUMED (or, if it had completed, the created video is recovered
   from the session) - a clip is never inserted twice;
-* projects not yet verified by Google can only upload PRIVATE videos (Google policy).
+* since 2 Nov 2026 uploads from unverified API projects are NOT restricted to private any more.
+  The request ALWAYS carries an explicit privacyStatus (the API default became public); some
+  uploads may still end private because of the creator's account settings - the real status is
+  read back from the API.
 """
 
 from __future__ import annotations
@@ -27,7 +32,10 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 API = "https://www.googleapis.com/youtube/v3"
 UPLOAD = "https://www.googleapis.com/upload/youtube/v3/videos"
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload", "https://www.googleapis.com/auth/youtube.readonly"]
-INSERT_COST, LIST_COST = 1600, 1
+UPLOAD_DAILY_LIMIT = 100  # videos.insert calls/day (Video Uploads bucket, default allocation)
+UNITS_DAILY_LIMIT = 10000  # all other methods
+LIST_COST = 1
+QUOTA_TZ = "America/Los_Angeles"  # quotas reset at midnight Pacific Time
 CHUNK = 8 * 1024 * 1024  # multiple of 256 KiB, as the protocol requires
 PRIVACY = ("private", "unlisted", "public")
 platform = "youtube"
@@ -86,7 +94,8 @@ def account_info(tokens: Tokens) -> dict:
     ch = items[0]
     sn = ch.get("snippet") or {}
     return {"external_id": ch["id"], "name": sn.get("title", ""), "handle": sn.get("customUrl", ""),
-            "meta": {"privacy_options": list(PRIVACY), "quota_limit": 10000, "insert_cost": INSERT_COST}}
+            "meta": {"privacy_options": list(PRIVACY), "upload_limit": UPLOAD_DAILY_LIMIT,
+                     "units_limit": UNITS_DAILY_LIMIT}}
 
 
 def _metadata(pub) -> dict:

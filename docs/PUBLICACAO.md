@@ -4,7 +4,7 @@
 
 | Plataforma | Código | Validação real | Observação |
 |---|---|---|---|
-| YouTube Shorts | Pronto: OAuth com PKCE, upload retomável, metadados, privacidade, agendamento (`publishAt`), status e estatísticas | **Validado em 18/11/2026**: vídeo `-6KAO94bZUg` privado no canal de teste, `processed` segundo a API (detalhes abaixo) | Projetos do Google não verificados só conseguem enviar vídeos **privados** (política do Google) |
+| YouTube Shorts | Pronto: OAuth com PKCE, upload retomável, metadados, privacidade, agendamento (`publishAt`), status e estatísticas | **Validado em 18/11/2026**: vídeo `-6KAO94bZUg` privado no canal de teste, `processed` segundo a API (detalhes abaixo) | Desde 02/11/2026, projetos não verificados **podem** enviar vídeos públicos ([histórico de revisões](https://developers.google.com/youtube/data/revision_history)). O sistema sempre envia a privacidade escolhida. |
 | TikTok | Pronto: Content Posting API (Direct Post, envio de arquivo), `creator_info`, consulta de status | Não validado: exige um app do TikTok com os escopos `video.publish` e `video.upload` | Apps sem auditoria só postam `SELF_ONLY`; **somente manual** (consentimento a cada postagem) |
 | Instagram Reels | Pronto: Instagram API com login do Instagram, envio retomável pelo `rupload` (sem URL pública), publicação e insights | Não validado: exige app da Meta e conta profissional | Reels são sempre públicos; postagem automática exige ativação explícita de "público automático" |
 
@@ -21,7 +21,7 @@
 - **Gravado no PostgreSQL:**
   - publicação `published`, com 1 tentativa;
   - job `publish` `done`;
-  - cota do dia em 1600 unidades;
+  - cota do dia registrada (no modelo da época: 1600 unidades; ver cota atual abaixo);
   - token guardado cifrado (o texto puro não aparece no banco).
 - **Validado em produção:**
   - pedir de novo o mesmo corte devolve a mesma publicação, sem novo envio;
@@ -65,7 +65,7 @@
 - **Limites:**
   - máximo de publicações por dia por regra;
   - pelo menos 60 s entre envios na mesma conta;
-  - cota da YouTube Data API controlada por conta (`videos.insert` custa 1600 das 10 000 unidades diárias);
+  - cota da YouTube Data API controlada por conta, no modelo vigente: `videos.insert` custa 1 unidade no bucket próprio **Video Uploads**, com limite padrão de **100 envios por dia**; os demais métodos usam outro bucket, de 10 000 unidades por dia. A virada do dia é à meia-noite do horário do Pacífico, e mais cota exige a auditoria (*Audit and Quota Extension Form*);
   - respeito ao `Retry-After` e ao limite de 24 h do Instagram.
 - **Erros:**
   - token revogado: a conta vai para "expirada" e a publicação falha, sem repetir em laço;
@@ -91,7 +91,9 @@
    - copie o endereço completo da barra (com `?code=`), cole no painel e clique em **Concluir conexão**.
 6. **Primeiro envio de teste:** na Central de cortes, abra um corte pronto, depois **Publicar nas redes** → conta → **Privado** → **Publicar agora**. Acompanhe em Publicação → Calendário.
 
-Em modo "Em teste", o Google expira o refresh token em 7 dias: reconecte quando o painel mostrar "expirada". Para uso contínuo e vídeos públicos, o projeto precisa passar pela verificação do Google e pela auditoria de conformidade da YouTube API.
+Em modo "Em teste", o Google expira o refresh token em 7 dias: reconecte quando o painel mostrar "expirada". Para tirar o app do modo de teste, siga [VERIFICACAO_GOOGLE.md](VERIFICACAO_GOOGLE.md). Vídeos públicos já são aceitos pela API sem auditoria; a auditoria só é necessária para passar de 100 envios por dia.
+
+*EN: since 2 Nov 2026 unverified API projects are no longer restricted to private uploads; `videos.insert` costs 1 unit in its own Video Uploads bucket (default 100 calls/day). The publisher always sends an explicit privacyStatus.*
 
 ## TikTok e Instagram (quando houver apps aprovados)
 
