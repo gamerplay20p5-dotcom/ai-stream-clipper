@@ -4,9 +4,30 @@
 
 | Plataforma | Código | Validação real | Observação |
 |---|---|---|---|
-| YouTube Shorts | Pronto: OAuth com PKCE, upload retomável, metadados, privacidade, agendamento (`publishAt`), status e estatísticas | **Pendente** até o primeiro upload privado de teste (só depois disso a integração conta como concluída) | Projetos do Google não verificados só conseguem enviar vídeos **privados** (política do Google) |
+| YouTube Shorts | Pronto: OAuth com PKCE, upload retomável, metadados, privacidade, agendamento (`publishAt`), status e estatísticas | **Validado em 18/11/2026**: vídeo `-6KAO94bZUg` privado no canal de teste, `processed` segundo a API (detalhes abaixo) | Projetos do Google não verificados só conseguem enviar vídeos **privados** (política do Google) |
 | TikTok | Pronto: Content Posting API (Direct Post, envio de arquivo), `creator_info`, consulta de status | Não validado: exige um app do TikTok com os escopos `video.publish` e `video.upload` | Apps sem auditoria só postam `SELF_ONLY`; **somente manual** (consentimento a cada postagem) |
 | Instagram Reels | Pronto: Instagram API com login do Instagram, envio retomável pelo `rupload` (sem URL pública), publicação e insights | Não validado: exige app da Meta e conta profissional | Reels são sempre públicos; postagem automática exige ativação explícita de "público automático" |
+
+## Primeiro envio real (v0.4.0, 18/11/2026)
+
+- **O que foi enviado:** o corte 9, um trecho de 40 s do vídeo sintético próprio `chase_crash`, sem conteúdo de terceiros. Publicação manual, como **privado**.
+- **Resultado:** o vídeo `-6KAO94bZUg` (https://youtube.com/shorts/-6KAO94bZUg) foi criado no canal conectado.
+- **Tempos:** o upload levou cerca de 2 s (10,6 MB) e o processamento no YouTube cerca de 37 s.
+- **Confirmação independente pela API** (`videos.list`):
+  - `uploadStatus=processed`
+  - `privacyStatus=private`
+  - `processingStatus=succeeded`
+  - duração `PT41S`
+- **Gravado no PostgreSQL:**
+  - publicação `published`, com 1 tentativa;
+  - job `publish` `done`;
+  - cota do dia em 1600 unidades;
+  - token guardado cifrado (o texto puro não aparece no banco).
+- **Validado em produção:**
+  - pedir de novo o mesmo corte devolve a mesma publicação, sem novo envio;
+  - o reenvio de uma publicação já concluída é recusado (409);
+  - um corte rejeitado é recusado com a explicação;
+  - um `state` OAuth forjado é recusado.
 
 ## Arquitetura
 
