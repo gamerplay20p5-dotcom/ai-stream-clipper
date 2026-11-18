@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Forced command for the 206 -> 210/201 image transfer key (asc user only).
+#
+# authorized_keys entry (in /home/asc/.ssh/authorized_keys of the DESTINATION):
+#   from="192.168.1.206",restrict,command="/home/asc/bin/asc-receive" ssh-ed25519 AAAA... asc-206-transfer
+#
+# The key can do exactly one thing: stream one project image archive into ~/images,
+# which is accepted only if its SHA-256 matches the value announced by the sender.
+# No shell, no pty, no forwarding (restrict), no other file names or directories.
+set -euo pipefail
+read -r verb name sha extra <<< "${SSH_ORIGINAL_COMMAND:-}"
+[ "$verb" = "receive" ] && [ -z "${extra:-}" ] || { echo "asc-receive: only 'receive NAME SHA256'" >&2; exit 2; }
+[[ "$name" =~ ^ai-stream-clipper(-vision)?_[0-9A-Za-z.-]{1,40}\.tar\.gz$ ]] || { echo "asc-receive: bad name" >&2; exit 2; }
+[[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "asc-receive: bad sha256" >&2; exit 2; }
+dir="$HOME/images"
+mkdir -p "$dir"
+tmp="$dir/.incoming.$$"
+trap 'rm -f "$tmp"' EXIT
+head -c 4000000000 > "$tmp"          # hard cap: 4 GB per archive
+got="$(sha256sum "$tmp" | cut -d' ' -f1)"
+[ "$got" = "$sha" ] || { echo "asc-receive: sha256 mismatch ($got)" >&2; exit 3; }
+mv -f "$tmp" "$dir/$name"
+trap - EXIT
+echo "ok $name $(stat -c %s "$dir/$name") bytes sha256=$sha"

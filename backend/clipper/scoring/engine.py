@@ -418,7 +418,7 @@ def score_timeline(tl: dict) -> dict:
 
     limit = t_to if final else t_to - settings.post_context_seconds
     if limit <= scored_until:
-        return {"events": [], "candidates": [], "scored_until": scored_until}
+        return {"events": [], "candidates": [], "rejected": [], "scored_until": scored_until}
 
     words = [Word(float(w[0]), float(w[1]), str(w[2]), float(w[3]) if len(w) > 3 else 1.0)
              for w in tl.get("words", [])]
@@ -431,21 +431,34 @@ def score_timeline(tl: dict) -> dict:
 
     existing = list(tl.get("clips", []))
     candidates: list[Candidate] = []
+    rejected: list[dict] = []  # every moment that did NOT become a clip, with the reason (diagnostics)
+
+    def reject(group, reason: str, score: float | None = None) -> None:
+        rejected.append({"peak": round(_peak_of(group), 2), "reason": reason,
+                         "score": None if score is None else round(score, 1),
+                         "kinds": sorted({e.kind for e in group})})
+
     for group in cluster(events):
         kinds = {e.kind for e in group}
         if not (kinds & ACOUSTIC) and sum(e.strength for e in group if e.kind in ("keyword", "laughter")) < 4.0:
-            continue  # text-only moment that is not strong enough -> ordinary conversation
+            reject(group, "text_only")  # ordinary conversation: words without acoustic reaction
+            continue
         cand = _build_candidate(group, grid, base, spread, words, settings, data_start, t_to, existing)
         if cand is None:
+            reject(group, "too_short")
             continue
         if cand.score < settings.min_score:
+            reject(group, "below_min_score", cand.score)
             continue
         if any(_overlap(cand.start, cand.end, c["start"], c["end"]) >= settings.dedup_overlap for c in existing):
+            reject(group, "duplicate", cand.score)
             continue
         if any(_jaccard(cand.transcript, c.get("transcript", "")) >= 0.6 for c in existing if c.get("transcript")):
+            reject(group, "duplicate", cand.score)
             continue
         recent = [c for c in existing if cand.peak - c.get("peak", c["start"]) < 3600]
         if len(recent) >= settings.max_clips_per_hour and cand.score < min(100, settings.min_score + 20):
+            reject(group, "rate_limit", cand.score)
             continue
         meta = suggest_metadata(cand.transcript, cand.kinds, tl.get("streamer") or {}, settings.language)
         cand.title, cand.title_suggestions = meta["title"], meta["suggestions"]
@@ -457,6 +470,8 @@ def score_timeline(tl: dict) -> dict:
     return {
         "events": [asdict(e) for e in events],
         "candidates": [asdict(c) for c in candidates],
+        "rejected": rejected,
+        "min_score": settings.min_score,
         "scored_until": round(limit, 3),
     }
 

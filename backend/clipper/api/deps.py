@@ -88,13 +88,17 @@ _attempts: dict[str, deque] = defaultdict(deque)
 
 
 def check_login_rate(ip: str, limit: int = 10, window: float = 300.0) -> None:
+    """Block an IP after ``limit`` FAILED logins within ``window`` seconds."""
     now = time.monotonic()
     q = _attempts[ip]
     while q and now - q[0] > window:
         q.popleft()
     if len(q) >= limit:
         raise HTTPException(429, "too many login attempts, try again later")
-    q.append(now)
+
+
+def record_login_failure(ip: str) -> None:
+    _attempts[ip].append(time.monotonic())
 
 
 # --- worker auth -------------------------------------------------------------

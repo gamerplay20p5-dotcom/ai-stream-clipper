@@ -30,12 +30,13 @@ KNOWN_HOSTS = {
 
 @router.get("/stats")
 def stats(db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
-    clip_counts = dict(db.execute(select(Clip.status, func.count()).group_by(Clip.status)).all())
+    real = Clip.is_test.is_(False)  # TESTE MANUAL clips never count in quality metrics
+    clip_counts = dict(db.execute(select(Clip.status, func.count()).where(real).group_by(Clip.status)).all())
     seg_seconds = db.scalar(select(func.coalesce(func.sum(Segment.duration), 0.0))
                             .where(Segment.analysis_state == "done")) or 0.0
     since = utcnow() - timedelta(hours=24)
     recent = db.execute(
-        select(Clip.created_at).where(Clip.created_at >= since)
+        select(Clip.created_at).where(Clip.created_at >= since, real)
     ).all()
     buckets = [0] * 24
     now = utcnow()
@@ -46,7 +47,8 @@ def stats(db: Session = Depends(get_db), _: CurrentUser = Depends(current_user))
     pending = db.scalar(select(func.count()).select_from(Job).where(Job.status.in_(("queued", "running")),
                                                                     Job.type != "capture")) or 0
     workers = db.scalars(select(Worker)).all()
-    top = db.scalars(select(Clip).where(Clip.status.in_(("ready", "approved"))).order_by(Clip.score.desc()).limit(5)).all()
+    top = db.scalars(select(Clip).where(Clip.status.in_(("ready", "approved")), real)
+                     .order_by(Clip.score.desc()).limit(5)).all()
     streamers = {s.id: s for s in db.scalars(select(Streamer))}
     return {
         "streamers_total": len(streamers),
@@ -141,6 +143,24 @@ def ai_models(db: Session = Depends(get_db), _: CurrentUser = Depends(current_us
         out.append({"key": key, "kind": spec.kind, "family": spec.family, "size_gb": spec.approx_size_gb,
                     "min_vram_gb": spec.min_vram_gb, "hf_repo": spec.hf_repo, "notes": spec.notes, "workers": hosts})
     return out
+
+
+@router.get("/diagnostics")
+def diagnostics(db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+    from .. import diagnostics as diag
+
+    return diag.report(db)
+
+
+@router.post("/diagnostics/streamers/{sid}/retry-failed")
+def retry_failed(sid: int, request: Request, db: Session = Depends(get_db),
+                 user: CurrentUser = Depends(require_admin)):
+    from .. import diagnostics as diag
+
+    ids = diag.retry_failed(db, sid)
+    audit(db, request, user, "diagnostics.retry_failed", f"streamer:{sid}", {"jobs": ids})
+    db.commit()
+    return {"retried": ids}
 
 
 @router.get("/jobs")

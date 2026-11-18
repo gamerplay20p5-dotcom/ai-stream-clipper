@@ -73,6 +73,8 @@ class StreamSession(Base):
     scored_until: Mapped[float] = mapped_column(Float, default=0.0)
     segment_count: Mapped[int] = mapped_column(Integer, default=0)
     stop_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    # scoring diagnostics: rejected moments by reason, best rejected score, last scoring time
+    stats: Mapped[dict] = mapped_column(JSON, default=dict)
 
     streamer: Mapped[Streamer] = relationship(back_populates="sessions")
 
@@ -167,6 +169,7 @@ class Clip(Base):
     edit_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # EditPlan
     analysis_meta: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # models, devices, timings, fallback
     analysis_runs: Mapped[int] = mapped_column(Integer, default=0)
+    is_test: Mapped[bool] = mapped_column(Boolean, default=False, index=True)  # TESTE MANUAL: excluded from metrics
     heuristic_start: Mapped[float | None] = mapped_column(Float, nullable=True)  # Phase-1 bounds, kept for comparison
     heuristic_end: Mapped[float | None] = mapped_column(Float, nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=0)

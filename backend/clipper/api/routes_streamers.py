@@ -155,6 +155,29 @@ def delete_streamer(sid: int, request: Request, db: Session = Depends(get_db),
     return {"ok": True}
 
 
+class TestClipIn(BaseModel):
+    mode: str = Field(pattern="^(last30|last60|last90|custom)$")
+    start: float | None = Field(None, ge=0)
+    end: float | None = Field(None, ge=0)
+
+
+@router.post("/streamers/{sid}/test-clip", status_code=201)
+def test_clip(sid: int, body: TestClipIn, request: Request, db: Session = Depends(get_db),
+              user: CurrentUser = Depends(require_admin)):
+    """TESTE MANUAL: real pipeline on a buffer range; scoring never blocks it."""
+    from .. import diagnostics as diag
+    from . import serializers as s2
+
+    try:
+        clip = diag.create_test_clip(db, sid, body.mode, body.start, body.end, user.email)
+    except diag.TestClipError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    audit(db, request, user, "clip.test_create", f"clip:{clip.id}", {"mode": body.mode, "start": clip.start,
+                                                                       "end": clip.end})
+    db.commit()
+    return s2.clip(clip, db.get(Streamer, sid))
+
+
 @router.get("/sessions")
 def list_sessions(status: str | None = None, limit: int = 50, db: Session = Depends(get_db),
                   _: CurrentUser = Depends(current_user)):

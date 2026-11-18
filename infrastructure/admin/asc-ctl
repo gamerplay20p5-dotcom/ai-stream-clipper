@@ -32,7 +32,7 @@ import sys
 import tarfile
 import tempfile
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 CONF_FILE = "/etc/asc/asc-ctl.conf"
 ENV_FILE = "/etc/asc/asc.env"
 LOG_FILE = "/var/log/asc-ctl.log"
@@ -102,6 +102,7 @@ def audit(argv: list[str], result: str) -> None:
 
 
 def run(cmd: list[str], **kw) -> int:
+    sys.stdout.flush()  # keep our headers in order with the child's output
     return subprocess.run(cmd, **kw).returncode
 
 
@@ -478,20 +479,29 @@ def cmd_tls_init(conf: dict, args: list[str]) -> int:
     os.makedirs(TLS_DIR, mode=0o755, exist_ok=True)
     os.makedirs(CA_DIR, mode=0o700, exist_ok=True)
     ca_key, ca_crt = os.path.join(CA_DIR, "ca.key"), os.path.join(TLS_DIR, "ca.crt")
-    if os.path.exists(ca_key) and "--force" not in args:
-        raise Denied("CA already exists (use --force to issue a new server certificate with the same CA)")
-    if not os.path.exists(ca_key):
+    new_ca = "--new-ca" in args
+    if os.path.exists(ca_key) and not (new_ca or "--force" in args):
+        raise Denied("CA already exists (--force: new server certificate, same CA; --new-ca: new CA + certificate)")
+    if new_ca or not os.path.exists(ca_key):
+        # explicit CA extensions: strict verifiers (e.g. Python 3.13+) require keyUsage on the CA
         run(["openssl", "req", "-x509", "-newkey", "rsa:3072", "-nodes", "-days", "3650", "-keyout", ca_key,
-             "-out", ca_crt, "-subj", "/CN=AI Stream Clipper CA/O=asc"], check=True)
+             "-out", ca_crt, "-subj", "/CN=AI Stream Clipper CA/O=asc",
+             "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
+             "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+             "-addext", "subjectKeyIdentifier=hash"], check=True)
         os.chmod(ca_key, 0o600)
+    stale = os.path.join(TLS_DIR, "ca.srl")
+    if os.path.exists(stale):
+        os.unlink(stale)
     key, csr, crt = (os.path.join(TLS_DIR, n) for n in ("server.key", "server.csr", "server.crt"))
     ext = os.path.join(CA_DIR, "server.ext")
     with open(ext, "w") as f:
         f.write(f"subjectAltName=IP:{conf['LAN_IP']},IP:127.0.0.1,DNS:api,DNS:asc-api,DNS:localhost\n"
-                "extendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment\n")
+                "extendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature,keyEncipherment\n"
+                "basicConstraints=critical,CA:FALSE\nauthorityKeyIdentifier=keyid,issuer\n")
     subprocess.run(["openssl", "req", "-newkey", "rsa:3072", "-nodes", "-keyout", key, "-out", csr,
                     "-subj", "/CN=asc-api/O=asc"], check=True)
-    subprocess.run(["openssl", "x509", "-req", "-in", csr, "-CA", ca_crt, "-CAkey", ca_key, "-CAcreateserial",
+    subprocess.run(["openssl", "x509", "-req", "-in", csr, "-CA", ca_crt, "-CAkey", ca_key, "-CAcreateserial", "-CAserial", os.path.join(CA_DIR, "ca.srl"),
                     "-days", "825", "-sha256", "-extfile", ext, "-out", crt], check=True)
     os.unlink(csr)
     os.chown(key, 0, CONTAINER_UID)

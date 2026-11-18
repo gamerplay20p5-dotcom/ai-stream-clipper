@@ -358,6 +358,7 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
     if swapped != 1:
         raise Conflict("session was scored concurrently")
     db.refresh(sess)
+    _record_scoring_stats(sess, result)
     settings = load_ai_settings(db)
     for e in result.get("events", []):
         db.add(Event(session_id=session_id, t=float(e["t"]), duration=float(e.get("duration", 0)),
@@ -383,6 +384,28 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
         _route_new_clip(db, clip, settings)
         created.append(clip.id)
     return created
+
+
+def _record_scoring_stats(sess: StreamSession, result: dict) -> None:
+    """Keep per-session diagnostics: how many moments were rejected and why."""
+    st = dict(sess.stats or {})
+    rejected = list(result.get("rejected") or [])
+    counts = dict(st.get("rejected_counts") or {})
+    for r in rejected:
+        counts[r.get("reason", "other")] = counts.get(r.get("reason", "other"), 0) + 1
+    scores = [r["score"] for r in rejected if r.get("score") is not None]
+    if st.get("best_rejected_score") is not None:
+        scores.append(st["best_rejected_score"])
+    st.update({
+        "rejected_counts": counts,
+        "best_rejected_score": max(scores) if scores else None,
+        "recent_rejected": (list(st.get("recent_rejected") or []) + rejected)[-15:],
+        "candidates_total": int(st.get("candidates_total", 0)) + len(result.get("candidates") or []),
+        "events_total": int(st.get("events_total", 0)) + len(result.get("events") or []),
+        "min_score": result.get("min_score"),
+        "last_scored_at": utcnow().isoformat() + "Z",
+    })
+    sess.stats = st
 
 
 def _route_new_clip(db: Session, clip: Clip, settings: AISettings) -> None:

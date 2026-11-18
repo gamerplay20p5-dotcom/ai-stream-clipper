@@ -9,7 +9,8 @@ from ..config import get_settings
 from ..db import get_db, utcnow
 from ..models import User
 from ..security import create_user_token, verify_password
-from .deps import COOKIE, CurrentUser, audit, check_login_rate, client_ip, current_user, jwt_secret
+from .deps import (COOKIE, CurrentUser, audit, check_login_rate, client_ip, current_user, jwt_secret,
+                   record_login_failure)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -24,6 +25,7 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
     check_login_rate(client_ip(request))
     user = db.scalar(select(User).where(User.email == body.email.strip().lower(), User.active.is_(True)))
     if user is None or not verify_password(user.password_hash, body.password):
+        record_login_failure(client_ip(request))
         audit(db, request, None, "auth.login_failed", body.email[:255])
         db.commit()
         raise HTTPException(401, "invalid credentials")

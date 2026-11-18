@@ -84,9 +84,15 @@ export function ClipFrame({ clip, onOpen, selected }: { clip: Clip; onOpen?: () 
           <Film className="h-8 w-8" aria-hidden />
         </div>
       )}
-      <span className="absolute right-2 top-2">
-        <ScoreMark score={clip.score} />
-      </span>
+      {clip.is_test ? (
+        <span className="absolute left-2 top-2 rounded bg-black/75 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-take">
+          TESTE MANUAL
+        </span>
+      ) : (
+        <span className="absolute right-2 top-2">
+          <ScoreMark score={clip.score} />
+        </span>
+      )}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent p-2.5 pt-10">
         <p className="line-clamp-2 text-sm font-medium leading-snug text-white">{clip.title || "Sem título"}</p>
         <div className="mt-1 flex items-center justify-between gap-2 text-xs text-white/70">

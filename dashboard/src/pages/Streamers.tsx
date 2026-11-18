@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, RefreshCw, Square, Trash2 } from "lucide-react";
+import { ChevronDown, FlaskConical, RefreshCw, Square, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { api, type Streamer } from "../api";
+import TestClipPanel from "../components/TestClipPanel";
 import { Empty, ErrorNote, PageHeader, Tally } from "../components/ui";
 import { ago, platformName, timecode } from "../lib/format";
 
@@ -69,6 +70,7 @@ export default function Streamers() {
 function StreamerRow({ s }: { s: Streamer }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [testing, setTesting] = useState(false);
   const refresh = () => qc.invalidateQueries({ queryKey: ["streamers"] });
   const patch = useMutation({ mutationFn: (b: object) => api.patch(`/api/streamers/${s.id}`, b), onSuccess: refresh });
   const check = useMutation({ mutationFn: () => api.post(`/api/streamers/${s.id}/check`), onSuccess: refresh });
@@ -103,6 +105,7 @@ function StreamerRow({ s }: { s: Streamer }) {
           Monitorar
         </label>
         <div className="flex gap-1">
+          <button className="btn-quiet p-2" title="Gerar corte de teste" aria-label="Gerar corte de teste" onClick={() => setTesting(!testing)}><FlaskConical className="h-4 w-4" /></button>
           <button className="btn-quiet p-2" title="Verificar agora" aria-label="Verificar agora" onClick={() => check.mutate()}><RefreshCw className="h-4 w-4" /></button>
           {live && (
             <button className="btn-quiet p-2" title="Parar a captura desta transmissão" aria-label="Parar captura"
@@ -114,6 +117,7 @@ function StreamerRow({ s }: { s: Streamer }) {
         </div>
       </div>
       {s.last_error && s.status === "error" && <p className="mt-2 text-xs text-tally">{s.last_error}</p>}
+      {testing && <TestClipPanel streamerId={s.id} onClose={() => setTesting(false)} />}
       {open && (
         <div className="mt-4 grid gap-6 rounded-lg bg-suite-panel p-4 md:grid-cols-2">
           <form className="space-y-3" onSubmit={(e) => {

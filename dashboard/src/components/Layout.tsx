@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Clapperboard, Gauge, LogOut, Radio, Server, SlidersHorizontal } from "lucide-react";
+import { Activity, Clapperboard, Gauge, LogOut, Radio, Server, SlidersHorizontal } from "lucide-react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api, type Stats } from "../api";
 
@@ -8,6 +8,7 @@ const nav = [
   { to: "/cortes", label: "Cortes", icon: Clapperboard },
   { to: "/streamers", label: "Streamers", icon: Radio },
   { to: "/ia", label: "Configurações da IA", icon: SlidersHorizontal },
+  { to: "/diagnostico", label: "Diagnóstico", icon: Activity },
   { to: "/infra", label: "Infraestrutura", icon: Server },
 ];
 

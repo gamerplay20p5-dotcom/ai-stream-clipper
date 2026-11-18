@@ -172,7 +172,11 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
     clip.score_breakdown = breakdown
 
     first = clip.analysis_runs == 0
-    if settings.director_enabled:
+    if clip.is_test:
+        # TESTE MANUAL: keep the requested range; scoring/director can never block or move it
+        clip.score = decision.score
+        clip.reasons = list(dict.fromkeys(list(clip.reasons or [])[:1] + decision.reasons))[:14]
+    elif settings.director_enabled:
         clip.start, clip.end, clip.peak = decision.start_abs, decision.end_abs, decision.peak_abs
         clip.score = decision.score
         clip.reasons = list(dict.fromkeys(decision.reasons + decision.adjustments))[:14]
@@ -180,7 +184,7 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
         clip.transcript = " ".join(w[2] for w in tr).strip() or clip.transcript
     else:
         clip.score = round(weighted_total(breakdown, settings), 1)
-    if narrative is not None and not narrative.fallback and narrative.titles:
+    if narrative is not None and not narrative.fallback and narrative.titles and not clip.is_test:
         clip.title_suggestions = list(dict.fromkeys(narrative.titles + list(clip.title_suggestions or [])))[:6]
         if first:
             clip.title = narrative.titles[0][:255]
@@ -190,7 +194,7 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
     # done = some visual analysis ran (multimodal or heuristic); multimodal vs fallback lives in analysis_meta
     clip.vision_state = "done" if (visual is not None or heuristic) else "skipped"
 
-    if settings.director_enabled and not decision.keep:
+    if settings.director_enabled and not decision.keep and not clip.is_test:
         clip.status = "rejected"
         clip.error = "Descartado automaticamente pelo diretor: " + "; ".join(decision.adjustments[:2] or
                                                                              ["pontuação abaixo do mínimo"])

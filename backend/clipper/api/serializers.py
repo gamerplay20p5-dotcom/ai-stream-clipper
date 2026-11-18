@@ -79,6 +79,7 @@ def clip(c: Clip, streamer_obj: Streamer | None = None) -> dict:
         "edit_plan": c.edit_plan,
         "analysis_meta": c.analysis_meta,
         "analysis_runs": c.analysis_runs,
+        "is_test": bool(c.is_test),
         "heuristic_bounds": [c.heuristic_start, c.heuristic_end] if c.heuristic_start is not None else None,
         "version": c.version,
         "has_video": bool(c.video_path),

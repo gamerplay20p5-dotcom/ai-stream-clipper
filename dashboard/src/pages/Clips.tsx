@@ -147,7 +147,10 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
           <p className="mt-1 text-sm text-ink-muted">
             {c.streamer?.display_name} em {platformName[c.streamer?.platform ?? ""] ?? "live"}, {timecode(c.start)} a {timecode(c.end)} da sessão #{c.session_id}
           </p>
-          <div className="mt-1 flex flex-wrap items-center gap-2"><ClipStatus status={c.status} /><AnalysisStatus clip={c} /></div>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            {c.is_test && <span className="rounded bg-take-dim px-1.5 py-0.5 text-xs font-semibold text-take">TESTE MANUAL</span>}
+            <ClipStatus status={c.status} /><AnalysisStatus clip={c} />
+          </div>
         </div>
         <button className="btn-quiet p-2" onClick={() => onNavigate(null)} aria-label="Fechar revisão (Esc)"><X className="h-4 w-4" /></button>
       </div>

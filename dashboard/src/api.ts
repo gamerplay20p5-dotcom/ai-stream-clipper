@@ -98,6 +98,7 @@ export type Clip = {
   edit_plan: EditPlanT | null;
   analysis_meta: AnalysisMeta | null;
   analysis_runs: number;
+  is_test: boolean;
   heuristic_bounds: [number, number] | null;
   version: number;
   has_video: boolean;
@@ -198,6 +199,30 @@ export type ModelInfo = {
     loaded: boolean;
     stats: { device: string; state: string; load_seconds: number; calls: number; failures: number; avg_latency_s: number; last_error: string; fell_back_to_cpu: boolean } | null;
   }[];
+};
+
+export type DiagStreamer = {
+  streamer: { id: number; name: string; platform: string; enabled: boolean; status: string; last_checked_at: string | null; last_error: string };
+  stage: string;
+  state: "ok" | "working" | "waiting" | "error" | "idle";
+  explanation: string;
+  session?: { id: number; status: string; started_at: string; covered_until: number; analyzed_until: number; scored_until: number; segment_count: number };
+  last_segment: { idx: number; captured_at: string; age_s: number } | null;
+  buffer: { start: number; end: number; seconds: number } | null;
+  last_transcript_t: number | null;
+  audio_features: { segments: number; last_t: number | null };
+  last_visual: { clip_id: number; at: string; model: string | null; fallback: boolean; fallback_reason: string } | null;
+  scoring?: { last_scored_at: string | null; min_score: number; candidates: number; rejected_by_reason: Record<string, number>; rejected_by_director: number; best_rejected_score: number | null };
+  jobs: Record<string, Record<string, number>>;
+  latency_s: Record<string, number>;
+  failures: { id: number; type: string; error: string; attempts: number }[];
+  last_render: { clip_id: number; at: string; is_test: boolean } | null;
+};
+
+export type Diagnostics = {
+  generated_at: string;
+  workers_online_by_role: Record<string, string[]>;
+  streamers: DiagStreamer[];
 };
 
 export type Stats = {

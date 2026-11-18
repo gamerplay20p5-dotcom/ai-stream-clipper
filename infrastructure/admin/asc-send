@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Send one project image archive from 206 to 210 or 201 (receiver: asc-receive).
+#   ~/bin/asc-send 210 ~/images/ai-stream-clipper_0.2.3.tar.gz
+set -euo pipefail
+host="${1:?usage: asc-send 210|201 FILE}"
+file="${2:?missing file}"
+case "$host" in 210|201) ;; *) echo "destination must be 210 or 201" >&2; exit 2 ;; esac
+name="$(basename "$file")"
+sha="$(sha256sum "$file" | cut -d' ' -f1)"
+ssh -i "$HOME/.ssh/id_ed25519_transfer" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    "asc@192.168.1.$host" "receive $name $sha" < "$file"
