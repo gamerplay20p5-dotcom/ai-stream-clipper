@@ -22,11 +22,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ASC_CAPTURE_DIR=/data/capture \
     ASC_WORK_DIR=/data/work \
     ASC_TEST_MEDIA_DIR=/data/test-media \
-    ASC_MODELS_DIR=/models
+    ASC_MODELS_DIR=/models \
+    ASC_CAPTION_FONT="Noto Sans"
 
 # ffmpeg (libx264, libass), fonts for burned-in captions, tini as PID 1
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-montserrat fontconfig tini ca-certificates \
+ && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-core fontconfig tini ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && fc-cache -f
 

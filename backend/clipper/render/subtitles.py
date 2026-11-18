@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from ..analysis.lexicon import is_emphasis
 
 PLAY_W, PLAY_H = 1080, 1920
-FONT = "Montserrat"
+import os
+
+# bold sans font for burned captions; the container image sets "Noto Sans" (fonts-noto-core)
+FONT = os.environ.get("ASC_CAPTION_FONT", "Montserrat")
 
 # ASS colours are &HAABBGGRR
 WHITE = "&H00FFFFFF"
