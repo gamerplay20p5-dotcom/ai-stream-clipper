@@ -1,7 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type Host, type Infra } from "../api";
+import { api, type Host, type Infra, type ModelInfo } from "../api";
 import { ErrorNote, Meter, PageHeader } from "../components/ui";
 import { ago, bytes, jobLabel } from "../lib/format";
+
+type ModelWorker = ModelInfo["workers"][number];
+
+const kindLabel: Record<string, string> = { vlm: "visão", llm: "texto", audio: "áudio" };
+
+function modelState(w: ModelWorker): string {
+  if (w.loaded) return `carregado em ${w.stats?.device ?? "?"}${w.stats?.fell_back_to_cpu ? " (fallback CPU)" : ""}`;
+  const st = w.stats?.state;
+  if (st === "failed") return "falhou ao carregar";
+  if (st === "missing") return "arquivos ausentes";
+  return "disponível";
+}
+
+function modelStateTone(w: ModelWorker): string {
+  if (w.stats?.state === "failed" || w.stats?.state === "missing") return "text-tally";
+  return w.loaded ? "text-ok" : "text-ink-muted";
+}
 
 function HostColumn({ h }: { h: Host }) {
   const m = h.metrics;
@@ -51,6 +68,7 @@ function HostColumn({ h }: { h: Host }) {
 export default function Infrastructure() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["infra"], queryFn: () => api.get<Infra>("/api/infrastructure"), refetchInterval: 5_000 });
+  const models = useQuery({ queryKey: ["ai-models"], queryFn: () => api.get<ModelInfo[]>("/api/ai/models"), refetchInterval: 10_000 });
   const retry = useMutation({ mutationFn: (id: number) => api.post(`/api/jobs/${id}/retry`), onSuccess: () => qc.invalidateQueries({ queryKey: ["infra"] }) });
   const d = q.data;
   const types = ["capture", "audio_analyze", "score", "vision_analyze", "render"];
@@ -98,6 +116,37 @@ export default function Infrastructure() {
               <p className="mt-2 text-xs text-ink-muted">{bytes(d.storage.disk_free_bytes)} livres no disco do servidor 210.</p>
             </section>
           </div>
+
+          <section>
+            <h2 className="display mb-3 text-lg">Modelos de IA</h2>
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs text-ink-muted">
+                <tr><th className="py-2 font-normal">Modelo</th><th className="font-normal">Tamanho</th><th className="font-normal">Onde</th>
+                  <th className="font-normal">Estado</th><th className="font-normal">Latência média</th><th className="font-normal">Chamadas / falhas</th></tr>
+              </thead>
+              <tbody className="divide-y divide-suite-line">
+                {(models.data ?? []).map((m) => (
+                  <tr key={m.key} className="align-top">
+                    <td className="py-2.5">{m.key}<div className="text-xs text-ink-faint">{kindLabel[m.kind]}</div></td>
+                    <td className="text-ink-muted">{m.size_gb.toFixed(2)} GB</td>
+                    <td>{m.workers.length ? m.workers.map((w) => (
+                      <div key={w.worker} className={w.online ? "" : "text-ink-faint"}>{w.host_label || w.worker} {w.gpu ? `(${w.gpu_name || "GPU"})` : "(CPU)"}</div>
+                    )) : <span className="text-ink-faint">não instalado</span>}</td>
+                    <td>{m.workers.map((w) => (
+                      <div key={w.worker} className={modelStateTone(w)} title={w.stats?.last_error || undefined}>{modelState(w)}</div>
+                    ))}</td>
+                    <td className="text-ink-muted">{m.workers.map((w) => (
+                      <div key={w.worker}>{w.stats?.avg_latency_s ? `${w.stats.avg_latency_s.toFixed(1)} s` : "sem dados"}</div>
+                    ))}</td>
+                    <td className="text-ink-muted">{m.workers.map((w) => (
+                      <div key={w.worker}>{w.stats ? `${w.stats.calls} / ${w.stats.failures}` : "0 / 0"}</div>
+                    ))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-2 text-xs text-ink-faint">Cada GPU Arc A750 tem cerca de 8 GB e carrega um modelo pesado por vez. Sem modelo disponível, os cortes seguem com áudio e visão heurística.</p>
+          </section>
 
           <section>
             <h2 className="display mb-3 text-lg">Falhas definitivas</h2>

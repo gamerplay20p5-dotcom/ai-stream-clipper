@@ -3,6 +3,7 @@ import { Check, Download, RotateCcw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type Clip, type Streamer } from "../api";
+import AnalysisPanel, { AnalysisStatus } from "../components/AnalysisPanel";
 import { ClipFrame, ClipStatus, Empty, ErrorNote, Meter, PageHeader, ScoreMark } from "../components/ui";
 import { dimensionLabel, platformName, seconds, timecode } from "../lib/format";
 
@@ -105,10 +106,10 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
     qc.invalidateQueries({ queryKey: ["stats"] });
   };
   const action = useMutation({
-    mutationFn: (a: "approve" | "reject" | "rerender") => api.post<Clip>(`/api/clips/${clipId}/${a}`),
+    mutationFn: (a: "approve" | "reject" | "rerender" | "reanalyze") => api.post<Clip>(`/api/clips/${clipId}/${a}`),
     onSuccess: (_d, a) => {
       invalidate();
-      if (a !== "rerender" && idx >= 0 && items[idx + 1]) onNavigate(items[idx + 1].id);
+      if ((a === "approve" || a === "reject") && idx >= 0 && items[idx + 1]) onNavigate(items[idx + 1].id);
     },
   });
   const remove = useMutation({
@@ -146,7 +147,7 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
           <p className="mt-1 text-sm text-ink-muted">
             {c.streamer?.display_name} em {platformName[c.streamer?.platform ?? ""] ?? "live"}, {timecode(c.start)} a {timecode(c.end)} da sessão #{c.session_id}
           </p>
-          <div className="mt-1"><ClipStatus status={c.status} /></div>
+          <div className="mt-1 flex flex-wrap items-center gap-2"><ClipStatus status={c.status} /><AnalysisStatus clip={c} /></div>
         </div>
         <button className="btn-quiet p-2" onClick={() => onNavigate(null)} aria-label="Fechar revisão (Esc)"><X className="h-4 w-4" /></button>
       </div>
@@ -210,6 +211,8 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
         <h3 className="mb-2 text-sm font-semibold">Transcrição</h3>
         <p className="max-h-40 overflow-y-auto rounded-md bg-suite-panel p-3 text-sm leading-relaxed text-ink/90">{c.transcript || "Sem fala detectada."}</p>
       </section>
+
+      <AnalysisPanel clip={c} busy={action.isPending} onReanalyze={() => action.mutate("reanalyze")} />
 
       <ClipEditor clip={c} onSaved={invalidate} />
     </aside>

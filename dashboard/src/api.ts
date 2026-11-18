@@ -93,6 +93,12 @@ export type Clip = {
   layout: string;
   vision_state: string;
   vision: Record<string, unknown> | null;
+  analysis: Analysis | null;
+  decision: Decision | null;
+  edit_plan: EditPlanT | null;
+  analysis_meta: AnalysisMeta | null;
+  analysis_runs: number;
+  heuristic_bounds: [number, number] | null;
   version: number;
   has_video: boolean;
   has_thumbnail: boolean;
@@ -101,6 +107,97 @@ export type Clip = {
   error: string;
   created_at: string;
   updated_at: string;
+};
+
+export type VisualEventT = { t: number; label: string; importance: number };
+
+export type Visual = {
+  provider: string;
+  model: string;
+  device: string;
+  summary: string;
+  key_event: string;
+  funny: number;
+  unexpected: number;
+  important: number;
+  action: number;
+  events: VisualEventT[];
+  arc: { setup_start: number | null; climax: number | null; resolution_end: number | null; complete: boolean };
+  reaction_linked: boolean | null;
+  confidence: number;
+  frame_times: number[];
+  window_abs: [number, number];
+  latency_s: number;
+  fallback: boolean;
+  notes: string[];
+};
+
+export type Analysis = {
+  visual: Visual | null;
+  narrative: { provider: string; justification: string; titles: string[]; hook: string; latency_s: number; fallback: boolean } | null;
+  heuristic_vision: Record<string, unknown> | null;
+};
+
+export type Decision = {
+  start_abs: number;
+  end_abs: number;
+  peak_abs: number;
+  score: number;
+  base_score: number;
+  keep: boolean;
+  mode: "multimodal" | "audio_only";
+  reasons: string[];
+  evidence: { source: string; t_abs: number | null; detail: string }[];
+  adjustments: string[];
+};
+
+export type EditPlanT = {
+  template: string;
+  layout: string;
+  zooms: { t: number; duration: number; scale: number }[];
+  crop_keyframes: { t: number; cx: number }[];
+  caption_style: string;
+  emphasis_words: string[];
+  normalize_audio: boolean;
+  target_lufs: number;
+  fade_in: number;
+  fade_out: number;
+  rationale: string[];
+  source: string;
+};
+
+export type AnalysisMeta = {
+  worker?: string;
+  mode?: string;
+  vision_fallback?: boolean;
+  fallback_reason?: string;
+  vision_model?: string | null;
+  vision_device?: string;
+  vision_provider?: string;
+  narrative_provider?: string;
+  timings?: Record<string, number>;
+  frames_sampled?: number;
+  frames_to_model?: number;
+};
+
+export type ModelInfo = {
+  key: string;
+  kind: "vlm" | "llm" | "audio";
+  family: string;
+  size_gb: number;
+  min_vram_gb: number;
+  hf_repo: string;
+  notes: string;
+  workers: {
+    worker: string;
+    host_label: string;
+    online: boolean;
+    gpu: boolean;
+    gpu_name: string;
+    vram_total_gb: number | null;
+    loaded: boolean;
+    stats: { device: string; state: string; load_seconds: number; calls: number; failures: number; avg_latency_s: number; last_error: string; fell_back_to_cpu: boolean } | null;
+  }[];
 };
 
 export type Stats = {
@@ -177,8 +274,15 @@ export type AISettings = {
   dedup_overlap: number;
   vision_enabled: boolean;
   vision_provider: "heuristic" | "openvino_vlm";
+  vision_model: string;
   vision_frame_interval: number;
   vision_timeout_seconds: number;
+  analysis_context_seconds: number;
+  narrative_model: string;
+  director_enabled: boolean;
+  edit_template: string;
+  normalize_audio: boolean;
+  zoom_intensity: number;
   export_preset: string;
   export_crf: number;
   export_fps: number;

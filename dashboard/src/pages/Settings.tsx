@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
-import { api, type AISettings } from "../api";
+import { api, type AISettings, type ModelInfo } from "../api";
 import { ErrorNote, PageHeader } from "../components/ui";
 import { dimensionLabel } from "../lib/format";
 
@@ -28,6 +28,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 export default function Settings() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["settings"], queryFn: () => api.get<AISettings>("/api/settings") });
+  const models = useQuery({ queryKey: ["ai-models"], queryFn: () => api.get<ModelInfo[]>("/api/ai/models") });
+  const where = (key: string) => {
+    const w = (models.data ?? []).find((m) => m.key === key)?.workers.filter((x) => x.online) ?? [];
+    return w.length ? `instalado em ${w.map((x) => x.host_label || x.worker).join(", ")}` : "não instalado em nenhum worker online";
+  };
   const [s, setS] = useState<AISettings | null>(null);
   useEffect(() => { if (q.data) setS(q.data); }, [q.data]);
   const save = useMutation({
@@ -89,6 +94,47 @@ export default function Settings() {
         </Row>
         <Row label="Esperar o worker visual por até (s)" hint="Depois disso o corte segue sem análise visual.">
           <input type="number" className="field" value={s.vision_timeout_seconds} onChange={num("vision_timeout_seconds")} />
+        </Row>
+        <Row label="Modelo multimodal" hint={where(s.vision_model)}>
+          <select className="field" value={s.vision_model} onChange={sel("vision_model")}>
+            <option value="qwen3-vl-2b-int4">Qwen3-VL 2B INT4 (padrão)</option>
+            <option value="qwen3-vl-4b-int4">Qwen3-VL 4B INT4 (oficial, mais pesado)</option>
+            <option value="internvl2-1b-int4">InternVL2 1B INT4 (leve, para CPU)</option>
+          </select>
+        </Row>
+        <Row label="Contexto extra mostrado à IA (s)" hint="Antes e depois do candidato, para achar começo e desfecho.">
+          <input type="number" className="field" min={0} max={30} value={s.analysis_context_seconds} onChange={num("analysis_context_seconds")} />
+        </Row>
+      </Section>
+      <Section title="Diretor e narrativa">
+        <Row label="Usar o diretor automático" hint="Combina fala, som e visão para decidir início, fim e se o corte fica.">
+          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.director_enabled} onChange={bool("director_enabled")} />
+        </Row>
+        <Row label="Modelo de texto (justificativa e títulos)" hint={s.narrative_model.startsWith("qwen3-") ? where(s.narrative_model) : "Sem modelo extra na memória"}>
+          <select className="field" value={s.narrative_model} onChange={sel("narrative_model")}>
+            <option value="qwen3-1.7b-int4">Qwen3 1.7B INT4 (padrão)</option>
+            <option value="qwen3-0.6b-int4">Qwen3 0.6B INT4 (mais rápido, mais fraco)</option>
+            <option value="same_as_vision">Reusar o modelo multimodal</option>
+            <option value="template">Modelos de frase locais</option>
+          </select>
+        </Row>
+      </Section>
+      <Section title="Edição automática">
+        <Row label="Template">
+          <select className="field" value={s.edit_template} onChange={sel("edit_template")}>
+            <option value="padrao">Padrão: legenda destacada, zoom leve</option>
+            <option value="dinamico">Dinâmico: zoom maior, transições curtas</option>
+            <option value="minimalista">Minimalista: legenda limpa, sem zoom nem título</option>
+          </select>
+        </Row>
+        <Row label="Intensidade do zoom no pico" hint="0 desliga. O zoom nunca passa de 1,35x.">
+          <div className="flex items-center gap-3">
+            <input type="range" min={0} max={1.5} step={0.1} value={s.zoom_intensity} onChange={num("zoom_intensity")} className="w-full accent-[#F2B33D]" />
+            <span className="w-10 text-right text-sm">{s.zoom_intensity.toFixed(1)}</span>
+          </div>
+        </Row>
+        <Row label="Normalizar o volume" hint="Ganho linear até -14 LUFS sem passar de -1 dBTP: não distorce nem comprime.">
+          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.normalize_audio} onChange={bool("normalize_audio")} />
         </Row>
       </Section>
       <Section title="Exportação">
