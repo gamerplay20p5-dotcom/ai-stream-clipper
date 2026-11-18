@@ -151,7 +151,17 @@ def assign(emb, profile: list | None, clusters: list[dict]) -> tuple[str, float,
         best["n"] = n + 1
         return f"other:{best['id']}", round(best_s, 3), clusters
     if len(clusters) >= MAX_CLUSTERS:
-        return "unknown", 0.0, clusters
+        # full: drop the weakest one-off group (game sounds, music, a single NPC line) to make room.
+        # Seen in production: 12 singletons filled the slots in minutes and every later voice,
+        # including the streamer's, became "unknown". Ids are never reused (old labels stay unique).
+        singles = [c for c in clusters if c["n"] <= 1]
+        if not singles:
+            return "unknown", 0.0, clusters
+        weakest = min(singles, key=lambda c: (c.get("seconds", 0.0), c["id"]))
+        top_id = max(c["id"] for c in clusters)
+        clusters = [c for c in clusters if c is not weakest]
+        clusters.append({"id": top_id + 1, "centroid": [round(float(v), 4) for v in emb], "n": 1, "seconds": 0.0})
+        return f"other:{top_id + 1}", 1.0, clusters
     cid = max((c["id"] for c in clusters), default=0) + 1
     clusters.append({"id": cid, "centroid": [round(float(v), 4) for v in emb], "n": 1, "seconds": 0.0})
     return f"other:{cid}", 1.0, clusters

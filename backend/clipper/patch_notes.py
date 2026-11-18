@@ -6,6 +6,9 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.5.7", "date": "2026-11-18", "title": "Correção do reconhecimento de voz", "items": [
+        "Sons avulsos (música, efeitos do jogo) não ocupam mais todas as vagas de vozes: novas vozes, inclusive a do streamer, voltam a ser reconhecidas.",
+    ]},
     {"version": "0.5.6", "date": "2026-11-18", "title": "Operação editorial", "items": [
         "Aprovar, rejeitar e agendar vários cortes de uma vez na Central de Cortes.",
         "Calendário editorial dos próximos 14 dias, com troca de horário.",

@@ -193,3 +193,20 @@ def test_turn_audio_requires_a_stored_source(admin):
 def test_confirm_checks_the_session_belongs_to_the_streamer(admin, bad):
     st_id, _sid = _session("chk", 1)
     assert admin.post(f"/api/speakers/streamers/{st_id}/confirm", json=bad, headers=CSRF).status_code == 404
+
+
+def test_one_off_sounds_never_lock_out_new_voices():
+    """Production v0.5.5: 12 singletons (music, game effects) filled every slot and the streamer
+    became 'unknown' for minutes. The weakest one-off group now makes room."""
+    clusters: list[dict] = []
+    for _ in range(spk.MAX_CLUSTERS):
+        _l, _c, clusters = spk.assign([float(x) for x in _unit(RNG.normal(size=256))], None, clusters)
+    assert len(clusters) == spk.MAX_CLUSTERS
+    labels = []
+    for _ in range(5):
+        label, _c, clusters = spk.assign(_voice(A), None, clusters)
+        labels.append(label)
+    assert "unknown" not in labels and len(set(labels)) == 1  # one stable group for the new voice
+    assert len(clusters) == spk.MAX_CLUSTERS
+    ids = [c["id"] for c in clusters]
+    assert len(ids) == len(set(ids)) and max(ids) > spk.MAX_CLUSTERS  # ids never reused
