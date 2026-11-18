@@ -43,6 +43,11 @@ def main(argv: list[str] | None = None) -> None:
     a = ap.parse_args(argv)
     print(f"models dir: {get_settings().models_dir}")
     for key in a.models:
+        if key.startswith("whisper-"):  # e.g. whisper-small: pre-fill the HF cache used by faster-whisper
+            from faster_whisper.utils import download_model
+
+            print(f"{key}: {download_model(key.split('-', 1)[1])}")
+            continue
         if key not in MODELS:
             sys.exit(f"unknown model {key}; choose from {sorted(MODELS)}")
         download(key)

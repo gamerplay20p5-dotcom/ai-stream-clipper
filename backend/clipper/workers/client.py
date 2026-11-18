@@ -26,7 +26,13 @@ class InternalClient:
         self.base_url = base_url.rstrip("/")
         self.secret = secret
         self.worker_id = worker_id
-        self._http = httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0), follow_redirects=False)
+        from ..config import get_settings
+
+        ca = get_settings().api_ca_file
+        # verify the API certificate against the project CA (pinned); system CAs otherwise
+        verify: str | bool = str(ca) if ca else True
+        self._http = httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0), follow_redirects=False,
+                                       verify=verify)
 
     async def aclose(self) -> None:
         await self._http.aclose()

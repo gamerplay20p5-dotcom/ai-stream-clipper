@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     internal_secret: str = Field(default="", repr=False)
     api_url: str = "http://127.0.0.1:8780"
     signature_max_skew_s: int = 60
+    # TLS for the API (dashboard logins and worker traffic are never sent in clear text)
+    tls_cert: Path | None = None  # server certificate (PEM) - enables HTTPS on `clipper api`
+    tls_key: Path | None = None
+    api_ca_file: Path | None = None  # CA used by workers to verify the API certificate
 
     # --- worker ----------------------------------------------------------
     worker_id: str = ""

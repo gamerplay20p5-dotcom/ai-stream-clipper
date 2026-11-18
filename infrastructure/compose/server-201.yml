@@ -1,16 +1,13 @@
-# Server 201 (1htsserver) - secondary GPU vision worker (Intel Arc A750).
-# This host runs six game-server containers: the worker is capped hard (4 CPUs / 8 GiB)
-# and given a low CPU weight so game servers always win contention.
-#
-#   docker compose -p asc -f infrastructure/compose/server-201.yml --env-file .env.201 up -d --build
+# Server 201 (1htsserver) - secondary GPU AI worker (Intel Arc A750).
+# This host runs six game-server containers (Pterodactyl): the worker is capped hard
+# (4 CPUs / 8 GiB) with a low CPU weight so game servers always win contention.
+# Operated through `sudo asc-ctl compose ...`. Images are built on 206 and loaded here.
 
 name: asc
 
 services:
   worker-vision:
-    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.0}
-    build: { context: ../.., dockerfile: infrastructure/docker/vision-openvino.Dockerfile,
-             args: { OPENVINO_IMAGE: "${ASC_OPENVINO_IMAGE:-openvino/ubuntu24_runtime:2026.2.0}" } }
+    image: ai-stream-clipper-vision:${ASC_IMAGE_TAG:-0.2.1}
     container_name: asc-worker-vision
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
@@ -21,7 +18,8 @@ services:
     environment:
       ASC_ENV: production
       ASC_LOG_JSON: "true"
-      ASC_API_URL: ${ASC_API_URL:?set ASC_API_URL (e.g. http://192.168.1.210:8780)}
+      ASC_API_URL: https://192.168.1.210:8780
+      ASC_API_CA_FILE: /tls/ca.crt
       ASC_INTERNAL_SECRET: ${ASC_INTERNAL_SECRET:?set ASC_INTERNAL_SECRET}
       ASC_WORKER_HOST_LABEL: "201"
       ASC_WORKER_ID: "201-vision-gpu"
@@ -33,8 +31,8 @@ services:
       ASC_AI_ALLOW_CPU_FALLBACK: ${ASC_AI_ALLOW_CPU_FALLBACK:-true}
       ASC_CONCURRENCY_VISION: "1"
     devices: ["/dev/dri/renderD128:/dev/dri/renderD128"]
-    group_add: ["${ASC_RENDER_GID:?set ASC_RENDER_GID (getent group render)}"]
-    volumes: ["asc_work:/data/work", "${ASC_MODELS_DIR:-/opt/asc/models}:/models:ro"]
+    group_add: ["${ASC_RENDER_GID:?set ASC_RENDER_GID}"]
+    volumes: ["asc_work:/data/work", "/opt/asc/models:/models:ro", "/etc/asc/tls/ca.crt:/tls/ca.crt:ro"]
     networks: [asc_net]
     cpu_shares: 256
     healthcheck:

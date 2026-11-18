@@ -1,0 +1,691 @@
+#!/usr/bin/python3 -I
+"""asc-ctl - limited, audited Docker operations for the AI Stream Clipper project.
+
+Installed root-owned at /usr/local/sbin/asc-ctl and allowed to the `asc` user via
+/etc/sudoers.d/asc-ctl. It replaces membership of the `docker` group (which is
+root-equivalent) with a fixed set of operations that can only touch the compose project
+"asc" and only run configurations that pass the isolation policy below.
+
+Policy (checked on the *resolved* compose config, which is then the exact file executed):
+  * project name "asc"; container names "asc-*"; images ai-stream-clipper[-vision]:<tag>
+    or postgres:16.x; no build sections (images are built with `asc-ctl build`)
+  * no privileged, cap_add, host network/pid/ipc/uts/userns/cgroup, sysctls, runtime,
+    volumes_from, secrets/configs, unconfined security options, user root
+  * bind mounts only below /opt/asc/ or /etc/asc/tls (the latter read-only)
+  * named volumes / networks only asc_* and never external
+  * devices only /dev/dri/renderD128 (GPU hosts), group_add only the render gid
+  * published ports only 8780/8781 on this server's LAN IP (or 127.0.0.1)
+  * every service declares CPU and memory limits
+Never runs `docker system prune`, `down -v`, or anything on other projects.
+"""
+
+from __future__ import annotations
+
+import datetime
+import json
+import os
+import posixpath
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+
+VERSION = "1.0.0"
+CONF_FILE = "/etc/asc/asc-ctl.conf"
+ENV_FILE = "/etc/asc/asc.env"
+LOG_FILE = "/var/log/asc-ctl.log"
+RUN_DIR = "/run/asc-ctl"
+TLS_DIR = "/etc/asc/tls"
+CA_DIR = "/etc/asc/ca"
+DATA_ROOT = "/opt/asc"
+DATA_DIRS = ("models", "test-media", "bench")
+CONTAINER_UID = 10001
+ALLOWED_PORTS = {"8780", "8781"}
+ALLOWED_BIND_PREFIXES = ("/opt/asc/", "/etc/asc/tls")
+IMAGE_RE = re.compile(r"^(ai-stream-clipper(-vision)?:[A-Za-z0-9._-]{1,40}|postgres:16(\.[0-9]+)*(-bookworm)?)$")
+OWN_IMAGE_RE = re.compile(r"^(docker\.io/library/)?ai-stream-clipper(-vision)?:[A-Za-z0-9._-]{1,40}$")
+TAG_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
+NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,62}$")
+ENV_VALUE_RE = re.compile(r"^[A-Za-z0-9@._:/,+=-]{0,256}$")
+ENV_KEYS = {
+    "ASC_IMAGE_TAG", "ASC_INTERNAL_SECRET", "ASC_JWT_SECRET", "ASC_DB_PASSWORD", "ASC_DB_HOST", "ASC_ADMIN_EMAIL",
+    "ASC_ADMIN_PASSWORD", "ASC_STORAGE_MAX_GB", "ASC_METRICS_TOKEN", "ASC_RENDER_GID", "ASC_OPENVINO_IMAGE",
+    "ASC_VISION_PROVIDER", "ASC_AI_MODELS", "ASC_AI_ALLOW_CPU_FALLBACK", "ASC_WHISPER_MODEL", "ASC_WHISPER_CPU_THREADS",
+    "ASC_CONCURRENCY_AUDIO", "ASC_CONCURRENCY_RENDER", "ASC_FFMPEG_THREADS", "ASC_MAX_CONCURRENT_CAPTURES",
+    "ASC_BUFFER_SECONDS", "ASC_MAX_SESSION_HOURS", "ASC_MAX_CAPTURE_DISK_GB", "ASC_ALLOW_FILE_SOURCES",
+    "ASC_CAPTURE_QUALITY", "ASC_OIDC_ISSUER", "ASC_OIDC_CLIENT_ID",
+}
+SECRET_KEYS = {"ASC_INTERNAL_SECRET", "ASC_JWT_SECRET", "ASC_DB_PASSWORD", "ASC_ADMIN_PASSWORD", "ASC_METRICS_TOKEN"}
+COMPOSE_SUBCOMMANDS = {"config", "up", "down", "stop", "start", "restart", "ps", "logs", "pull", "images"}
+DOCKER = "/usr/bin/docker"
+SAFE_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+class Denied(Exception):
+    pass
+
+
+# --------------------------------------------------------------------------- helpers
+
+
+def die(msg: str, code: int = 2) -> None:
+    print(f"asc-ctl: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def load_conf(path: str = CONF_FILE) -> dict:
+    conf = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                conf[k.strip()] = v.strip()
+    for k in ("SERVER", "LAN_IP", "ASC_USER", "REPO"):
+        if not conf.get(k):
+            die(f"{path}: missing {k}")
+    if conf["SERVER"] not in ("201", "206", "210"):
+        die("SERVER must be 201, 206 or 210")
+    return conf
+
+
+def audit(argv: list[str], result: str) -> None:
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} user={os.environ.get('SUDO_USER', '?')} "
+                    f"argv={json.dumps(argv)} result={result}\n")
+    except OSError:
+        pass
+
+
+def run(cmd: list[str], **kw) -> int:
+    return subprocess.run(cmd, **kw).returncode
+
+
+def out(cmd: list[str]) -> str:
+    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+
+
+def user_ids(conf: dict) -> tuple[int, int, str]:
+    import pwd  # Linux only (kept local so the policy can be unit-tested anywhere)
+
+    pw = pwd.getpwnam(conf["ASC_USER"])
+    return pw.pw_uid, pw.pw_gid, pw.pw_dir
+
+
+def under(path: str, prefix: str) -> bool:
+    real = os.path.realpath(path)
+    prefix = os.path.realpath(prefix)
+    return real == prefix or real.startswith(prefix.rstrip("/") + "/")
+
+
+def user_file(conf: dict, path: str) -> str:
+    """A file the caller wants us to read: must be a regular file inside the asc home."""
+    _, _, home = user_ids(conf)
+    real = os.path.realpath(path)
+    if not under(real, home) or not os.path.isfile(real):
+        raise Denied(f"{path}: must be an existing file inside {home}")
+    return real
+
+
+def chown_to_user(conf: dict, path: str) -> None:
+    uid, gid, _ = user_ids(conf)
+    os.chown(path, uid, gid)
+
+
+def repo(conf: dict) -> str:
+    _, _, home = user_ids(conf)
+    r = os.path.realpath(conf["REPO"])
+    if not under(r, home):
+        die("REPO must be inside the asc home")
+    return r
+
+
+# --------------------------------------------------------------------------- policy
+
+
+def _as_list(v):
+    if v is None:
+        return []
+    return v if isinstance(v, list) else [v]
+
+
+def check_policy(cfg: dict, conf: dict) -> list[str]:
+    """Return a list of violations (empty = allowed)."""
+    v: list[str] = []
+    gpu_host = conf["SERVER"] in ("201", "210")
+    render_gid = str(conf.get("RENDER_GID", ""))
+    allowed_ips = {conf["LAN_IP"], "127.0.0.1"}
+    if cfg.get("name") != "asc":
+        v.append("project name must be 'asc'")
+    for key in ("secrets", "configs"):
+        if cfg.get(key):
+            v.append(f"top-level {key} not allowed")
+    top_vols = cfg.get("volumes") or {}
+    for name, spec in top_vols.items():
+        spec = spec or {}
+        if spec.get("external"):
+            v.append(f"volume {name}: external volumes not allowed")
+        if not str(spec.get("name", f"asc_{name}")).startswith("asc_"):
+            v.append(f"volume {name}: name must start with asc_")
+        if spec.get("driver") not in (None, "local") or spec.get("driver_opts"):
+            v.append(f"volume {name}: only plain local volumes")
+    for name, spec in (cfg.get("networks") or {}).items():
+        spec = spec or {}
+        if spec.get("external"):
+            v.append(f"network {name}: external networks not allowed")
+        if not str(spec.get("name", "")).startswith("asc_net"):
+            v.append(f"network {name}: name must start with asc_net")
+        if spec.get("driver") not in (None, "bridge"):
+            v.append(f"network {name}: only bridge networks")
+    for svc, s in (cfg.get("services") or {}).items():
+        p = f"service {svc}"
+        if s.get("privileged"):
+            v.append(f"{p}: privileged")
+        if s.get("cap_add"):
+            v.append(f"{p}: cap_add")
+        for k in ("pid", "ipc", "uts", "userns_mode", "cgroup"):
+            if str(s.get(k, "")).startswith("host"):
+                v.append(f"{p}: {k}=host")
+        if s.get("network_mode"):
+            v.append(f"{p}: network_mode not allowed")
+        for k in ("sysctls", "volumes_from", "runtime", "cgroup_parent", "device_cgroup_rules", "secrets", "configs",
+                  "build", "isolation"):
+            if s.get(k):
+                v.append(f"{p}: {k} not allowed")
+        for opt in _as_list(s.get("security_opt")):
+            if "unconfined" in str(opt) or "disable" in str(opt):
+                v.append(f"{p}: security_opt {opt}")
+        if str(s.get("user", "")).split(":")[0] in ("0", "root"):
+            v.append(f"{p}: user root")
+        cname = s.get("container_name")
+        if cname is not None and not str(cname).startswith("asc-"):
+            v.append(f"{p}: container_name must start with asc-")
+        if not IMAGE_RE.match(str(s.get("image", ""))):
+            v.append(f"{p}: image {s.get('image')!r} not allowed")
+        for d in _as_list(s.get("devices")):
+            src = d.get("source") if isinstance(d, dict) else str(d).split(":")[0]
+            if not gpu_host or src != "/dev/dri/renderD128":
+                v.append(f"{p}: device {src} not allowed")
+        for g in _as_list(s.get("group_add")):
+            if str(g) != render_gid:
+                v.append(f"{p}: group_add {g} not allowed (only render gid {render_gid})")
+        for port in _as_list(s.get("ports")):
+            if isinstance(port, dict):
+                hip, pub = str(port.get("host_ip", "")), str(port.get("published", ""))
+            else:
+                parts = str(port).split(":")
+                hip, pub = (parts[0], parts[1]) if len(parts) == 3 else ("", parts[0])
+            if hip not in allowed_ips:
+                v.append(f"{p}: port must bind to {sorted(allowed_ips)} (got {hip or '0.0.0.0'})")
+            if pub not in ALLOWED_PORTS:
+                v.append(f"{p}: published port {pub} not allowed")
+        for vol in _as_list(s.get("volumes")):
+            if not isinstance(vol, dict):
+                v.append(f"{p}: unexpected volume syntax {vol!r}")
+                continue
+            t = vol.get("type")
+            if t == "bind":
+                # normpath collapses ".."; /opt/asc and /etc/asc/tls are root-owned, so the caller
+                # cannot plant symlinks there
+                src = posixpath.normpath(str(vol.get("source", "")))
+                if not any(src == pre.rstrip("/") or src.startswith(pre.rstrip("/") + "/")
+                           for pre in ALLOWED_BIND_PREFIXES):
+                    v.append(f"{p}: bind mount {src} outside /opt/asc or /etc/asc/tls")
+                if src.startswith("/etc/asc/tls") and not vol.get("read_only"):
+                    v.append(f"{p}: {src} must be read-only")
+            elif t == "volume":
+                if vol.get("source") not in top_vols:
+                    v.append(f"{p}: volume {vol.get('source')} not declared by the project")
+            elif t != "tmpfs":
+                v.append(f"{p}: volume type {t} not allowed")
+        limits = ((s.get("deploy") or {}).get("resources") or {}).get("limits") or {}
+        if not limits.get("cpus") or not limits.get("memory"):
+            v.append(f"{p}: CPU and memory limits are mandatory")
+    return v
+
+
+def compose_cmd(conf: dict, resolved: str | None, profile: bool) -> list[str]:
+    base = [DOCKER, "compose", "-p", "asc"]
+    if resolved:
+        base += ["-f", resolved]
+    else:
+        base += ["-f", os.path.join(repo(conf), "infrastructure", "compose", f"server-{conf['SERVER']}.yml"),
+                 "--env-file", ENV_FILE]
+    if profile:
+        base += ["--profile", "gpu"]
+    return base
+
+
+def resolve_and_check(conf: dict, profile: bool) -> str:
+    if not os.path.isfile(ENV_FILE):
+        raise Denied(f"{ENV_FILE} missing (run: asc-ctl env-install FILE)")
+    raw = out(compose_cmd(conf, None, profile) + ["config", "--format", "json"])
+    cfg = json.loads(raw)
+    violations = check_policy(cfg, conf)
+    if violations:
+        raise Denied("policy violations:\n  - " + "\n  - ".join(violations))
+    os.makedirs(RUN_DIR, mode=0o700, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix="resolved-", suffix=".json", dir=RUN_DIR)
+    with os.fdopen(fd, "w") as f:
+        json.dump(cfg, f)
+    return path
+
+
+# --------------------------------------------------------------------------- commands
+
+
+def cmd_compose(conf: dict, args: list[str]) -> int:
+    if not args or args[0] not in COMPOSE_SUBCOMMANDS:
+        raise Denied(f"compose subcommand must be one of {sorted(COMPOSE_SUBCOMMANDS)}")
+    sub, rest = args[0], args[1:]
+    profile = False
+    tail = "200"
+    services = []
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a == "--gpu":
+            profile = True
+        elif a == "--tail" and i + 1 < len(rest) and rest[i + 1].isdigit():
+            tail = rest[i + 1]
+            i += 1
+        elif NAME_RE.match(a):
+            services.append(a)
+        else:
+            raise Denied(f"argument {a!r} not allowed")
+        i += 1
+    path = resolve_and_check(conf, profile)
+    try:
+        base = compose_cmd(conf, path, profile)
+        if sub == "config":
+            print(json.dumps({k: v for k, v in json.load(open(path)).items() if k != "services"}, indent=1))
+            print("services:", ", ".join(json.load(open(path))["services"]))
+            print("policy: OK")
+            return 0
+        extra = {
+            "up": ["up", "-d", "--remove-orphans", "--no-build"],
+            "down": ["down", "--remove-orphans"],  # never -v: data volumes are kept
+            "logs": ["logs", "--no-color", "--tail", tail],
+            "pull": ["pull", "--ignore-pull-failures"],
+        }.get(sub, [sub])
+        return run(base + extra + services)
+    finally:
+        os.unlink(path)
+
+
+def cmd_exec(conf: dict, args: list[str]) -> int:
+    if len(args) < 3 or args[1] != "--":
+        raise Denied("usage: asc-ctl exec <asc-container> -- <command...>")
+    name = args[0]
+    if not name.startswith("asc-") or not NAME_RE.match(name):
+        raise Denied("only asc-* containers")
+    label = out([DOCKER, "inspect", "-f", '{{index .Config.Labels "com.docker.compose.project"}}', name]).strip()
+    if label != "asc":
+        raise Denied(f"{name} does not belong to project asc")
+    return run([DOCKER, "exec", name] + args[2:])
+
+
+def image_ref(kind: str, tag: str) -> str:
+    if kind not in ("app", "vision") or not TAG_RE.match(tag):
+        raise Denied("image must be app|vision and tag [A-Za-z0-9._-]")
+    return f"ai-stream-clipper{'-vision' if kind == 'vision' else ''}:{tag}"
+
+
+def cmd_build(conf: dict, args: list[str]) -> int:
+    if len(args) != 2:
+        raise Denied("usage: asc-ctl build app|vision TAG")
+    ref = image_ref(*args)
+    r = repo(conf)
+    dockerfile = os.path.join(r, "infrastructure", "docker",
+                              "vision-openvino.Dockerfile" if args[0] == "vision" else "app.Dockerfile")
+    cmd = [DOCKER, "build", "--pull", "-f", dockerfile, "-t", ref,
+           "--label", "com.asc.project=ai-stream-clipper"]
+    ov = conf.get("OPENVINO_IMAGE", "openvino/ubuntu24_runtime:2026.2.0")
+    if not re.match(r"^openvino/[a-z0-9_]+:[0-9.]+$", ov):
+        raise Denied("OPENVINO_IMAGE in asc-ctl.conf is not an openvino/* image")
+    if args[0] == "vision":
+        cmd += ["--build-arg", f"OPENVINO_IMAGE={ov}"]
+    return run(cmd + [r])
+
+
+def cmd_images(conf: dict, args: list[str]) -> int:
+    return run([DOCKER, "images", "--filter", "reference=ai-stream-clipper*", "--filter",
+                "reference=postgres:16*", "--format", "{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}\t{{.CreatedSince}}"])
+
+
+def cmd_image_save(conf: dict, args: list[str]) -> int:
+    if len(args) != 2:
+        raise Denied("usage: asc-ctl image-save app|vision TAG")
+    ref = image_ref(*args)
+    _, _, home = user_ids(conf)
+    d = os.path.join(home, "images")
+    os.makedirs(d, exist_ok=True)
+    chown_to_user(conf, d)
+    dest = os.path.join(d, ref.replace(":", "_") + ".tar.gz")
+    with open(dest, "wb") as f:
+        p1 = subprocess.Popen([DOCKER, "save", ref], stdout=subprocess.PIPE)
+        p2 = subprocess.Popen(["gzip", "-1"], stdin=p1.stdout, stdout=f)
+        p1.stdout.close()
+        rc = p2.wait() or p1.wait()
+    chown_to_user(conf, dest)
+    print(dest)
+    return rc
+
+
+def image_tags_in_archive(path: str) -> list[str]:
+    tags: list[str] = []
+    with tarfile.open(path, "r:*") as t:
+        for m in t:
+            if m.name in ("manifest.json", "./manifest.json"):
+                for entry in json.load(t.extractfile(m)):
+                    tags += entry.get("RepoTags") or []
+            elif m.name in ("index.json", "./index.json"):
+                for man in json.load(t.extractfile(m)).get("manifests", []):
+                    ann = man.get("annotations") or {}
+                    name = ann.get("io.containerd.image.name")
+                    if name:
+                        tags.append(name)
+    return sorted(set(tags))
+
+
+def cmd_image_load(conf: dict, args: list[str]) -> int:
+    if len(args) != 1:
+        raise Denied("usage: asc-ctl image-load FILE (inside the asc home)")
+    path = user_file(conf, args[0])
+    tags = image_tags_in_archive(path)
+    if not tags:
+        raise Denied("archive has no tagged image")
+    bad = [t for t in tags if not OWN_IMAGE_RE.match(t)]
+    if bad:
+        raise Denied(f"archive would load foreign image tags: {bad}")
+    print("loading", ", ".join(tags))
+    return run([DOCKER, "load", "-i", path])
+
+
+def cmd_image_rm(conf: dict, args: list[str]) -> int:
+    if len(args) != 2:
+        raise Denied("usage: asc-ctl image-rm app|vision TAG")
+    ref = image_ref(*args)
+    used = out([DOCKER, "ps", "-a", "--filter", f"ancestor={ref}", "-q"]).strip()
+    if used:
+        raise Denied(f"{ref} is used by a container")
+    return run([DOCKER, "image", "rm", ref])
+
+
+def cmd_env_install(conf: dict, args: list[str]) -> int:
+    if len(args) != 1:
+        raise Denied("usage: asc-ctl env-install FILE")
+    path = user_file(conf, args[0])
+    lines = []
+    for n, line in enumerate(open(path, encoding="utf-8").read().splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if "=" not in line:
+            raise Denied(f"line {n}: expected KEY=VALUE")
+        k, val = line.split("=", 1)
+        k, val = k.strip(), val.strip()
+        if k not in ENV_KEYS:
+            raise Denied(f"line {n}: key {k} not allowed")
+        if not ENV_VALUE_RE.match(val):
+            raise Denied(f"line {n}: value of {k} has forbidden characters")
+        if k == "ASC_RENDER_GID" and val != str(conf.get("RENDER_GID", "")):
+            raise Denied(f"ASC_RENDER_GID must be {conf.get('RENDER_GID')}")
+        if k == "ASC_IMAGE_TAG" and not TAG_RE.match(val):
+            raise Denied("bad ASC_IMAGE_TAG")
+        if k == "ASC_DB_HOST" and val not in ("postgres", "192.168.1.212"):
+            raise Denied("ASC_DB_HOST must be postgres or 192.168.1.212")
+        lines.append(f"{k}={val}")
+    os.makedirs("/etc/asc", exist_ok=True)
+    tmp = ENV_FILE + ".new"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(tmp, 0o600)
+    if os.path.exists(ENV_FILE):
+        shutil.copy2(ENV_FILE, ENV_FILE + ".prev")
+    os.replace(tmp, ENV_FILE)
+    print(f"installed {len(lines)} variables into {ENV_FILE}")
+    return 0
+
+
+def cmd_env_show(conf: dict, args: list[str]) -> int:
+    for line in open(ENV_FILE, encoding="utf-8").read().splitlines():
+        k, _, val = line.partition("=")
+        print(f"{k}={'***' if k in SECRET_KEYS and val else val}")
+    return 0
+
+
+def cmd_set_tag(conf: dict, args: list[str]) -> int:
+    if len(args) != 1 or not TAG_RE.match(args[0]):
+        raise Denied("usage: asc-ctl set-tag TAG")
+    lines = [ln for ln in open(ENV_FILE, encoding="utf-8").read().splitlines() if not ln.startswith("ASC_IMAGE_TAG=")]
+    lines.append(f"ASC_IMAGE_TAG={args[0]}")
+    shutil.copy2(ENV_FILE, ENV_FILE + ".prev")
+    with open(ENV_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(ENV_FILE, 0o600)
+    print(f"ASC_IMAGE_TAG={args[0]}")
+    return 0
+
+
+def cmd_tls_init(conf: dict, args: list[str]) -> int:
+    if conf["SERVER"] != "210":
+        raise Denied("tls-init runs on 210 (the API host)")
+    os.makedirs(TLS_DIR, mode=0o755, exist_ok=True)
+    os.makedirs(CA_DIR, mode=0o700, exist_ok=True)
+    ca_key, ca_crt = os.path.join(CA_DIR, "ca.key"), os.path.join(TLS_DIR, "ca.crt")
+    if os.path.exists(ca_key) and "--force" not in args:
+        raise Denied("CA already exists (use --force to issue a new server certificate with the same CA)")
+    if not os.path.exists(ca_key):
+        run(["openssl", "req", "-x509", "-newkey", "rsa:3072", "-nodes", "-days", "3650", "-keyout", ca_key,
+             "-out", ca_crt, "-subj", "/CN=AI Stream Clipper CA/O=asc"], check=True)
+        os.chmod(ca_key, 0o600)
+    key, csr, crt = (os.path.join(TLS_DIR, n) for n in ("server.key", "server.csr", "server.crt"))
+    ext = os.path.join(CA_DIR, "server.ext")
+    with open(ext, "w") as f:
+        f.write(f"subjectAltName=IP:{conf['LAN_IP']},IP:127.0.0.1,DNS:api,DNS:asc-api,DNS:localhost\n"
+                "extendedKeyUsage=serverAuth\nkeyUsage=digitalSignature,keyEncipherment\n")
+    subprocess.run(["openssl", "req", "-newkey", "rsa:3072", "-nodes", "-keyout", key, "-out", csr,
+                    "-subj", "/CN=asc-api/O=asc"], check=True)
+    subprocess.run(["openssl", "x509", "-req", "-in", csr, "-CA", ca_crt, "-CAkey", ca_key, "-CAcreateserial",
+                    "-days", "825", "-sha256", "-extfile", ext, "-out", crt], check=True)
+    os.unlink(csr)
+    os.chown(key, 0, CONTAINER_UID)
+    os.chmod(key, 0o640)  # readable by the container user only
+    for p in (ca_crt, crt):
+        os.chmod(p, 0o644)
+    _, _, home = user_ids(conf)
+    pub = os.path.join(home, "asc-ca.crt")
+    shutil.copy(ca_crt, pub)
+    chown_to_user(conf, pub)
+    print(f"TLS ready. CA certificate for the other servers / browsers: {pub}")
+    return 0
+
+
+def cmd_tls_install_ca(conf: dict, args: list[str]) -> int:
+    if len(args) != 1:
+        raise Denied("usage: asc-ctl tls-install-ca FILE")
+    path = user_file(conf, args[0])
+    subj = out(["openssl", "x509", "-in", path, "-noout", "-subject"])
+    if "AI Stream Clipper CA" not in subj:
+        raise Denied("not the AI Stream Clipper CA certificate")
+    os.makedirs(TLS_DIR, mode=0o755, exist_ok=True)
+    dest = os.path.join(TLS_DIR, "ca.crt")
+    shutil.copy(path, dest)
+    os.chmod(dest, 0o644)
+    print(f"installed {dest}")
+    return 0
+
+
+def cmd_init(conf: dict, args: list[str]) -> int:
+    for d in DATA_DIRS:
+        p = os.path.join(DATA_ROOT, d)
+        os.makedirs(p, exist_ok=True)
+        os.chown(p, CONTAINER_UID, CONTAINER_UID)
+        os.chmod(p, 0o755)
+    os.makedirs(TLS_DIR, mode=0o755, exist_ok=True)
+    print(f"data dirs ready under {DATA_ROOT}")
+    return 0
+
+
+def oneoff_image(conf: dict, tag: str) -> str:
+    return image_ref("app" if conf["SERVER"] == "206" else "vision", tag)
+
+
+def oneoff_base(conf: dict, gpu: bool) -> list[str]:
+    cmd = [DOCKER, "run", "--rm", "--user", f"{CONTAINER_UID}:{CONTAINER_UID}", "--cap-drop", "ALL",
+           "--security-opt", "no-new-privileges:true", "--cpus", "4", "--memory", "12g",
+           "--label", "com.asc.project=ai-stream-clipper", "-e", "ASC_WORK_DIR=/tmp", "-e", "HOME=/tmp"]
+    if conf["SERVER"] == "201":
+        cmd += ["--cpu-shares", "256"]
+    if gpu:
+        if conf["SERVER"] not in ("201", "210"):
+            raise Denied("no GPU on this server")
+        cmd += ["--device", "/dev/dri/renderD128", "--group-add", str(conf["RENDER_GID"]),
+                "-e", "ASC_GPU_DEVICE=/dev/dri/renderD128"]
+    return cmd
+
+
+def env_tag() -> str:
+    for line in open(ENV_FILE, encoding="utf-8").read().splitlines():
+        if line.startswith("ASC_IMAGE_TAG="):
+            return line.split("=", 1)[1]
+    raise Denied("ASC_IMAGE_TAG not set")
+
+
+def cmd_models(conf: dict, args: list[str]) -> int:
+    if not args or not all(MODEL_RE.match(a) for a in args):
+        raise Denied("usage: asc-ctl models KEY [KEY...]")
+    cmd = oneoff_base(conf, False) + ["-e", "ASC_MODELS_DIR=/models", "-e", "HF_HOME=/models/hf",
+                                      "-v", f"{DATA_ROOT}/models:/models", "--entrypoint", "python3",
+                                      oneoff_image(conf, env_tag()), "-m", "clipper.ai.download"] + args
+    return run(cmd)
+
+
+def cmd_gpu_validate(conf: dict, args: list[str]) -> int:
+    model = None
+    repeat = "2"
+    i = 0
+    while i < len(args):
+        if args[i] == "--vlm" and i + 1 < len(args) and MODEL_RE.match(args[i + 1]):
+            model = args[i + 1]
+            i += 1
+        elif args[i] == "--repeat" and i + 1 < len(args) and args[i + 1].isdigit():
+            repeat = args[i + 1]
+            i += 1
+        else:
+            raise Denied(f"argument {args[i]!r} not allowed")
+        i += 1
+    fixtures = os.path.join(repo(conf), "tests", "fixtures")
+    base = oneoff_base(conf, True) + ["-e", "ASC_MODELS_DIR=/models", "-v", f"{DATA_ROOT}/models:/models:ro",
+                                      "-v", f"{DATA_ROOT}/bench:/bench", "-v", f"{fixtures}:/fixtures:ro",
+                                      "--entrypoint", "python3", oneoff_image(conf, env_tag())]
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    rc = run(base + ["-m", "clipper.analysis.gpu_probe", "--out", f"/bench/gpu-probe-{conf['SERVER']}-{stamp}.json"])
+    if rc == 0 and model:
+        rc = run(base + ["-m", "clipper.analysis.vlm_bench", "--model", model, "--device", "GPU", "--annotations",
+                         "/fixtures/annotations.json", "--repeat", repeat,
+                         "--out", f"/bench/vlm-{model}-{conf['SERVER']}-{stamp}.json"])
+    print(f"results in {DATA_ROOT}/bench/")
+    return rc
+
+
+def cmd_test_media_add(conf: dict, args: list[str]) -> int:
+    if len(args) != 1:
+        raise Denied("usage: asc-ctl test-media-add FILE.mp4")
+    path = user_file(conf, args[0])
+    if not re.match(r"^[A-Za-z0-9._-]{1,120}\.(mp4|mkv|mov|ts|webm)$", os.path.basename(path)):
+        raise Denied("file name must be [A-Za-z0-9._-] with a video extension")
+    dest = os.path.join(DATA_ROOT, "test-media", os.path.basename(path))
+    shutil.copy(path, dest)
+    os.chown(dest, CONTAINER_UID, CONTAINER_UID)
+    os.chmod(dest, 0o644)
+    print(f"added {dest}")
+    return 0
+
+
+def cmd_backup_db(conf: dict, args: list[str]) -> int:
+    if conf["SERVER"] != "210":
+        raise Denied("database lives on 210")
+    _, _, home = user_ids(conf)
+    d = os.path.join(home, "backups")
+    os.makedirs(d, exist_ok=True)
+    chown_to_user(conf, d)
+    dest = os.path.join(d, f"asc-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.sql.gz")
+    with open(dest, "wb") as f:
+        p1 = subprocess.Popen([DOCKER, "exec", "asc-postgres", "pg_dump", "-U", "asc", "-d", "asc", "--no-owner"],
+                              stdout=subprocess.PIPE)
+        p2 = subprocess.Popen(["gzip"], stdin=p1.stdout, stdout=f)
+        p1.stdout.close()
+        rc = p2.wait() or p1.wait()
+    os.chmod(dest, 0o600)
+    chown_to_user(conf, dest)
+    print(dest)
+    return rc
+
+
+def cmd_status(conf: dict, args: list[str]) -> int:
+    """Read-only overview of the host (all containers, so other projects can be monitored)."""
+    print(f"== {conf['SERVER']} {datetime.datetime.now().isoformat(timespec='seconds')}")
+    print("-- load", open("/proc/loadavg").read().strip())
+    run(["free", "-m"])
+    run(["df", "-h", "/", DATA_ROOT])
+    print("-- containers (all projects, read-only)")
+    run([DOCKER, "ps", "-a", "--format", "{{.Names}}\t{{.Image}}\t{{.Status}}"])
+    print("-- resource usage (all containers)")
+    run([DOCKER, "stats", "--no-stream", "--format", "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"])
+    print("-- gpu")
+    for card in sorted(os.listdir("/sys/class/drm")):
+        base = f"/sys/class/drm/{card}"
+        if re.match(r"^card[0-9]+$", card):
+            for f in ("gt_act_freq_mhz", "gt_max_freq_mhz", "device/tile0/gt0/freq0/act_freq"):
+                p = os.path.join(base, f)
+                if os.path.exists(p):
+                    print(f"{card} {f}={open(p).read().strip()}")
+    if os.path.exists("/dev/dri/renderD128"):
+        run(["fuser", "-v", "/dev/dri/renderD128"])
+    return 0
+
+
+COMMANDS = {
+    "status": cmd_status, "compose": cmd_compose, "exec": cmd_exec, "build": cmd_build, "images": cmd_images,
+    "image-save": cmd_image_save, "image-load": cmd_image_load, "image-rm": cmd_image_rm,
+    "env-install": cmd_env_install, "env-show": cmd_env_show, "set-tag": cmd_set_tag, "tls-init": cmd_tls_init,
+    "tls-install-ca": cmd_tls_install_ca, "init": cmd_init, "models": cmd_models, "gpu-validate": cmd_gpu_validate,
+    "test-media-add": cmd_test_media_add, "backup-db": cmd_backup_db,
+}
+
+
+def main(argv: list[str]) -> int:
+    os.environ["PATH"] = SAFE_PATH  # never trust the caller's PATH when running as root
+    if os.geteuid() != 0:
+        die("run through sudo")
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        print("commands:", ", ".join(sorted(COMMANDS)), "| version")
+        return 0
+    if argv[0] == "version":
+        print(VERSION)
+        return 0
+    conf = load_conf()
+    fn = COMMANDS.get(argv[0])
+    if fn is None:
+        die(f"unknown command {argv[0]}")
+    try:
+        rc = fn(conf, argv[1:])
+    except Denied as exc:
+        audit(argv, "denied")
+        die(f"denied: {exc}", 3)
+    except subprocess.CalledProcessError as exc:
+        audit(argv, f"error {exc.returncode}")
+        die(f"command failed ({exc.returncode})", 1)
+    audit(argv, f"rc={rc}")
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

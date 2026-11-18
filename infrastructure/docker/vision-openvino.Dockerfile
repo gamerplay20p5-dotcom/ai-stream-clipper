@@ -20,14 +20,17 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg tini python3-venv \
  && rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m venv --system-site-packages /opt/asc
+# Isolated venv: the base image provides the Intel GPU compute runtime (Level Zero/OpenCL);
+# the Python OpenVINO stack is pinned explicitly to the validated 2026.2.0 release.
+RUN python3 -m venv /opt/asc
 ENV PATH=/opt/asc/bin:$PATH
 WORKDIR /app
 COPY backend/pyproject.toml ./backend/
 COPY backend/clipper ./backend/clipper
-# OpenVINO comes from the base image; GenAI/tokenizers are pinned to the same 2026.2.0 release
-RUN pip install "./backend[vision]" "openvino-genai==2026.2.0.0" "openvino-tokenizers==2026.2.0.0" \
-        "transformers>=4.57,<5" "huggingface_hub>=0.24" "pillow>=10" && rm -rf /root/.cache
+RUN pip install --upgrade pip \
+ && pip install "./backend[vision]" "openvino==2026.2.0" "openvino-genai==2026.2.0.0" \
+        "openvino-tokenizers==2026.2.0.0" "transformers>=4.57,<5" "huggingface_hub>=0.24" "pillow>=10" \
+ && rm -rf /root/.cache
 ENV ASC_MODELS_DIR=/models
 
 RUN (getent group 10001 || groupadd --gid 10001 asc) \

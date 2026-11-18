@@ -1,105 +1,86 @@
-# Implantação e rollback
+# Implantação, atualização e rollback (v0.2.1+)
 
-Tudo roda no projeto Compose `asc`, com redes `asc_net_<servidor>` e volumes `asc_*` próprios. Nenhum comando abaixo para, altera ou remove contêineres existentes, e nada usa `prune`.
+Tudo roda no projeto Docker `asc`, com redes `asc_net_<servidor>`, volumes `asc_*` e pastas `/opt/asc` e `/etc/asc` próprias. O usuário `asc` **não** fica no grupo `docker`: ele opera pelo `asc-ctl` ([infrastructure/admin/README.md](../infrastructure/admin/README.md)), que só aceita operações no projeto `asc` que passam pela política de isolamento.
 
-## 0. Pré-requisitos (uma vez)
+| Servidor | Serviços | Acesso |
+|---|---|---|
+| 210 | `asc-postgres` (sem porta), `asc-api` (HTTPS `192.168.1.210:8780`), `asc-worker-scoring`, `asc-worker-vision` (Arc A750) | painel `https://192.168.1.210:8780` |
+| 206 | `asc-worker-capture` (segmentos em `192.168.1.206:8781`, autenticado), `asc-worker-audio`, `asc-worker-render` | — |
+| 201 | `asc-worker-vision` (Arc A750, 4 CPUs / 8 GB, prioridade baixa) | — |
 
-1. Copie o repositório para os três servidores, por exemplo em `/opt/ai-stream-clipper`, e rode `chmod +x infrastructure/scripts/*.sh` (os arquivos foram criados no Windows).
-2. Gere os segredos em qualquer máquina:
-   ```bash
-   ./infrastructure/scripts/gen-secrets.sh
-   ```
-   Use o **mesmo** `ASC_INTERNAL_SECRET` em 201, 206 e 210.
-3. Crie `.env.210`, `.env.206` e `.env.201` a partir de `.env.example`. Diferenças principais:
-
-   | variável | 210 | 206 | 201 |
-   |---|---|---|---|
-   | `ASC_BIND_IP` | 192.168.1.210 | 192.168.1.206 | (não usa) |
-   | `ASC_API_URL` | (interno) | http://192.168.1.210:8780 | http://192.168.1.210:8780 |
-   | `ASC_RENDER_GID` | `getent group render` | (não usa) | `getent group render` |
-   | `ASC_JWT_SECRET`, `ASC_DB_PASSWORD`, `ASC_ADMIN_*` | sim | não | não |
-4. Firewall (recomendado, aplicar conforme a política de vocês). As portas 8780 (210) e 8781 (206) só precisam ser alcançáveis a partir de 192.168.1.201, .206 e .210. Exemplo com ufw, **não aplicado automaticamente**:
-   ```bash
-   sudo ufw allow from 192.168.1.0/24 to any port 8780 proto tcp   # no 210
-   sudo ufw allow from 192.168.1.0/24 to any port 8781 proto tcp   # no 206
-   ```
-   Atenção: o Docker publica portas por iptables antes do ufw. Por isso o Compose já faz bind apenas no IP privado (`ASC_BIND_IP`), e nada fica em `0.0.0.0`.
-
-## 1. Servidor 210 (banco + API + painel)
+## 0. Instalação do asc-ctl (administrador, uma vez por servidor)
 
 ```bash
-cd /opt/ai-stream-clipper
-./infrastructure/scripts/preflight.sh 210       # só leitura: portas, disco, GPU, contêineres existentes
-./infrastructure/scripts/deploy.sh 210          # sobe postgres, api, worker-scoring
-curl http://192.168.1.210:8780/readyz
+sudo bash /home/asc/ai-stream-clipper/infrastructure/admin/install-asc-ctl.sh <201|206|210> <sha256 informado>
 ```
 
-Acesse `http://192.168.1.210:8780`, entre com `ASC_ADMIN_EMAIL` / `ASC_ADMIN_PASSWORD` e troque a senha:
+No 201, depois que o `asc-ctl` estiver funcionando: `sudo gpasswd -d asc docker`.
+
+## 1. Configuração (como asc)
 
 ```bash
-docker exec -it asc-api clipper create-admin admin@empresa.com
+cd ~/ai-stream-clipper
+cp .env.example ~/asc.env && chmod 600 ~/asc.env      # preencher (segredos: gen-secrets.sh)
+sudo asc-ctl env-install ~/asc.env                     # validado -> /etc/asc/asc.env (root 600)
+sudo asc-ctl init                                      # /opt/asc/{models,test-media,bench}
 ```
 
-Para HTTPS pelo Caddy existente, sem alterar a configuração atual sem revisão: um bloco novo `reverse_proxy 192.168.1.210:8780` em um subdomínio próprio, e `ASC_COOKIE_SECURE=true`. A integração com Authentik (OIDC) está preparada nas variáveis `ASC_OIDC_*`, mas ainda não está ativa.
+**HTTPS:**
+- No 210: `sudo asc-ctl tls-init`. Isso gera a CA do projeto e o certificado da API, e deixa `~/asc-ca.crt` para distribuição.
+- No 206 e no 201: copiar o `asc-ca.crt` e rodar `sudo asc-ctl tls-install-ca ~/asc-ca.crt`.
 
-## 2. Servidor 206 (captura, áudio, render)
+## 2. Imagens (compiladas só no 206)
 
 ```bash
-./infrastructure/scripts/preflight.sh 206
-./infrastructure/scripts/deploy.sh 206
+# 206
+sudo asc-ctl build app 0.2.1 && sudo asc-ctl build vision 0.2.1
+sudo asc-ctl image-save app 0.2.1 && sudo asc-ctl image-save vision 0.2.1   # -> ~/images/*.tar.gz
+# copiar para 210 (app + vision) e 201 (vision), depois em cada um:
+sudo asc-ctl image-load ~/images/ai-stream-clipper_0.2.1.tar.gz
 ```
 
-Baixe o YAMNet (classes acústicas, 20 MB): `./infrastructure/scripts/download-models.sh 206`.
-
-Na primeira transcrição o worker de áudio baixa o modelo Whisper (`small`, cerca de 500 MB) para o volume `asc_models`. Em **Infraestrutura**, o 206 deve aparecer com três workers online.
-
-Limites (somados): 14 CPUs e 21 GiB, de 32 threads e 200 GiB. Ajuste `ASC_WHISPER_CPU_THREADS`, `ASC_CONCURRENCY_AUDIO` e os `cpus` no Compose conforme a carga observada.
-
-## 3. Servidor 201 (visão GPU) e GPU do 210
+## 3. Subida gradual
 
 ```bash
-./infrastructure/scripts/preflight.sh 201
-docker compose -p asc -f infrastructure/compose/server-201.yml --env-file .env.201 build
-sudo mkdir -p /opt/asc/models && sudo chown 10001:10001 /opt/asc/models
-./infrastructure/scripts/download-models.sh 201   # Qwen3-VL-2B + Qwen3-1.7B (~2,9 GB)
-./infrastructure/scripts/validate-gpu.sh          # precisa passar antes de subir o worker
-./infrastructure/scripts/validate-gpu.sh --vlm qwen3-vl-2b-int4   # latência/VRAM reais -> registrar em FASE2.md
-./infrastructure/scripts/deploy.sh 201
-# no 210, opcional:
-./infrastructure/scripts/deploy.sh 210 --gpu
+# 210
+sudo asc-ctl compose up postgres api
+sudo asc-ctl exec asc-api -- python -m pytest ...    # (ver docs/STATUS.md)
+sudo asc-ctl compose up worker-scoring
+# 206
+sudo asc-ctl models yamnet whisper-small
+sudo asc-ctl compose up
+# 201 e 210 (GPU)
+sudo asc-ctl models qwen3-vl-2b-int4 qwen3-1.7b-int4
+sudo asc-ctl gpu-validate --vlm qwen3-vl-2b-int4      # resultados em /opt/asc/bench
+sudo asc-ctl compose up --gpu                         # 210; no 201: sudo asc-ctl compose up
 ```
 
-O provedor padrão é o `heuristic` (OpenCV), que já foi validado. Para o modelo multimodal, veja [VISAO_GPU.md](VISAO_GPU.md).
+## Acesso ao painel
+
+`https://192.168.1.210:8780`. O certificado é emitido pela CA do projeto. Para o navegador confiar nele, importe o `asc-ca.crt` como autoridade confiável. A alternativa é um túnel SSH: `ssh -L 8780:192.168.1.210:8780 asc@192.168.1.210` e depois abrir `https://localhost:8780`.
+
+## Monitoramento
+
+- `sudo asc-ctl status`: carga, memória, disco, **todos** os contêineres e o uso da GPU (somente leitura).
+- `sudo asc-ctl compose ps` e `sudo asc-ctl compose logs <serviço> --tail 200`.
+- No painel, a página **Infraestrutura** mostra workers, filas, modelos e latências.
 
 ## Atualização
 
-Altere `ASC_IMAGE_TAG` no `.env.<servidor>` (por exemplo `0.1.1`) e rode `deploy.sh` de novo. A API aplica as migrações Alembic ao iniciar. A tag anterior fica registrada em `.deploy/previous-images-<servidor>.txt`.
+1. Copiar o novo código para `~/ai-stream-clipper` e compilar e distribuir as imagens com a nova tag.
+2. No 210, antes de qualquer migração: `sudo asc-ctl backup-db` (vai para `~/backups/`).
+3. Em cada servidor: `sudo asc-ctl set-tag <nova>` e `sudo asc-ctl compose up`. As migrações rodam ao iniciar a API.
 
 ## Rollback
 
 ```bash
-# 1. (se a versão nova trouxe migração) volte o schema ANTES de trocar a imagem
-./infrastructure/scripts/rollback.sh 210 --db 0001
-# 2. volte para a imagem anterior (precisa existir localmente)
-./infrastructure/scripts/rollback.sh 210 --to 0.1.0
-./infrastructure/scripts/rollback.sh 206 --to 0.1.0
-# parar tudo do asc em um servidor (dados preservados)
-./infrastructure/scripts/rollback.sh 206 --stop
+sudo asc-ctl set-tag <anterior> && sudo asc-ctl compose up   # imagens anteriores ficam guardadas
+sudo asc-ctl compose stop                                   # parar o projeto (dados mantidos)
+sudo asc-ctl compose down                                   # remover os contêineres asc (volumes mantidos)
 ```
 
-Remoção completa, **apagando os dados** (só com decisão explícita):
-`docker compose -p asc -f infrastructure/compose/server-XXX.yml --env-file .env.XXX down -v`
+Se a versão nova migrou o banco: restaurar o backup de `~/backups` (`gunzip -c` piped para `psql` via `asc-ctl exec asc-postgres`) **antes** de voltar a imagem. O `asc-ctl` nunca remove volumes; apagar dados exige ação manual do administrador.
 
-## Backup
+## Migração futura do banco para o 212
 
-```bash
-./infrastructure/scripts/backup-db.sh /opt/backups/asc     # pg_dump compactado
-```
-
-Os vídeos ficam no volume `asc_storage` (210). Faça backup com a ferramenta de volumes que vocês já usam.
-
-## Migração do banco para o servidor 212
-
-1. `backup-db.sh` no 210 e restauração no PostgreSQL do 212.
-2. No `.env.210`, defina `ASC_DB_HOST=192.168.1.212` (e a senha correspondente). O serviço `postgres` local pode então ser parado com `docker compose ... stop postgres`.
-3. `deploy.sh 210`.
+`backup-db` no 210 e restauração no 212. Depois, `ASC_DB_HOST=192.168.1.212` no `asc.env`, `env-install` e `compose up api`.

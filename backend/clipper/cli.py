@@ -32,8 +32,13 @@ def cmd_api(args) -> None:
 
     s = get_settings()
     setup_logging("api", s.log_level, s.log_json)
+    tls = {}
+    if s.tls_cert and s.tls_key:
+        tls = {"ssl_certfile": str(s.tls_cert), "ssl_keyfile": str(s.tls_key)}
+    elif s.is_production:
+        logging.getLogger("clipper").warning("API running WITHOUT TLS - logins would travel in clear text")
     uvicorn.run(create_app(), host=args.host, port=args.port, log_config=None, proxy_headers=False,
-                access_log=False)
+                access_log=False, **tls)
 
 
 async def _run_worker(roles: list[str], stop_event=None) -> None:
@@ -178,8 +183,15 @@ def cmd_healthcheck(args) -> None:
     import urllib.request
 
     if args.target == "api":
+        import ssl
+
         port = os.environ.get("ASC_API_PORT", "8780")
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5) as r:
+        scheme = "https" if get_settings().tls_cert else "http"
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False  # loopback probe of our own listener
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(f"{scheme}://127.0.0.1:{port}/healthz", timeout=5,
+                                    context=ctx if scheme == "https" else None) as r:
             sys.exit(0 if r.status == 200 else 1)
     from .workers.runtime import HEARTBEAT_FILE
 
