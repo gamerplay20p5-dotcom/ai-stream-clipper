@@ -23,7 +23,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from .base import App, PublishError, Tokens, UploadResult, check_response, expires_in
+from .base import App, PublishError, Tokens, UploadResult, check_response as _generic_check, expires_in
 
 IG_GRAPH = "https://graph.instagram.com"
 FB_GRAPH = "https://graph.facebook.com"
@@ -36,6 +36,44 @@ RUPLOAD = "https://rupload.facebook.com/ig-api-upload"
 SCOPES = ["instagram_business_basic", "instagram_business_content_publish", "instagram_business_manage_insights"]
 platform = "instagram"
 PRIVACY = ("public",)
+CHUNK = 1024 * 1024  # upload streamed in 1 MiB pieces: memory stays flat whatever the video size
+# Meta Graph error codes (error.code) -> meaning. HTTP status alone is not enough: an invalid or
+# revoked token comes back as HTTP 400 with code 190, not as 401.
+AUTH_CODES = {190, 102, 10, 200}  # 10/200: permission missing or removed
+RATE_CODES = {4, 17, 32, 613, 80002}
+TRANSIENT_CODES = {1, 2, -1}
+
+
+def check_response(r, what: str) -> dict:
+    """Meta-aware version of ``base.check_response``: classifies by ``error.code``/``error_subcode``."""
+    if r.status_code < 400:
+        return _generic_check(r, what)
+    try:
+        err = (r.json() or {}).get("error") or {}
+    except ValueError:
+        err = {}
+    code, sub = err.get("code"), err.get("error_subcode")
+    msg = str(err.get("error_user_msg") or err.get("message") or "")[:300]
+    if code in AUTH_CODES:
+        raise PublishError(f"{what}: autorização da Meta inválida, expirada ou sem permissão ({msg})",
+                           retryable=False, auth=True)
+    if code in RATE_CODES:
+        raise PublishError(f"{what}: limite da API da Meta atingido ({msg})", retryable=True, retry_after=3600)
+    if code in TRANSIENT_CODES or err.get("is_transient"):
+        raise PublishError(f"{what}: erro temporário da Meta ({msg})", retryable=True)
+    if code is not None:
+        raise PublishError(f"{what}: a Meta recusou (código {code}{'/' + str(sub) if sub else ''}): {msg}",
+                           retryable=False)
+    return _generic_check(r, what)
+
+
+def _file_chunks(path: Path, chunk: int = CHUNK):
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(chunk)
+            if not b:
+                return
+            yield b
 
 
 def _client() -> httpx.Client:
@@ -140,6 +178,8 @@ def _limit_ok(c: httpx.Client, base: str, uid: str, token: str) -> None:
 
 
 def upload(pub, tokens: Tokens, video: Path, save_state) -> UploadResult:
+    if pub.privacy not in PRIVACY:  # defence in depth: eligibility already refuses it
+        raise PublishError(f"privacidade '{pub.privacy}' não existe no Instagram (Reels são públicos)", retryable=False)
     st = dict(pub.upload_state or {})
     base = _base(tokens)
     uid = st.get("ig_user_id") or tokens.extra.get("user_id")
@@ -159,12 +199,13 @@ def upload(pub, tokens: Tokens, video: Path, save_state) -> UploadResult:
                        "graph": base})
             save_state(st)
         if not st.get("uploaded"):
+            # streamed in chunks (never the whole file in memory): the publisher worker has 1 GB of RAM. A retry restarts at
+            # offset 0 on the SAME container (Meta accepts re-sending the whole file).
             size = video.stat().st_size
-            with open(video, "rb") as f:
-                r = c.post(st.get("upload_uri") or f"{RUPLOAD}/{_version(tokens)}/{st['container_id']}",
-                           headers={"Authorization": f"OAuth {tokens.access_token}", "offset": "0",
-                                    "file_size": str(size)}, content=f.read(),
-                           timeout=httpx.Timeout(600.0, connect=15.0))
+            r = c.post(st.get("upload_uri") or f"{RUPLOAD}/{_version(tokens)}/{st['container_id']}",
+                       headers={"Authorization": f"OAuth {tokens.access_token}", "offset": "0",
+                                "file_size": str(size), "Content-Length": str(size)},
+                       content=_file_chunks(video), timeout=httpx.Timeout(600.0, connect=15.0))
             check_response(r, "envio do vídeo (Instagram)")
             st["uploaded"] = True
             save_state(st)
@@ -184,14 +225,36 @@ def status(pub, tokens: Tokens) -> dict:
                                                           "access_token": tokens.access_token})
         d = check_response(r, "processamento (Instagram)")
         code = d.get("status_code")
-        if code in ("ERROR", "EXPIRED"):
-            return {"state": "failed", "detail": d.get("status") or code}
+        if code in ("ERROR", "EXPIRED"):  # e.g. video rejected (format, duration, aspect ratio)
+            return {"state": "failed", "detail": f"o Instagram recusou o vídeo: {d.get('status') or code}"}
+        if code == "PUBLISHED":
+            # media_publish already went through (e.g. the worker stopped before saving the media id):
+            # NEVER publish again - recover the id from the account's latest media with this caption
+            mid = _find_published(c, base, st.get("ig_user_id"), pub, tokens)
+            if mid:
+                return {"state": "processing", "detail": "publicado; recuperando o link", "media_id": mid}
+            return {"state": "failed", "detail": "o Instagram indica que o Reel já foi publicado, mas o ID não foi "
+                                                 "encontrado: confira no perfil (nada foi publicado de novo)"}
         if code != "FINISHED":
             return {"state": "processing", "detail": code}
         r = c.post(f"{base}/{st['ig_user_id']}/media_publish",
                    data={"creation_id": st["container_id"], "access_token": tokens.access_token})
         d = check_response(r, "publicação (Instagram)")
         return {"state": "processing", "detail": "publicado; buscando o link", "media_id": d.get("id")}
+
+
+def _find_published(c: httpx.Client, base: str, uid: str | None, pub, tokens: Tokens) -> str | None:
+    if not uid:
+        return None
+    r = c.get(f"{base}/{uid}/media", params={"fields": "id,caption,timestamp", "limit": 10,
+                                            "access_token": tokens.access_token})
+    if r.status_code >= 400:
+        return None
+    want = (pub.title + "\n\n" + pub.description).strip()[:2200][:120]
+    for m in (r.json() or {}).get("data") or []:
+        if (m.get("caption") or "")[:120] == want:
+            return str(m["id"])
+    return None
 
 
 def metrics(pub, tokens: Tokens) -> dict:

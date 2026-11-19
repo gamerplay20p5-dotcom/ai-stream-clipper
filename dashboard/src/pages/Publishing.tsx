@@ -3,6 +3,7 @@ import { ExternalLink, Link2, RotateCcw, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { api, type Streamer } from "../api";
 import { Empty, ErrorNote, PageHeader } from "../components/ui";
+import PrivacyPicker, { initialPrivacy } from "../components/PrivacyPicker";
 import { EditorialCalendar, PauseBanner, Reports } from "../components/EditorialOps";
 
 export type PubApp = { platform: string; name: string; configured: boolean; client_id: string; has_secret: boolean; redirect_uri: string; validated: boolean; config_id: string; callback_url: string; flow: string };
@@ -209,8 +210,8 @@ function Rights() {
   );
 }
 
-const emptyRule = (account_id: number): Omit<Rule, "id"> => ({ account_id, streamer_id: null, enabled: true, mode: "manual", require_approval: true,
-  min_score: 70, privacy: "private", allow_public_auto: false, max_per_day: 3, slots: ["12:00", "18:00", "21:00"], timezone: "America/Sao_Paulo", templates: {} });
+const emptyRule = (a: PubAccount): Omit<Rule, "id"> => ({ account_id: a.id, streamer_id: null, enabled: true, mode: "manual", require_approval: true,
+  min_score: 70, privacy: initialPrivacy(a.meta.privacy_options ?? []), allow_public_auto: false, max_per_day: 3, slots: ["12:00", "18:00", "21:00"], timezone: "America/Sao_Paulo", templates: {} });
 
 function Rules({ ov }: { ov: Overview }) {
   const [editing, setEditing] = useState<(Omit<Rule, "id"> & { id?: number }) | null>(null);
@@ -219,7 +220,7 @@ function Rules({ ov }: { ov: Overview }) {
   return (
     <Section title="4. Regras de publicação" hint="Modo manual: você escolhe cada corte. Semiautomático: a IA propõe os melhores cortes nos horários e você confirma com um clique. Agendado: cortes elegíveis entram nos horários do calendário. Imediato: publica assim que elegível. Público automático só com ativação explícita.">
       {ov.accounts.filter((a) => a.status === "connected").map((a) => (
-        <button key={a.id} className="btn-quiet mb-3 mr-2" onClick={() => setEditing(emptyRule(a.id))}>Nova regra para {a.name}</button>
+        <button key={a.id} className="btn-quiet mb-3 mr-2" onClick={() => setEditing(emptyRule(a))}>Nova regra para {a.name}</button>
       ))}
       {ov.rules.length > 0 && (
         <table className="mb-3 w-full text-sm">
@@ -230,7 +231,9 @@ function Rules({ ov }: { ov: Overview }) {
               <td>{r.streamer_id ? st.data?.find((s) => s.id === r.streamer_id)?.display_name : "todos"}</td>
               <td>{({ manual: "manual", semi: "semiautomático", scheduled: "agendado", immediate: "imediato" } as Record<string, string>)[r.mode]}</td>
               <td>{r.min_score}</td><td>{r.require_approval ? "exigida" : "não"}</td>
-              <td>{privacyLabel[r.privacy] ?? r.privacy}{r.allow_public_auto && " · público automático"}</td>
+              <td>{privacyLabel[r.privacy] ?? r.privacy}{r.allow_public_auto && " · público automático"}
+                {acctName(r.account_id)?.meta.privacy_options && !acctName(r.account_id)!.meta.privacy_options!.includes(r.privacy) &&
+                  <span className="block text-xs text-tally">inválida para esta conta: edite a regra (nada é publicado por ela assim)</span>}</td>
               <td>{r.max_per_day}</td><td className="text-xs">{r.slots.join(", ")}</td>
               <td><button className="btn-quiet px-2 py-1 text-xs" onClick={() => setEditing(r)}>Editar</button></td>
             </tr>
@@ -267,10 +270,11 @@ function RuleForm({ rule, accounts, streamers, onClose }: { rule: Omit<Rule, "id
             <option value="scheduled" disabled={acct?.platform === "tiktok"}>Automático agendado</option>
             <option value="immediate" disabled={acct?.platform === "tiktok"}>Automático imediato</option>
           </select></label>
-        <label><span className="text-xs text-ink-muted">Privacidade</span>
-          <select className="field" value={r.privacy} onChange={(e) => setR({ ...r, privacy: e.target.value })}>
-            {(acct?.meta.privacy_options ?? ["private"]).map((p) => <option key={p} value={p}>{privacyLabel[p] ?? p}</option>)}
-          </select></label>
+        <div><span className="text-xs text-ink-muted">Privacidade</span>
+          <PrivacyPicker options={acct?.meta.privacy_options ?? ["private"]} value={r.privacy} platform={acct?.platform}
+            onChange={(v) => setR({ ...r, privacy: v })} />
+          {acct?.platform === "instagram" && r.mode === "semi" && <p className="mt-1 text-xs text-ink-muted">No semiautomático cada Reel só sai depois que você confirma a proposta.</p>}
+        </div>
         <label><span className="text-xs text-ink-muted">Nota editorial mínima</span>
           <input className="field" type="number" min={0} max={100} value={r.min_score} onChange={(e) => setR({ ...r, min_score: Number(e.target.value) })} /></label>
         <label><span className="text-xs text-ink-muted">Máximo por dia</span>
@@ -292,7 +296,7 @@ function RuleForm({ rule, accounts, streamers, onClose }: { rule: Omit<Rule, "id
       )}
       <ErrorNote error={save.error ?? del.error} />
       <div className="mt-3 flex gap-2">
-        <button className="btn-take" disabled={save.isPending} onClick={() => save.mutate()}>Salvar regra</button>
+        <button className="btn-take" disabled={save.isPending || !r.privacy} onClick={() => save.mutate()}>Salvar regra</button>
         {r.id && <button className="btn-danger" onClick={() => del.mutate()}>Excluir</button>}
         <button className="btn-quiet" onClick={onClose}>Fechar</button>
       </div>

@@ -115,3 +115,34 @@ Em modo "Em teste", o Google expira o refresh token em 7 dias: reconecte quando 
 ## Direitos de terceiros
 
 O sistema só automatiza a publicação de streamers marcados com direito de republicação, e toda publicação leva uma linha de créditos com o link da origem. Isso não substitui a autorização: republicar lives de terceiros sem permissão pode violar direitos autorais e os termos das plataformas. Use apenas conteúdo próprio ou autorizado.
+
+## Correção do Instagram (v0.6.1, 2026-11-19)
+
+**Causa principal:** ao escolher a conta, o painel definia a privacidade como `private` para todas as plataformas menos o TikTok. O Instagram só oferece `public`, então:
+- o `<select>` ficava com um valor fora das opções, e o navegador exibia "Público";
+- o estado real e o rótulo do botão diziam "Privado";
+- a checagem ia com `privacy=private`, o backend respondia "privacidade 'private' não disponível nesta conta (public)" e o botão ficava bloqueado.
+
+A tela mostrava uma privacidade diferente da que seria enviada.
+
+**Mesma causa em outros lugares:**
+- **Regras:** o formulário começava em `private` com o mesmo efeito. A regra semiautomática do Instagram em produção (id 1) foi salva como `private`, e por isso nenhuma proposta do Instagram jamais passaria na checagem. Ela agora aparece marcada como inválida no painel. **Não foi alterada automaticamente:** basta editá-la e confirmar "público".
+- **Lote:** o agendamento em lote enviava `private` fixo.
+
+**Correções:**
+- **Componente único de privacidade** (`PrivacyPicker`): valor inválido mostra o placeholder, nunca outra opção, e conta só pública (Reels) exige marcar "Confirmo que será PÚBLICO". `npm run check:privacy` verifica isso.
+- **Validação no backend:**
+  - publicação manual sem privacidade é recusada (sem padrão silencioso);
+  - regras e lote recusam uma privacidade que a conta não tem;
+  - a regra semiautomática pública é aceita, porque cada Reel é confirmado por uma pessoa;
+  - regra totalmente automática pública continua exigindo a ativação explícita.
+- **Checagem:** lista todos os motivos, inclusive "confirme o direito de republicar" quando o streamer não tem autorização registrada, e informa quando o corte ou a conta não existem.
+- **Integração Meta (`publish/instagram.py`):**
+  - erros classificados pelo `error.code` da Meta: 190, 102, 10 e 200 viram "autorização" (marca a conta para reconectar), 4, 17, 32, 613 e 80002 viram "limite" (tenta de novo em 1 h), e os transitórios são repetidos;
+  - antes, um token inválido (HTTP 400, código 190) não era reconhecido como problema de autorização;
+  - o envio é por **streaming** em partes de 1 MiB, com `Content-Length`, em vez de `f.read()` do arquivo inteiro (o worker tem 1 GB);
+  - a privacidade é recusada antes de qualquer chamada;
+  - "vídeo recusado" mostra o motivo dado pela Meta;
+  - se o contêiner já está `PUBLISHED` (o worker parou depois do `media_publish` e antes de gravar o ID), o sistema **nunca publica de novo**: recupera o ID pela legenda entre as mídias recentes ou falha pedindo conferência no perfil.
+
+**Ainda não validado com um Reel real:** nada foi publicado e nenhuma permissão OAuth foi alterada. A retomada do envio a partir do byte em que parou não está implementada: uma nova tentativa reenvia o arquivo inteiro para o **mesmo** contêiner.

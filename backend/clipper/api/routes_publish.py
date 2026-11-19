@@ -43,10 +43,22 @@ def _account(a: PublishAccount) -> dict:
             "connected_at": _iso(a.connected_at), "token_expires_at": _iso(a.token_expires_at)}
 
 
-def _rule(r: PublishRule) -> dict:
-    return {k: getattr(r, k) for k in ("id", "account_id", "streamer_id", "enabled", "mode", "require_approval",
-                                         "min_score", "privacy", "allow_public_auto", "max_per_day", "slots",
-                                         "timezone", "templates")}
+def _rule(r: PublishRule, acct: PublishAccount | None = None) -> dict:
+    d = {k: getattr(r, k) for k in ("id", "account_id", "streamer_id", "enabled", "mode", "require_approval",
+                                      "min_score", "privacy", "allow_public_auto", "max_per_day", "slots",
+                                      "timezone", "templates")}
+    opts = ((acct.meta or {}).get("privacy_options") or []) if acct is not None else []
+    d["problems"] = [f"privacidade '{r.privacy}' não existe nesta conta ({', '.join(opts)}): nada é publicado por "
+                     f"esta regra até ela ser corrigida"] if opts and r.privacy not in opts else []
+    return d
+
+
+def _privacy_ok(acct: PublishAccount, privacy: str) -> None:
+    opts = (acct.meta or {}).get("privacy_options") or []
+    if not privacy:
+        raise HTTPException(422, "escolha a privacidade")
+    if opts and privacy not in opts:
+        raise HTTPException(422, f"privacidade '{privacy}' não existe nesta conta (opções: {', '.join(opts)})")
 
 
 def _pub(db: Session, p: Publication) -> dict:
@@ -74,7 +86,7 @@ def overview(db: Session = Depends(get_db), _: CurrentUser = Depends(current_use
                     "validated": pf == "youtube",
                     "flow": ("unified" if row and row.config_id else "missing_config_id") if pf == "instagram" else "oauth2"}
     accounts = [_account(a) for a in db.scalars(select(PublishAccount).order_by(PublishAccount.platform))]
-    rules = [_rule(r) for r in db.scalars(select(PublishRule).order_by(PublishRule.id))]
+    rules = [_rule(r, db.get(PublishAccount, r.account_id)) for r in db.scalars(select(PublishRule).order_by(PublishRule.id))]
     counts: dict[str, int] = {}
     for (st,) in db.execute(select(Publication.status)):
         counts[st] = counts.get(st, 0) + 1
@@ -231,6 +243,7 @@ def _check_rule(db: Session, body: RuleIn) -> PublishAccount:
         raise HTTPException(422, "Reels são públicos: postagem automática no Instagram exige ativar 'permitir público automático'")
     if body.streamer_id is not None and db.get(Streamer, body.streamer_id) is None:
         raise HTTPException(404, "streamer not found")
+    _privacy_ok(acct, body.privacy)  # e.g. Instagram Reels only exist as "public"
     return acct
 
 
@@ -271,13 +284,22 @@ def delete_rule(rid: int, request: Request, db: Session = Depends(get_db), user:
 
 
 @router.get("/clips/{cid}/check")
-def check_clip(cid: int, account_id: int, privacy: str = "private", db: Session = Depends(get_db),
+def check_clip(cid: int, account_id: int, privacy: str = "", db: Session = Depends(get_db),
                _: CurrentUser = Depends(current_user)):
+    """Every reason that blocks publishing this clip on this account. ``privacy`` empty = not chosen yet
+    (no privacy verdict; the panel asks the person); the rights reason is included when not on file."""
     clip, acct = db.get(Clip, cid), db.get(PublishAccount, account_id)
-    if clip is None or acct is None:
-        raise HTTPException(404, "clip or account not found")
+    if clip is None:
+        raise HTTPException(404, "corte não encontrado (pode ter sido excluído)")
+    if acct is None:
+        raise HTTPException(404, "conta não encontrada")
     streamer = db.get(Streamer, clip.streamer_id)
-    return {"problems": service.eligibility(db, clip, acct, auto=False, privacy=privacy, rights_confirmed=True),
+    opts = (acct.meta or {}).get("privacy_options") or []
+    problems = service.eligibility(db, clip, acct, auto=False, privacy=privacy or (opts[0] if opts else "private"),
+                                   rights_confirmed=False)
+    if not privacy:
+        problems = [p for p in problems if not p.startswith("privacidade")]
+    return {"problems": problems, "privacy_required": not privacy,
             "rights_on_file": bool(((streamer.preferences or {}) if streamer else {}).get("republish_allowed")),
             "suggested": service.suggest_metadata(db, clip, acct.platform),
             "privacy_options": (acct.meta or {}).get("privacy_options") or []}
@@ -289,7 +311,7 @@ class PublishIn(BaseModel):
     title: str = Field(..., min_length=1, max_length=150)
     description: str = Field("", max_length=4900)
     tags: list[str] = Field(default_factory=list, max_length=30)
-    privacy: str = "private"
+    privacy: str = Field(..., min_length=1, max_length=32)  # always explicit: never a silent default
     scheduled_at: datetime | None = None
     rights_confirmed: bool = False
 
@@ -405,7 +427,7 @@ def set_control(body: ControlIn, request: Request, db: Session = Depends(get_db)
 class BatchIn(BaseModel):
     clip_ids: list[int] = Field(min_length=1, max_length=50)
     account_id: int
-    privacy: str = Field("private", pattern=PRIVACY_RE)
+    privacy: str = Field(..., pattern=PRIVACY_RE)  # explicit (Instagram only has "public")
     rights_confirmed: bool = False
 
 
@@ -414,6 +436,7 @@ def batch(body: BatchIn, request: Request, db: Session = Depends(get_db), user: 
     acct = db.get(PublishAccount, body.account_id)
     if acct is None:
         raise HTTPException(404, "account not found")
+    _privacy_ok(acct, body.privacy)
     out = ed.batch_schedule(db, list(dict.fromkeys(body.clip_ids)), acct, privacy=body.privacy, user=user.email,
                             rights_confirmed=body.rights_confirmed)
     audit(db, request, user, "publish.batch", f"account:{acct.id}",

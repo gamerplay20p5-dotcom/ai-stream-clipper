@@ -6,6 +6,14 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.6.1", "date": "2026-11-19", "title": "Correção da publicação no Instagram", "items": [
+        "A tela mostrava 'Público' mas enviava 'Privado' para o Instagram, e o botão ficava bloqueado: corrigido.",
+        "Reels exigem confirmação explícita de que serão públicos; nada é escolhido em silêncio.",
+        "Regras e agendamento em lote validam a privacidade de cada conta; regras inválidas aparecem marcadas.",
+        "O painel mostra todos os motivos de bloqueio, inclusive o direito de republicação.",
+        "Envio do vídeo ao Instagram em partes (sem carregar o arquivo inteiro na memória) e erros da Meta classificados.",
+        "Proteção contra publicar o mesmo Reel duas vezes.",
+    ]},
     {"version": "0.6.0", "date": "2026-11-18", "title": "Quality Gate 2.0", "items": [
         "Cada corte recebe 4 notas separadas: acontecimento, narrativa do corte, potencial de reedição e técnica.",
         "Bom momento mal cortado é reeditado automaticamente (começar antes, incluir o desfecho, aproximar do ponto alto) antes de ser descartado; no máximo 2 vezes.",
