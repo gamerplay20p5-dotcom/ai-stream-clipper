@@ -6,6 +6,13 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.6.2-hotfix.1", "date": "2026-11-19", "title": "Monitoramento de lives que não trava", "items": [
+        "Cada canal é verificado de forma independente, num processo próprio com tempo limite: um canal travado não para os outros.",
+        "O monitoramento é supervisionado e reinicia sozinho se parar de avançar; as capturas em andamento não são interrompidas.",
+        "Se o worker inteiro travar, ele registra o motivo nos logs e reinicia de forma controlada.",
+        "O painel mostra \"Monitoramento atrasado\" quando um canal não é verificado no prazo, em vez de exibir um estado antigo como atual.",
+        "\"Verificar agora\" mostra se a verificação foi solicitada, concluída ou ainda não executada.",
+    ]},
     {"version": "0.6.2", "date": "2026-11-19", "title": "Editor estrutural", "items": [
         "Cinco estruturas para o mesmo acontecimento: gancho imediato, suspense, humor de reação, história completa e momento rápido.",
         "Corte de pausas que nunca remove reações, o ponto alto nem o desfecho; só trechos reais, na ordem real.",

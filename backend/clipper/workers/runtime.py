@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import logging
+import os
+import signal
 import socket
+import sys
 import tempfile
+import threading
 import time
 import traceback
 from collections.abc import Awaitable, Callable
@@ -19,6 +24,71 @@ from .client import InternalClient, InternalError
 
 log = logging.getLogger(__name__)
 HEARTBEAT_FILE = Path(tempfile.gettempdir()) / "asc-worker-heartbeat"
+
+
+class LoopWatchdog:
+    """A plain thread that notices when the asyncio event loop stops running.
+
+    The heartbeat is a task of that same loop, so a blocked loop silences the heartbeat, the job claims, the lease
+    renewals and the monitor at once: the worker looks "lost" but its container stays up and is never restarted.
+    After `stall_s` without a tick the watchdog dumps every thread's stack to stderr (the evidence for the logs)
+    and exits the process with code 70, so the container restart policy brings a clean worker back. In-flight jobs
+    are recovered by lease expiry, exactly like a crash. `stall_s <= 0` disables it.
+    """
+
+    def __init__(self, stall_s: float, exit_fn: Callable[[int], None] | None = None, check_every_s: float = 5.0):
+        self.stall_s = stall_s
+        self.exit_fn = exit_fn or os._exit
+        self.check_every_s = check_every_s
+        self.last_tick = time.monotonic()
+        self.fired = False
+        self._halt = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def tick(self) -> None:
+        self.last_tick = time.monotonic()
+
+    def check(self) -> bool:
+        """True when the loop is considered stuck (and the exit was triggered)."""
+        if self.stall_s <= 0 or self.fired:
+            return False
+        blocked = time.monotonic() - self.last_tick
+        if blocked < self.stall_s:
+            return False
+        self.fired = True
+        sys.stderr.write(f"asc-worker: event loop blocked for {blocked:.0f}s; dumping stacks and exiting (70)\n")
+        try:
+            faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+        except Exception:  # pragma: no cover
+            pass
+        log.critical("event loop blocked, exiting for a controlled restart", extra={"blocked_s": round(blocked)})
+        self.exit_fn(70)
+        return True
+
+    def start(self) -> None:
+        if self.stall_s <= 0:
+            return
+
+        def _run() -> None:
+            while not self._halt.wait(self.check_every_s):
+                if self.check():
+                    return
+
+        self._thread = threading.Thread(target=_run, name="asc-loop-watchdog", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._halt.set()
+
+
+def enable_stack_dumps() -> None:
+    """`kill -USR1 <pid>` (or `docker kill -s USR1`) prints every thread's stack without stopping the worker."""
+    try:
+        faulthandler.enable(file=sys.stderr)
+        if hasattr(signal, "SIGUSR1"):
+            faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
+    except (RuntimeError, ValueError, AttributeError, OSError):  # pragma: no cover - e.g. no real stderr
+        pass
 
 
 class JobError(Exception):
@@ -71,6 +141,8 @@ class WorkerRuntime:
         self.base_url = base_url
         self.extra_caps = extra_caps or {}
         self.metrics_hook = metrics_hook
+        self.extra_metrics: list[Callable[[], dict]] = []  # e.g. the monitor's progress snapshot
+        self.watchdog = LoopWatchdog(getattr(settings, "loop_stall_exit_s", 0.0))
         self.client = InternalClient(settings.api_url, settings.internal_secret, self.worker_id)
         self.running: dict[int, JobContext] = {}
         self._stop = asyncio.Event()
@@ -100,9 +172,9 @@ class WorkerRuntime:
         while not self._stop.is_set():
             try:
                 m = sysinfo.metrics(self.workdir, len(self.running))
-                if self.metrics_hook is not None:
+                for hook in ([self.metrics_hook] if self.metrics_hook else []) + self.extra_metrics:
                     try:
-                        m.update(self.metrics_hook())
+                        m.update(hook())
                     except Exception as exc:  # metrics must never break the heartbeat
                         log.warning("metrics hook failed", extra={"err": str(exc)[:200]})
                 await self.client.post("/internal/workers/heartbeat", {"metrics": m})
@@ -196,9 +268,16 @@ class WorkerRuntime:
         except InternalError:
             log.warning("could not report failure; lease expiry will recover", extra={"job_id": ctx.id})
 
+    async def _tick_loop(self) -> None:
+        while True:
+            self.watchdog.tick()
+            await asyncio.sleep(2.0)
+
     async def run(self) -> None:
+        enable_stack_dumps()
+        self.watchdog.start()
         await self.register()
-        bg = [asyncio.create_task(self._heartbeat_loop())]
+        bg = [asyncio.create_task(self._tick_loop()), asyncio.create_task(self._heartbeat_loop())]
         bg += [asyncio.create_task(fn(self)) for fn in self.background]
         loops = [asyncio.create_task(self._claim_loop(s)) for s in self.specs]
         try:
@@ -214,6 +293,7 @@ class WorkerRuntime:
             for t in bg:
                 t.cancel()
             await asyncio.gather(*bg, return_exceptions=True)
+            self.watchdog.stop()
             await self.client.aclose()
 
     def stop(self) -> None:

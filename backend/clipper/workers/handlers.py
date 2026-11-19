@@ -10,7 +10,6 @@ from pathlib import Path
 from .. import media
 from ..analysis.audio_features import compute_features, read_wav_mono
 from ..analysis.transcribe import get_transcriber
-from ..platforms import probe_live
 from ..render.renderer import RenderSpec, render
 from ..render.subtitles import SubWord
 from ..scoring.engine import score_timeline
@@ -459,35 +458,12 @@ async def handle_dataset_media(ctx: JobContext) -> dict:
 # ---------------------------------------------------------------------------
 
 
-async def monitor_loop(rt: WorkerRuntime, interval: float = 60.0, concurrency: int = 4) -> None:
-    sem = asyncio.Semaphore(concurrency)
+async def monitor_loop(rt: WorkerRuntime) -> None:
+    """Supervised monitor with per-channel probes in killable child processes (see workers/monitor.py)."""
+    from .monitor import Monitor, run_supervised
 
-    async def check(t: dict) -> None:
-        async with sem:
-            note = channel_id = ""
-            if t["platform"] == "file":
-                live, title, error = True, "", ""
-            else:
-                st = await asyncio.to_thread(probe_live, t["url"])
-                live, title, error, note, channel_id = st.live, st.title, st.error, st.note, st.channel_id
-            try:
-                r = await rt.client.post("/internal/monitor/report", {"streamer_id": t["streamer_id"], "live": live,
-                                                                      "title": title, "error": error, "note": note,
-                                                                      "channel_id": channel_id})
-                if r.get("created"):
-                    log.info("live detected, session created", extra={"streamer_id": t["streamer_id"],
-                                                                       "session_id": r.get("session_id")})
-            except InternalError as exc:
-                log.warning("monitor report failed", extra={"err": str(exc)})
-
-    while True:
-        try:
-            targets = await rt.client.get("/internal/monitor/targets", min_interval=interval)
-            await asyncio.gather(*(check(t) for t in targets))
-        except InternalError as exc:
-            log.warning("monitor poll failed", extra={"err": str(exc)})
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("monitor loop error")
-        await asyncio.sleep(5.0)
+    s = rt.settings
+    mon = Monitor(rt.client, interval_s=s.monitor_interval_s, concurrency=s.monitor_concurrency,
+                  deadline_s=s.monitor_probe_timeout_s, http_timeout_s=s.monitor_http_timeout_s, stall_s=s.monitor_stall_s)
+    rt.extra_metrics.append(mon.snapshot)
+    await run_supervised(mon)
