@@ -147,7 +147,7 @@ def test_admin_retry_gets_a_new_queue_job(client):
 
 def test_calendar_reschedule_and_report(admin):
     ids, aid = _setup("cal", n=2)
-    admin.post("/api/publish/batch", json={"clip_ids": ids, "account_id": aid, "rights_confirmed": True}, headers=CSRF)
+    admin.post("/api/publish/batch", json={"clip_ids": ids, "account_id": aid, "privacy": "private", "rights_confirmed": True}, headers=CSRF)
     cal = admin.get("/api/publish/calendar?days=30").json()
     mine = [x for x in cal["items"] if x["clip_id"] in ids]
     assert len(mine) == 2 and all(x["when"] and "-03:00" in x["when"] for x in mine)

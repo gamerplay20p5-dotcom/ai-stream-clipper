@@ -190,7 +190,7 @@ def referenced_files(db: Session, clip: Clip) -> set[str]:
         refs.update(p for p in (rec.get("video_path"), rec.get("thumb_path")) if p)
     refs.update(p for (p,) in db.execute(select(Publication.video_path).where(
         Publication.clip_id == clip.id, Publication.video_path != "",
-        Publication.status.in_(("draft", "proposed", "scheduled", "uploading", "processing")))).all() if p)
+        Publication.status.in_(("draft", "proposed", "scheduled", "uploading", "processing", "uncertain")))).all() if p)
     return refs
 
 

@@ -141,7 +141,7 @@ def calendar(db: Session, days: int = 14) -> dict:
     now = utcnow()
     lo, hi = now - timedelta(days=2), now + timedelta(days=max(1, min(days, 60)))
     rows = db.scalars(select(Publication).where(
-        Publication.status.in_(("proposed", "scheduled", "uploading", "processing", "published", "expired", "failed")),
+        Publication.status.in_(("proposed", "scheduled", "uploading", "processing", "uncertain", "published", "expired", "failed")),
         ((Publication.scheduled_at >= lo) & (Publication.scheduled_at <= hi))
         | ((Publication.scheduled_at.is_(None)) & (Publication.created_at >= lo))
         | ((Publication.published_at >= lo) & (Publication.published_at <= hi))))

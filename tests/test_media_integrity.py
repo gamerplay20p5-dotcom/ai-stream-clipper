@@ -229,3 +229,15 @@ def test_one_malformed_publication_never_stops_status_polling(store, client, mon
     with session_scope() as db:
         assert db.get(Publication, good_id).status == "published"
         assert "consulta de status falhou" in db.get(Publication, bad_id).last_error
+
+
+def test_snapshot_of_an_uncertain_publication_is_never_deleted(store, client):
+    """Integration of PR #2 (snapshots) with PR #3 (uncertain status): the media of a publication
+    whose result is uncertain stays referenced (it may be needed to reconcile or explain)."""
+    cid, aid = _clip(store, "unc")
+    with session_scope() as db:
+        c = db.get(Clip, cid)
+        db.add(Publication(clip_id=cid, account_id=aid, platform="instagram", status="uncertain", privacy="public",
+                           video_path="clips/x/clip_v1_snapshot.mp4"))
+        db.flush()
+        assert "clips/x/clip_v1_snapshot.mp4" in ps.referenced_files(db, c)

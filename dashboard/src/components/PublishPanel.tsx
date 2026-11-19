@@ -5,14 +5,11 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import type { Pub, PubAccount } from "../pages/Publishing";
 import { pubStatus } from "../pages/Publishing";
+import PrivacyPicker, { initialPrivacy, privacyLabel } from "./PrivacyPicker";
 import { ErrorNote } from "./ui";
 
 type Check = { problems: string[]; rights_on_file: boolean; privacy_options: string[];
   suggested: { title: string; description: string; tags: string[]; credit: string } };
-const privacyLabel: Record<string, string> = {
-  private: "Privado", unlisted: "Não listado", public: "Público", SELF_ONLY: "Só eu", MUTUAL_FOLLOW_FRIENDS: "Amigos",
-  FOLLOWER_OF_CREATOR: "Seguidores", PUBLIC_TO_EVERYONE: "Público",
-};
 
 export default function PublishPanel({ clipId, isTest }: { clipId: number; isTest: boolean }) {
   const qc = useQueryClient();
@@ -27,9 +24,11 @@ export default function PublishPanel({ clipId, isTest }: { clipId: number; isTes
   const [tags, setTags] = useState("");
   const [at, setAt] = useState("");
   const [rights, setRights] = useState(false);
+  const options = acct?.meta.privacy_options ?? [];
   const check = useQuery({
     queryKey: ["publish-check", clipId, accountId, privacy],
-    queryFn: () => api.get<Check>(`/api/publish/clips/${clipId}/check?account_id=${accountId}&privacy=${privacy || "private"}`),
+    queryFn: () => api.get<Check>(`/api/publish/clips/${clipId}/check?account_id=${accountId}` +
+      (privacy ? `&privacy=${encodeURIComponent(privacy)}` : "")),
     enabled: accountId !== null,
   });
   useEffect(() => {
@@ -38,7 +37,12 @@ export default function PublishPanel({ clipId, isTest }: { clipId: number; isTes
     if (!description) setDescription(check.data.suggested.description);
     if (!tags) setTags(check.data.suggested.tags.join(", "));
   }, [check.data]);
-  useEffect(() => { setPrivacy(acct?.platform === "tiktok" ? "" : "private"); setTitle(""); setDescription(""); setTags(""); }, [accountId]);
+  // Bug fixed in 0.6.0-hotfix: this used to force "private" for every platform except TikTok. Instagram
+  // only offers "public", so the select showed "Público" while "private" was sent and refused.
+  useEffect(() => {
+    setPrivacy(acct?.platform === "tiktok" ? "" : initialPrivacy(options));
+    setTitle(""); setDescription(""); setTags(""); setRights(false);
+  }, [accountId]);
   const submit = useMutation({
     mutationFn: () => api.post<Pub>("/api/publish/publications", {
       clip_id: clipId, account_id: accountId, title, description, privacy, rights_confirmed: rights,
@@ -50,7 +54,14 @@ export default function PublishPanel({ clipId, isTest }: { clipId: number; isTes
   if (accounts.length === 0) {
     return <p className="mt-3 text-xs text-ink-faint">Para publicar, conecte uma conta em <Link className="text-take underline" to="/publicacao">Publicação</Link>.</p>;
   }
-  const blocking = (check.data?.problems ?? []).filter((p) => !p.startsWith("confirme"));
+  const problems = check.data?.problems ?? [];
+  const rightsProblem = problems.find((p) => p.startsWith("confirme"));
+  // privacy problems disappear once a valid choice is made; until then the picker says what to do
+  const blocking = problems.filter((p) => !p.startsWith("confirme") && !(privacy === "" && p.startsWith("privacidade")));
+  const missing: string[] = [];
+  if (!privacy) missing.push(acct?.platform === "instagram" ? "confirme que o Reel será público" : "escolha a privacidade");
+  if (!title) missing.push("preencha o título");
+  if (check.data && !check.data.rights_on_file && !rights) missing.push("confirme o direito de republicar");
   return (
     <details className="mt-3 rounded-lg border border-suite-line p-3 text-sm">
       <summary className="cursor-pointer font-medium">Publicar nas redes</summary>
@@ -68,15 +79,19 @@ export default function PublishPanel({ clipId, isTest }: { clipId: number; isTes
           <option value="">Escolha a conta…</option>
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.platform_name} — {a.name}</option>)}
         </select>
+        {acct && <ErrorNote error={check.error} />}
         {acct && check.data && (
           <>
             {isTest && <p className="text-xs text-take">Corte de TESTE MANUAL: só publicação manual, nunca automática.</p>}
-            {blocking.length > 0 && <ul className="list-inside list-disc text-xs text-[#ffb4b6]">{blocking.map((p, i) => <li key={i}>{p}</li>)}</ul>}
-            <label className="block"><span className="text-xs text-ink-muted">Privacidade {acct.platform === "tiktok" && "(escolha obrigatória)"}</span>
-              <select className="field" value={privacy} onChange={(e) => setPrivacy(e.target.value)}>
-                {acct.platform === "tiktok" && <option value="">Escolha…</option>}
-                {check.data.privacy_options.map((p) => <option key={p} value={p}>{privacyLabel[p] ?? p}</option>)}
-              </select></label>
+            {blocking.length > 0 && (
+              <div className="rounded-md border border-[#ffb4b6]/40 p-2 text-xs text-[#ffb4b6]">
+                <p className="font-semibold">Não é possível publicar enquanto:</p>
+                <ul className="list-inside list-disc">{blocking.map((p, i) => <li key={i}>{p}</li>)}</ul>
+              </div>
+            )}
+            {rightsProblem && <p className="text-xs text-take">Direitos: {rightsProblem}.</p>}
+            <div className="block"><span className="text-xs text-ink-muted">Privacidade {acct.platform === "tiktok" && "(escolha obrigatória)"}</span>
+              <PrivacyPicker options={check.data.privacy_options} value={privacy} onChange={setPrivacy} platform={acct.platform} /></div>
             <label className="block"><span className="text-xs text-ink-muted">Título</span><input className="field" value={title} maxLength={acct.platform === "youtube" ? 100 : 150} onChange={(e) => setTitle(e.target.value)} /></label>
             <label className="block"><span className="text-xs text-ink-muted">Descrição (inclui créditos da origem)</span><textarea className="field min-h-[90px]" value={description} onChange={(e) => setDescription(e.target.value)} /></label>
             <label className="block"><span className="text-xs text-ink-muted">Tags</span><input className="field" value={tags} onChange={(e) => setTags(e.target.value)} /></label>
@@ -87,8 +102,10 @@ export default function PublishPanel({ clipId, isTest }: { clipId: number; isTes
             )}
             <ErrorNote error={submit.error} />
             {submit.data && <p className="text-xs text-ok">Publicação #{submit.data.id} criada ({pubStatus[submit.data.status]?.[0]}). Acompanhe em <Link className="underline" to="/publicacao">Publicação</Link>.</p>}
-            <button className="btn-take w-full" disabled={submit.isPending || !privacy || !title || blocking.length > 0 || (!check.data.rights_on_file && !rights)} onClick={() => submit.mutate()}>
-              <Send className="h-4 w-4" /> {at ? "Agendar publicação" : "Publicar agora"} ({privacyLabel[privacy] ?? "escolha a privacidade"})
+            {missing.length > 0 && blocking.length === 0 && <p className="text-xs text-ink-muted">Falta: {missing.join(", ")}.</p>}
+            <button className="btn-take w-full" disabled={submit.isPending || blocking.length > 0 || missing.length > 0} onClick={() => submit.mutate()}
+              data-privacy={privacy}>
+              <Send className="h-4 w-4" /> {at ? "Agendar publicação" : "Publicar agora"} ({privacy ? privacyLabel[privacy] ?? privacy : "privacidade não escolhida"})
             </button>
           </>
         )}
