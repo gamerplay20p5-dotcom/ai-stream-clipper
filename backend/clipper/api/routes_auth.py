@@ -9,7 +9,7 @@ from ..config import get_settings
 from ..db import get_db, utcnow
 from ..models import User
 from ..security import create_user_token, verify_password
-from .deps import (COOKIE, CurrentUser, audit, check_login_rate, client_ip, current_user, jwt_secret,
+from .deps import (COOKIE, CurrentUser, audit, authenticated_user, check_login_rate, client_ip, jwt_secret,
                    record_login_failure)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -30,7 +30,7 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
         db.commit()
         raise HTTPException(401, "invalid credentials")
     s = get_settings()
-    token = create_user_token(jwt_secret(), user.email, user.role, s.jwt_ttl_minutes)
+    token = create_user_token(jwt_secret(), user.email, s.jwt_ttl_minutes, user.session_version or 0, user.id)
     user.last_login_at = utcnow()
     audit(db, request, CurrentUser(user.id, user.email, user.role), "auth.login")
     db.commit()
@@ -46,8 +46,9 @@ def logout(response: Response):
 
 
 @router.get("/me")
-def me(user: CurrentUser = Depends(current_user)):
-    return {"email": user.email, "role": user.role}
+def me(user: CurrentUser = Depends(authenticated_user)):
+    return {"email": user.email, "role": user.role, "staff": user.is_admin,
+            "areas": ["panel", "library"] if user.is_admin else ["library"]}
 
 
 @router.get("/config")

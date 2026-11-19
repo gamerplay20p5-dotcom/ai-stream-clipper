@@ -6,6 +6,12 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.7.0", "date": "2026-11-19", "title": "Contas e vídeos compartilhados", "items": [
+        "O administrador cria contas (sem cadastro público e sem envio de e-mail) e compartilha cortes renderizados com elas.",
+        "Contas externas só assistem ao que foi liberado; download e variantes são permissões separadas.",
+        "Revogar, expirar, desativar ou mudar o papel tem efeito imediato, inclusive em sessões abertas.",
+        "Todo o painel interno passou a ser exclusivo da equipe (administradores).",
+    ]},
     {"version": "0.6.2", "date": "2026-11-19", "title": "Editor estrutural", "items": [
         "Cinco estruturas para o mesmo acontecimento: gancho imediato, suspense, humor de reação, história completa e momento rápido.",
         "Corte de pausas que nunca remove reações, o ponto alto nem o desfecho; só trechos reais, na ordem real.",

@@ -48,7 +48,9 @@ class CurrentUser:
         return self.role == "admin"
 
 
-def current_user(request: Request, db: Session = Depends(get_db)) -> CurrentUser:
+def authenticated_user(request: Request, db: Session = Depends(get_db)) -> CurrentUser:
+    """Any ACTIVE account with a valid, non-revoked session (admins and external viewers).
+    Only for /api/auth/me and the shared library: everything else requires staff (``current_user``)."""
     token = request.cookies.get(COOKIE)
     via_cookie = token is not None
     if not token:
@@ -65,12 +67,24 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> CurrentUser
     user = db.scalar(select(User).where(User.email == claims.get("sub"), User.active.is_(True)))
     if user is None:
         raise HTTPException(401, "unknown user")
+    if "uid" in claims and claims["uid"] != user.id:  # e-mail re-used by another account
+        raise HTTPException(401, "session expired")
+    # deactivation, role change, password reset and "end sessions" bump the version: older
+    # tokens stop on the next request (tokens issued before this field existed carry no ``sv`` = 0)
+    if int(claims.get("sv", 0)) != int(user.session_version or 0):
+        raise HTTPException(401, "session expired")
     return CurrentUser(user.id, user.email, user.role)
 
 
-def require_admin(user: CurrentUser = Depends(current_user)) -> CurrentUser:
+def current_user(user: CurrentUser = Depends(authenticated_user)) -> CurrentUser:
+    """STAFF gate for the whole internal panel (clips, analysis, publishing, infrastructure...).
+    Deny by default: an external account (viewer) only reaches /api/auth/me and /api/library."""
     if not user.is_admin:
-        raise HTTPException(403, "admin role required")
+        raise HTTPException(403, "acesso restrito à equipe")
+    return user
+
+
+def require_admin(user: CurrentUser = Depends(current_user)) -> CurrentUser:
     return user
 
 
