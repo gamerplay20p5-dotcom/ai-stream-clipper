@@ -104,6 +104,11 @@ Princípios fixos:
    - pipeline com segmentos expirados;
    - integridade da migração.
 
+### Segunda revisão do PR #1
+
+5. **Extensão do desfecho sem cruzar lacunas:** o novo fim é o menor entre "desfecho + 4 s" e o ponto até onde a gravação segue **contínua** a partir do fim atual (`quality_gate.reach`). Se não houver pelo menos 1 s de reação gravada, a correção é inaplicável. Exemplo testado: segmentos (0, 32) e (35, 40), corte até 30 s e clímax em 30,8 s levam o novo fim a 32 s, e não a 34,8 s.
+6. **Som alto não justifica silêncio:** impacto do jogo ou pico de volume só deixa de contar como tempo morto junto com uma reação de voz (risada, grito), uma situação narrativa em andamento ou um evento visual relevante. Conversa engraçada e situação interessante sem diálogo continuam preservadas.
+
 ### Migração 0009 e rollback
 
 - **Integridade testada em SQLite** (`tests/test_migration_0009.py`):

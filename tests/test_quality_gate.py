@@ -239,3 +239,39 @@ def test_review1_pipeline_uses_the_recorded_segments(client):
     j = J(story={"start": 60.0, "summary": "perseguição"}, context=2, narrative=3, standalone=3)
     held, status, gate, g = _gate(cid, j)
     assert gate != "REWORK" and "pending" not in (g or {})
+
+
+# ------------------------------------------------------------------ PR #1 second review
+def test_review2_outcome_extension_never_crosses_a_recording_gap():
+    media = [(0.0, 32.0), (35.0, 40.0)]  # hole between 32 and 35 s
+    story = {"start": 0.0, "climax_t": 30.8, "summary": "fuga", "kind": "police_chase"}
+    f = next(f for f in ev(J(story=story), start=0.0, end=30.0, media=media).fixes if f.kind == "outcome_after")
+    assert f.applicable and f.end == 32.0  # not 34.8: that would cross the hole
+    assert qg.covered(media, 30.0, f.end)
+    # less than 1 s of reaction before the hole: not applicable at all
+    story["climax_t"] = 31.5
+    f = next(f for f in ev(J(story=story), start=0.0, end=30.0, media=media).fixes if f.kind == "outcome_after")
+    assert not f.applicable and f.end is None
+    # full 4 s available: unchanged behaviour
+    f = next(f for f in ev(J(story=story), start=0.0, end=30.0, media=[(0.0, 60.0)]).fixes if f.kind == "outcome_after")
+    assert f.applicable and f.end == 35.5
+
+
+def test_review2_loud_sound_alone_does_not_justify_silence():
+    sparse = [(0.5, 1.0), (14.0, 14.5), (28.0, 28.5)]
+    for k in (["game_impact"], ["loudness_spike"]):
+        r = ev(J(), words=sparse, kinds=k)
+        assert any(f.kind == "dead_time" for f in r.fixes), k
+        assert any("sem fala" in e for e in r.narrative.evidence)
+
+
+def test_review2_loud_sound_with_reaction_story_or_visual_event_is_kept():
+    sparse = [(0.5, 1.0), (14.0, 14.5), (28.0, 28.5)]
+    with_reaction = ev(J(), words=sparse, kinds=["game_impact", "scream"])
+    in_story = ev(J(story={"start": -5.0, "kind": "shootout", "summary": "tiroteio"}), words=sparse, kinds=["game_impact"])
+    on_screen = ev(J(), words=sparse, kinds=["loudness_spike"], visual_events=True)
+    for r in (with_reaction, in_story, on_screen):
+        assert not any(f.kind == "dead_time" for f in r.fixes)
+    # funny conversation and a silent but visually interesting situation stay preserved
+    assert not any(f.kind == "dead_time" for f in ev(J(humor=8), words=sparse, kinds=["laughter"]).fixes)
+    assert not any(f.kind == "dead_time" for f in ev(J(), words=sparse, kinds=[], visual_events=True).fixes)

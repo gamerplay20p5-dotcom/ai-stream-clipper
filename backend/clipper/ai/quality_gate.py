@@ -110,6 +110,21 @@ def covered(media, a: float, b: float, tol: float = 0.25) -> bool:
     return pos >= b - tol
 
 
+def reach(media, a: float, tol: float = 0.25) -> float | None:
+    """Furthest point recorded CONTIGUOUSLY from ``a`` (None when ``a`` itself is not recorded)."""
+    spans = [media] if media and isinstance(media[0], (int, float)) else list(media or [])
+    pos = None
+    for x, y in sorted((float(x), float(y)) for x, y in spans):
+        if pos is None:
+            if x - tol <= a <= y:
+                pos = y
+            continue
+        if x > pos + tol:
+            break
+        pos = max(pos, y)
+    return pos
+
+
 def dead_time(words: list, start: float, end: float) -> tuple[float, float]:
     """(dead seconds, dead ratio) inside [start, end] from the word timings (head and tail included)."""
     ws = sorted((float(w[0]), float(w[1])) for w in words if start <= float(w[0]) < end)
@@ -151,7 +166,12 @@ def evaluate(*, judgement: dict, start: float, end: float, peak: float, keep: bo
     dead_s, dead_r = dead_time(words, start, end) if words is not None else (0.0, 0.0)  # None = not measured
     # silence is not "dead" when a reaction is heard or something RELEVANT happens on screen;
     # a valid visual analysis alone (visual_ok) proves nothing about on-screen events
-    lively = bool({"laughter", "scream", "game_impact", "loudness_spike"} & set(kinds)) or visual_events
+    # a loud sound alone (game impact, volume peak) is NOT evidence of an interesting moment: it only
+    # justifies silence together with a voice reaction, a narrative situation or a relevant visual event
+    reaction = bool({"laughter", "scream"} & set(kinds))
+    in_story = bool(story.get("kind")) and story.get("start") is not None and float(story["start"]) <= end
+    loud = bool({"game_impact", "loudness_spike"} & set(kinds))
+    lively = reaction or visual_events or (loud and in_story)
     if nar_score is not None and dead_r > 0.35 and not lively:
         nar_score = round(max(0.0, nar_score - min(3.0, (dead_r - 0.35) * 8)), 1)
         nar_ev.append(f"{dead_s:.0f}s sem fala de {dur:.0f}s ({dead_r:.0%})")
@@ -172,9 +192,12 @@ def evaluate(*, judgement: dict, start: float, end: float, peak: float, keep: bo
         last if story.get("outcome") and last is not None and float(last) > end else None)
     if outcome_t is not None and float(outcome_t) > end - 1:
         # the outcome itself plus at least 1 s of reaction must be recorded; up to 4 s when available
+        # the whole new range [end, new_end] must be recorded without gaps: up to 4 s of reaction when
+        # available, at least 1 s, otherwise the fix is not applicable
         must = float(outcome_t) + 1.0
-        in_media = covered(spans, end, must)
-        new_end = min(hi, float(outcome_t) + 4.0) if in_media else None
+        contiguous = reach(spans, end)
+        in_media = contiguous is not None and contiguous >= must - 0.25 and covered(spans, end, must)
+        new_end = min(contiguous, float(outcome_t) + 4.0) if in_media else None
         ok = in_media and new_end is not None and new_end > end + 1 and (new_end - start) <= s.max_len
         why = "" if ok else (" — o desfecho está depois do último segmento gravado disponível" if not in_media
                              else " — ficaria mais longo que o limite de duração")
