@@ -557,3 +557,20 @@ class SpeakerProfile(Base):
     source: Mapped[str] = mapped_column(String(32), default="auto")  # auto | confirmed_cluster | reference
     sample: Mapped[dict] = mapped_column(JSON, default=dict)  # {session_id, start, end, text}
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class EditComparison(Base):
+    """Phase 6B: a person compared two edits of the same clip (optionally blind)."""
+
+    __tablename__ = "edit_comparisons"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    clip_id: Mapped[int] = mapped_column(ForeignKey("clips.id", ondelete="CASCADE"), index=True)
+    left: Mapped[str] = mapped_column(String(16))
+    right: Mapped[str] = mapped_column(String(16))
+    left_structure: Mapped[str] = mapped_column(String(8))
+    right_structure: Mapped[str] = mapped_column(String(8))
+    winner: Mapped[str] = mapped_column(String(8))  # left | right | equal
+    blind: Mapped[bool] = mapped_column(Boolean, default=True)
+    reviewer: Mapped[str] = mapped_column(String(255), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -292,3 +292,96 @@ def batch(body: BatchIn, request: Request, db: Session = Depends(get_db), user: 
     audit(db, request, user, f"clip.batch_{body.action}", "clips", {"ids": done, "skipped": list(skipped)})
     db.commit()
     return {"done": done, "skipped": skipped}
+
+
+# --- Phase 6B: structural editor - variants, comparison, promotion ----------------------------
+class StructureIn(BaseModel):
+    structure: Literal["auto", "A", "B", "C", "D", "E"] = "auto"
+    teaser: bool | None = None
+
+
+class CompareIn(BaseModel):
+    left: Literal["main", "edit", "original"]
+    right: Literal["main", "edit", "original"]
+    winner: Literal["left", "right", "equal"]
+    blind: bool = True
+    note: str = Field("", max_length=500)
+
+
+@router.get("/edit-comparisons/results")
+def comparison_results(db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+    from ..pipeline_structure import results
+
+    return results(db)
+
+
+@router.get("/{cid}/variants")
+def variants(cid: int, db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+    from ..pipeline_structure import overview
+
+    return overview(db, _get(db, cid))
+
+
+@router.get("/{cid}/structures")
+def structures(cid: int, db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+    """Every structure the editor could build for this happening, with objective metrics."""
+    from ..pipeline_structure import propose
+
+    c, s = _get(db, cid), load_ai_settings(db)
+    return [propose(db, c, s, k) for k in ("A", "B", "C", "D", "E")]
+
+
+@router.post("/{cid}/restructure")
+def restructure(cid: int, body: StructureIn, request: Request, db: Session = Depends(get_db),
+                user: CurrentUser = Depends(require_admin)):
+    from ..pipeline_structure import plan_variant
+
+    c = _get(db, cid)
+    if c.status in ("rendering", "analyzing", "candidate", "waiting") or not c.video_path:
+        raise HTTPException(409, "o corte precisa estar renderizado")
+    out = plan_variant(db, c, load_ai_settings(db), body.structure, body.teaser, manual=True)
+    if not out["applicable"]:
+        raise HTTPException(422, out["why_not"] or "estrutura não aplicável a este corte")
+    audit(db, request, user, "clip.restructure", f"clip:{cid}", {"structure": out["structure"]})
+    db.commit()
+    return out
+
+
+@router.get("/{cid}/variants/{name}/video")
+def variant_video(cid: int, name: Literal["edit", "original"], db: Session = Depends(get_db),
+                  _: CurrentUser = Depends(current_user)):
+    c = _get(db, cid)
+    rec = ((c.provenance or {}).get("variants") or {}).get(name) or {}
+    return FileResponse(_file(rec.get("video_path", "")), media_type="video/mp4",
+                        headers={"Cache-Control": "private, max-age=60"})
+
+
+@router.post("/{cid}/variants/{name}/promote")
+def promote_variant(cid: int, name: Literal["edit", "original"], request: Request, db: Session = Depends(get_db),
+                    user: CurrentUser = Depends(require_admin)):
+    from ..pipeline_structure import promote
+
+    c = _get(db, cid)
+    try:
+        out = promote(db, c, name, user.email)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    audit(db, request, user, "clip.variant_promote", f"clip:{cid}", {"variant": name, **out})
+    db.commit()
+    return ser.clip(c)
+
+
+@router.post("/{cid}/compare")
+def compare_versions(cid: int, body: CompareIn, request: Request, db: Session = Depends(get_db),
+                     user: CurrentUser = Depends(require_admin)):
+    from ..pipeline_structure import compare
+
+    c = _get(db, cid)
+    try:
+        row = compare(db, c, body.left, body.right, body.winner, body.blind, user.email, body.note)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    audit(db, request, user, "clip.compare", f"clip:{cid}", {"winner": body.winner, "blind": body.blind})
+    db.commit()
+    return {"id": row.id, "left_structure": row.left_structure, "right_structure": row.right_structure,
+            "winner": row.winner}

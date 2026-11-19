@@ -46,6 +46,8 @@ async def obtain_source(ctx: JobContext, clip_id: int, spec: dict) -> tuple[Path
             raise JobError(f"segment server unreachable: {exc}") from exc
         src_start = float(headers.get("x-asc-source-start", a))
         src_dur = float(headers.get("x-asc-source-duration", b - a))
+        if spec.get("store_source") is False:  # a variant's range must never replace the clip's stored source
+            return dest, src_start
         await ctx.client.upload(f"/internal/clips/{clip_id}/source", dest,
                                 params={"source_start": f"{src_start:.3f}", "duration": f"{src_dur:.3f}"})
         return dest, src_start
@@ -361,7 +363,8 @@ def _audio_cues(spec: dict, w0: float) -> list[str]:
 
 async def handle_render(ctx: JobContext) -> dict:
     clip_id = int(ctx.payload["clip_id"])
-    spec = await ctx.client.get(f"/internal/clips/{clip_id}/render-spec")
+    variant = str(ctx.payload.get("variant") or "")
+    spec = await ctx.client.get(f"/internal/clips/{clip_id}/render-spec", **({"variant": variant} if variant else {}))
     if int(spec["version"]) > int(ctx.payload.get("version", spec["version"])):
         return {"skipped": "newer version queued"}
     src, src_start = await obtain_source(ctx, clip_id, spec)
@@ -386,9 +389,11 @@ async def handle_render(ctx: JobContext) -> dict:
     if (int(vs.get("width", 0)), int(vs.get("height", 0))) != (1080, 1920):
         raise JobError(f"unexpected output size {vs.get('width')}x{vs.get('height')}", retryable=False)
     version = int(spec["version"])
-    await ctx.client.upload(f"/internal/clips/{clip_id}/thumbnail", res.thumbnail, params={"version": version})
+    extra = {"variant": variant} if variant else {}
+    await ctx.client.upload(f"/internal/clips/{clip_id}/thumbnail", res.thumbnail, params={"version": version, **extra})
     r = await ctx.client.upload(f"/internal/clips/{clip_id}/video", res.video,
-                                params={"version": version, "seconds": f"{res.seconds:.2f}", "layout": res.layout})
+                                params={"version": version, "seconds": f"{res.seconds:.2f}", "layout": res.layout,
+                                        **extra})
     return {"seconds": round(res.seconds, 2), "duration": round(res.duration, 2), "layout": res.layout,
             "stale": bool(r.get("stale")), "applied": res.applied, "audio": res.audio}
 

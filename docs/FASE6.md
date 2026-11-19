@@ -136,6 +136,63 @@ sudo -n asc-ctl exec asc-api -- clipper migrate --downgrade 0008   # no 210
 
 O downgrade apaga apenas a coluna `gate`, que é recalculada na próxima análise; nenhum corte, rótulo ou publicação é afetado. O mesmo cuidado vale para qualquer rollback que cruze uma migração.
 
+## 4. Etapa 6B: editor estrutural (v0.6.1)
+
+**Implementado**
+- **`ai/structure.py`** (funções puras):
+  - cinco estruturas (A gancho imediato, B suspense, C humor de reação, D história completa, E momento rápido) e a escolha explicada por categoria, configurável;
+  - corte de pausas com intervalos protegidos: ponto alto, reações, desfecho e os últimos 2,5 s;
+  - prévia opcional do clímax, sempre marcada como "Daqui a pouco..." e seguida da sequência real em ordem;
+  - métricas objetivas: duração, tempo até o ponto alto, tempo sem fala, cortes, reações preservadas, ordem cronológica, falas mantidas e **falas do original deixadas de fora**.
+- **Renderer:** um passo 1 emenda os trechos num intermediário quase sem perdas, com fades de 30 ms no áudio. O passo 2 é o render normal, com palavras, zooms, enquadramento e rostos remapeados para a nova linha do tempo.
+- **Variantes (`pipeline_structure.py`):** a reedição é renderizada ao lado do vídeo principal.
+  - nunca o substitui;
+  - nunca sobrescreve a fonte armazenada do corte;
+  - uma falha no render dela nunca marca o corte como falho;
+  - um upload obsoleto é descartado.
+- **Modos:**
+  - **sombra** (padrão): o vídeo principal continua o original;
+  - **ligado**: a reestruturada vira a principal e o original fica como variante;
+  - **desligado**.
+- **Comparação:** lado a lado, cega por padrão; os votos ficam em `edit_comparisons` (migração 0010). A promoção da variante não exige novo render. Há um resultado agregado por estrutura.
+- **Orçamento:** variantes automáticas só quando a mudança é relevante, até 12 por hora (configurável) e com prioridade 80, abaixo das lives e dos renders principais.
+
+**Reaproveitado:** palavras do Whisper, categorias do YAMNet (reações), memória da história (início e clímax), Quality Gate (segmentos gravados e `dead_time`), legendas inteligentes e o renderer existente (passo 2 sem mudança).
+
+**Testes:** 246 passando, com 31 novos nesta etapa (`test_structure.py`, `test_structure_pipeline.py`, render estrutural com ffmpeg real e migração 0010). Eles cobrem:
+- abertura ruim que vira gancho perto da ação;
+- conversa engraçada que mantém a fala e a risada inteira;
+- suspense que exige situação longa;
+- prévia explícita e cronológica;
+- momento rápido que recusa situações que precisam de contexto;
+- trecho fora da gravação;
+- render interrompido que não derruba o corte;
+- corte aprovado que mantém o vídeo principal;
+- upload obsoleto descartado.
+
+**Validação nos mesmos 12 cortes reais da Etapa E** (`docs/benchmarks/etapa_6b_validacao.py`, Whisper small e YAMNet locais, sem memória da história):
+
+| Medida (média) | Original | Estrutura escolhida |
+|---|---|---|
+| Duração | 32,2 s | 14,4 s |
+| Ponto alto aos | 19,9 s | 4,1 s |
+| Tempo sem fala | 54% | 37% |
+| Reações preservadas / ordem real | — | 12 de 12 / 12 de 12 |
+| Falas do original deixadas de fora | — | **38,8%** (contexto antes do gancho) |
+
+- **Estruturas escolhidas:** 11 de 12 foram A (sem a memória da história, quase tudo cai no gancho imediato) e 1 foi C. O planejador leva 0,5 ms por corte.
+- **Leitura honesta:** isto mede a mecânica, não a qualidade. O gancho fica mais rápido, mas joga fora quase 40% da fala original. Se isso melhora o vídeo, só as comparações cegas vão dizer. Por isso o padrão é o modo **sombra**.
+
+**Custo:** cada variante é um render extra no 206: um passo rápido (ultrafast) mais o render normal de um vídeo mais curto. O teto é o orçamento por hora.
+
+**Limitações**
+- Um corte de pausa pode cair no meio do movimento da tela; o enquadramento não é reavaliado por trecho.
+- O ponto alto pode ficar a menos de 3 s do início quando a pausa antes dele é removida (mínimo observado: 1,9 s).
+- A transição é um corte seco: sem efeitos, por escolha.
+- Avaliar o resultado com o VLM depois do render é a próxima etapa, sem usar a nota do próprio modelo como prova.
+
 ---
 
 **EN summary:** the audit found a single-number, binary keep/reject decision whose edit suggestions are never applied, and a renderer limited to one continuous segment. YouTube retention needs the Analytics API scope, which we do not hold. Instagram Business Discovery is not assumed to be available. Phase 6 adds a four-dimension quality gate with REWORK (6A), segment-based structural editing (6B), a references lab with permitted metadata and image-based format profiles (6C), abstract pattern library from authorised media (6D), performance learning on our own posts (6E) and fixed-sample validation (6F).
+
+**6B (v0.6.1):** five faithful structures, pause removal that never touches reactions, peak or outcome, an optional explicitly labelled teaser, segment rendering, shadow variants with blind human comparison and promotion. On 12 real clips the chosen structure shortened clips from 32.2 s to 14.4 s and moved the peak from 19.9 s to 4.1 s, keeping all reactions, but it left out 38.8% of the original speech. No quality improvement is claimed until blind comparisons exist.

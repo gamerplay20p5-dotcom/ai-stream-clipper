@@ -379,9 +379,9 @@ def post_vision(cid: int, body: VisionIn, _: str = Depends(worker_auth), db: Ses
 
 
 @router.get("/clips/{cid}/render-spec")
-def render_spec(cid: int, _: str = Depends(worker_auth), db: Session = Depends(get_db)):
+def render_spec(cid: int, variant: str = "", _: str = Depends(worker_auth), db: Session = Depends(get_db)):
     try:
-        return pipeline.render_spec(db, cid)
+        return pipeline.render_spec(db, cid, variant[:16])
     except pipeline.NotFound as exc:
         _nf(exc)
 
@@ -427,19 +427,36 @@ def get_source(cid: int, _: str = Depends(worker_auth), db: Session = Depends(ge
 
 
 @router.put("/clips/{cid}/thumbnail")
-async def put_thumb(cid: int, request: Request, version: int, auth: tuple[str, str] = Depends(worker_auth_upload),
-                    db: Session = Depends(get_db)):
+async def put_thumb(cid: int, request: Request, version: int, variant: str = "",
+                    auth: tuple[str, str] = Depends(worker_auth_upload), db: Session = Depends(get_db)):
     _clip_or_404(db, cid)
-    dest = storage.clip_dir(cid) / f"thumb_v{int(version)}.jpg"
+    suffix = f"_{_variant_name(variant)}" if variant else ""
+    dest = storage.clip_dir(cid) / f"thumb_v{int(version)}{suffix}.jpg"
     await _receive(request, dest, MAX_THUMB_BYTES, auth[1])
     return {"ok": True}
 
 
 @router.put("/clips/{cid}/video")
 async def put_video(cid: int, request: Request, version: int, seconds: float = 0.0, layout: str = "",
-                    auth: tuple[str, str] = Depends(worker_auth_upload), db: Session = Depends(get_db)):
+                    variant: str = "", auth: tuple[str, str] = Depends(worker_auth_upload),
+                    db: Session = Depends(get_db)):
     clip = _clip_or_404(db, cid)
     d = storage.clip_dir(cid)
+    if variant:  # an alternative edit: stored next to the main video, nothing else changes
+        from ..pipeline_structure import store_variant
+
+        name = _variant_name(variant)
+        dest = d / f"clip_v{int(version)}_{name}.mp4"
+        size = await _receive(request, dest, MAX_VIDEO_BYTES, auth[1])
+        thumb = d / f"thumb_v{int(version)}_{name}.jpg"
+        old = store_variant(db, clip, name, storage.rel(dest), storage.rel(thumb) if thumb.exists() else "", size)
+        db.commit()
+        for rel_path in old:
+            try:
+                storage.resolve(rel_path).unlink(missing_ok=True)
+            except ValueError:
+                pass
+        return {"ok": True, "variant": name}
     dest = d / f"clip_v{int(version)}.mp4"
     size = await _receive(request, dest, MAX_VIDEO_BYTES, auth[1])
     thumb = d / f"thumb_v{int(version)}.jpg"
@@ -457,6 +474,12 @@ async def put_video(cid: int, request: Request, version: int, seconds: float = 0
             except ValueError:
                 pass
     return {"ok": True}
+
+
+def _variant_name(v: str) -> str:
+    if v not in ("edit", "original"):
+        raise HTTPException(422, "unknown variant")
+    return v
 
 
 def internal_enabled() -> bool:
