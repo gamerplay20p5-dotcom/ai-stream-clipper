@@ -2,60 +2,40 @@
 
 ## Direção de arte
 
-A leitura começa no material audiovisual. No Diretor, a unidade de leitura é um acontecimento localizado no tempo. Na Central, é o corte que está no monitor. A navegação tem peso menor que os dois. A primeira composição, que reservava uma coluna inteira ao seletor de sessões e escondia as evidências, foi descartada. O seletor passa ao cabeçalho e a largura liberada vai para a partitura dos eventos.
+A identidade visual traz o contraste de Vice City ao entardecer para uma bancada de revisão audiovisual. Uma orla art déco criada para o projeto aparece na Visão geral, no login e na página pública. A mídia em revisão ocupa o centro das telas de trabalho. [Referência visual da Rockstar Games](https://www.rockstargames.com/VI/vice-city)
 
 | Elemento | Tratamento |
 | --- | --- |
 | Fundo | Azul de meia-noite `#171526` |
-| Instrumentos | Violeta noturno `#201D33`, elevação `#312845` |
+| Painéis | Violeta noturno `#201D33` com elevação `#312845` |
 | Monitor de vídeo | Preto azulado `#0E0E1B` |
 | Texto | Branco quente `#FFF4ED` |
-| Seleção e ação | Rosa néon `#FFA4CF` e pêssego `#FFB992` |
-| Tipografia | Barlow Condensed nos títulos principais. Archivo Variable nos controles e textos. Algarismos tabulares nos indicadores e monoespaçados nos tempos. |
-| Movimento | 150 ms nos controles, 200 ms ao abrir um painel. A preferência de movimento reduzido elimina as transições. |
+| Seleção e timeline | Rosa néon `#FFA4CF` |
+| Ação principal | Pêssego `#FFB992` |
+| Tipografia | Barlow Condensed nos títulos principais e Archivo Variable nos controles e textos. Algarismos tabulares nos indicadores e monoespaçados nos tempos. |
+| Movimento | 150 ms nos controles e 200 ms ao abrir um painel. A preferência de movimento reduzido elimina as transições. |
 
-```
-Diretor IA                       [sessão]
-Canal • estado     tempo / situações / decisões
-Partitura temporal          | Situação selecionada
-Evidências por fase         | Confiança e critérios
-Seleção de situações        | Cortes associados
+A mesma tipografia, contraste e controles servem todas as áreas do painel. A cor de estado vem acompanhada de texto.
 
-Central de cortes               [filtros]
-Fila com miniaturas     | Monitor e navegação
-                        | Revisão / versões / edição / publicação
-```
+## Bancada de revisão
 
-Os rótulos e títulos alinham à esquerda. A régua do Diretor usa a escala da situação selecionada, com tempos absolutos da transmissão. Fontes e eventos continuam legíveis em texto quando múltiplas marcas coincidem. A confiança pertence à leitura narrativa; as notas pertencem a cortes individuais. No celular, controles de seleção e resumo precedem a leitura extensa. Ações de lote continuam na fila.
+- **Diretor IA.** O seletor de live fica no cabeçalho. Na timeline, a altura indica a fase e a posição horizontal indica o tempo na transmissão. Selecionar um acontecimento atualiza a evidência, a fonte e a confiança no painel de leitura. Os cortes associados ficam no mesmo contexto.
+- **Central de cortes.** A fila fica ao lado do monitor no desktop e pode ser recolhida em telas menores. A edição fixa o corte na URL e conserva o rascunho ao consultar outra aba. Os players da comparação cega têm o mesmo peso visual.
+- **Parâmetros.** Seis abas organizam os controles de IA. O rascunho é compartilhado entre elas.
+- **Operação.** A Visão geral destaca os próximos cortes da fila. O calendário agrupa as publicações por dia e mantém a edição em horário de Brasília. O diagnóstico abre com a transmissão investigada e o armazenamento distingue a ocupação do disco da simulação de limpeza.
 
-A hierarquia da navegação vem do estudo de alinhamento e densidade do Linear. O monitor de revisão e as versões adjacentes derivam das práticas de revisão do Frame.io. A organização por monitor, fila e instrumentos vem da página Edit do Resolve. O Raycast orientou a apresentação das ações e atalhos no contexto do item selecionado. [Linear](https://linear.app/now/how-we-redesigned-the-linear-ui) · [Frame.io](https://frame.io/features/review-and-approval) · [DaVinci Resolve](https://www.blackmagicdesign.com/products/davinciresolve/edit) · [Raycast](https://manual.raycast.com/action-panel)
+## Capturas do tema
 
-O tema atual usa o contraste de Vice City ao anoitecer como referência. A arte original de uma orla com arquitetura art déco aparece na Visão geral, no login e na página pública. O rosa identifica a seleção e os marcadores da timeline. O pêssego sinaliza a ação principal, enquanto os estados da operação mantêm cores próprias. [Referência visual da Rockstar Games](https://www.rockstargames.com/VI/vice-city)
+| Tela | Captura a 1440 × 900 |
+| --- | --- |
+| Visão geral | [Abrir captura](design/visao-geral.webp) |
+| Diretor IA | [Abrir captura](design/diretor-ia.webp) |
+| Central de cortes | [Abrir captura](design/central-de-cortes.webp) |
+| Login | [Abrir captura](design/login.webp) |
 
-A mesma navegação, tipografia, contraste, controles e estados servem operação, conteúdo, inteligência, distribuição e administração. Parâmetros mantém suas seis abas e um rascunho entre elas. As páginas públicas e a entrada compartilham os tokens e o símbolo de montagem. A cor de estado vem sempre acompanhada de texto.
+As telas foram inspecionadas em 1440, 1024 e 390 px. A verificação de layout também cobre 320 px. Os fotogramas da demonstração foram adaptados do trailer de *Sintel*, © Blender Foundation. [Sintel](https://studio.blender.org/films/sintel/) · [Licenciamento do Blender Studio](https://studio.blender.org/remixing/)
 
-## Decisões verificadas no navegador
-
-Na comparação inicial, a seleção de live ocupava 250 px mesmo com uma única opção. A situação, a confiança e seus cortes tinham o mesmo peso, e a fonte de cada evidência dependia de abrir um painel. A nova partitura situa as fases no eixo vertical e o tempo no horizontal. A altura de um ponto identifica a fase. Selecionar um acontecimento atualiza a marca da régua e a evidência no painel de leitura.
-
-Na primeira passagem da Central em 390 px, as três linhas de filtros e a fila adiavam o player até depois da primeira tela. A etapa agora usa um seletor compacto e a fila abre sob demanda. No desktop a fila permanece ao lado do monitor. A edição fixa o corte na URL e conserva o rascunho ao consultar outra aba. Na comparação cega os players mantêm o mesmo peso visual.
-
-Visão geral apresenta um quadro principal e os próximos cortes da fila. O calendário separa datas e horários em colunas no desktop. As contas conectadas reorganizam seus dados em linhas que cabem no celular. O diagnóstico abre com a transmissão investigada e o armazenamento distingue a ocupação do disco da simulação de limpeza. No login, a moldura usa as proporções do vídeo vertical e a marca do produto.
-
-As capturas comparativas usam a revisão `3381174` como “antes”, a mesma sessão e as mesmas mídias de demonstração. Foram inspecionadas as telas em 1440, 1024 e 390 px. A verificação de layout e dos fluxos de revisão também cobre 320 px. A mídia da demonstração fica fora do aplicativo distribuído.
-
-A validação combina `npm --prefix dashboard run build`, `typecheck`, `check:privacy`, a suíte Python com SQLite temporário e Playwright com API isolada. Os cenários incluem troca de sessão e situação, seleção de evidência, corte isolado, estado vazio, fila móvel, comparação de vídeos, edição entre abas, autenticação, reagendamento e consentimento de publicação. O axe verifica as regras automatizadas WCAG A/AA nos estados de teste em 390 px.
-
-## Comparação em desktop
-
-As imagens abaixo registram a mudança para a bancada audiovisual antes do tema atual.
-
-| Tela | Versão anterior | Bancada atual |
-| --- | --- | --- |
-| Diretor IA | [Antes](design/diretor-antes.webp) | [Depois](design/diretor-depois.webp) |
-| Central de cortes | [Antes](design/cortes-antes.webp) | [Depois](design/cortes-depois.webp) |
-
-As quatro imagens são capturas do navegador a 1440 × 900. Os trechos e seus fotogramas foram adaptados do trailer de *Sintel*, © Blender Foundation, com recorte vertical para a demonstração. [Sintel](https://studio.blender.org/films/sintel/) · [Arquivo de origem](https://media.w3.org/2010/05/sintel/trailer.mp4) · [Licenciamento do Blender Studio](https://studio.blender.org/remixing/)
+A validação inclui o build Vite, a checagem de tipos, as verificações de privacidade e o Playwright com API de teste. Os cenários incluem seleção de situação e evidência, fila de cortes, comparação cega, rascunhos de edição, autenticação e reagendamento. As regras automatizadas WCAG A/AA foram verificadas com axe nos estados de teste a 390 px.
 
 <details>
 <summary>Prompt da arte original</summary>
