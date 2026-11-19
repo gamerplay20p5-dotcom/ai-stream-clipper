@@ -110,7 +110,9 @@ def _limits(db: Session, clip: Clip, settings: AISettings) -> dict:
     min_score = float(prefs["min_score"]) if isinstance(prefs.get("min_score"), (int, float)) else settings.min_score
     max_len = settings.max_clip_seconds
     if clip.situation_id and (clip.provenance or {}).get("story", {}).get("action") in ("story", "merge"):
-        max_len = max(max_len, settings.max_story_seconds)  # a multi-minute story may need a longer cut
+        max_len = max(max_len, settings.max_story_seconds)
+    if ((clip.provenance or {}).get("gate") or {}).get("pending"):
+        max_len = max(max_len, settings.max_story_seconds)  # a rework may need the whole situation  # a multi-minute story may need a longer cut
     return {"min_len": settings.min_clip_seconds, "max_len": max_len, "avail_start": lo,
             "avail_end": hi, "min_score": min_score}
 
@@ -120,6 +122,9 @@ def ai_spec(db: Session, clip: Clip, source_location: dict) -> dict:
     settings = load_ai_settings(db)
     base_start = clip.heuristic_start if clip.heuristic_start is not None else clip.start
     base_end = clip.heuristic_end if clip.heuristic_end is not None else clip.end
+    rework = ((clip.provenance or {}).get("gate") or {}).get("pending")
+    if rework:  # Quality Gate REWORK: start from the proposed edit (earlier start, outcome included...)
+        base_start, base_end = float(rework["start"]), float(rework["end"])
     lo, hi = media_bounds(db, clip)
     ctxs = settings.analysis_context_seconds
     w0, w1 = max(lo, base_start - ctxs), min(hi, base_end + ctxs)
@@ -263,6 +268,14 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
         enqueue_analysis(db, clip, settings, priority=85)  # below live analysis (60)
         log.info("deep review requested", extra={"clip_id": clip.id, "reason": prov["review"]["reason"]})
         return
+    if settings.gate_enabled and settings.director_enabled:
+        if _apply_gate(db, clip, decision, visual, settings):
+            return
+        from .pipeline import enqueue_render
+
+        clip.version += 0 if first else 1
+        enqueue_render(db, clip)
+        return
     if settings.director_enabled and not decision.keep and not clip.is_test and judgement.get("waiting_context")             and clip.analysis_runs < 3:  # bounded: never waits forever
         clip.status = "waiting"  # low preliminary score but the story is still unfolding: decide later
         clip.error = "Aguardando o desfecho da situação para decidir"
@@ -283,6 +296,83 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
 
     clip.version += 0 if first else 1
     enqueue_render(db, clip)
+
+
+def visual_relevant(v: VisualAnalysis) -> bool:
+    """Something that matters for the story happened ON SCREEN (not just "the VLM answered"):
+    a surprising or funny event, or strong action the streamer reacts to."""
+    return v.unexpected >= 6 or v.funny >= 6 or (v.action >= 7 and v.reaction_linked is True)
+
+
+def _apply_gate(db: Session, clip: Clip, decision: DirectorDecision, visual: VisualAnalysis | None,
+                settings: AISettings) -> bool:
+    """Quality Gate 2.0. Returns True when the clip must NOT be rendered now (rework, waiting, rejected)."""
+    from .ai import quality_gate as qg
+
+    judgement = (clip.decision or {}).get("editorial") or {}
+    prov = dict(clip.provenance or {})
+    g = dict(prov.get("gate") or {})
+    runs = int(g.get("rework_runs", 0))
+    rows = db.execute(select(TranscriptWord.start, TranscriptWord.end, TranscriptWord.probability,
+                             TranscriptWord.speaker).where(
+        TranscriptWord.session_id == clip.session_id, TranscriptWord.start >= decision.start_abs,
+        TranscriptWord.start < decision.end_abs)).all()
+    spans = [(float(a), float(a) + float(d)) for a, d in db.execute(
+        select(Segment.start, Segment.duration).where(Segment.session_id == clip.session_id,
+                                                      Segment.available.is_(True))).all()]
+    if clip.source_path and clip.source_duration:  # media already copied to the API also counts
+        spans.append((clip.source_start, clip.source_start + clip.source_duration))
+    lim = _limits(db, clip, settings)
+    vis_ok = visual is not None and not visual.fallback
+    res = qg.evaluate(
+        judgement=judgement, start=decision.start_abs, end=decision.end_abs, peak=decision.peak_abs,
+        keep=decision.keep, words=[(r[0], r[1]) for r in rows], media=spans, kinds=clip.kinds or [],
+        word_probs=[r[2] for r in rows], speakers=[r[3] or "" for r in rows],
+        visual_ok=vis_ok, visual_events=bool(vis_ok and visual_relevant(visual)),
+        rework_runs=runs, history=g.get("history") or [],
+        settings=qg.GateSettings(settings.gate_event_min, settings.gate_narrative_min, settings.gate_recovery_min,
+                                 max_len=max(lim["max_len"], settings.max_story_seconds),
+                                 max_rework=settings.gate_max_rework),
+        is_test=clip.is_test, approved=clip.status == "approved")
+    d = dict(clip.decision or {})
+    d["gate"] = res.as_dict()
+    clip.decision = d
+    clip.gate = res.outcome
+    hist = list(g.get("history") or []) + [{"run": clip.analysis_runs, "event": res.event.score,
+                                            "narrative": res.narrative.score, "outcome": res.outcome,
+                                            "bounds": [round(decision.start_abs, 2), round(decision.end_abs, 2)]}]
+    g.update({"history": hist[-6:], "outcome": res.outcome})
+    g.pop("pending", None)
+    reason = res.reasons[0] if res.reasons else ""
+    if res.outcome == qg.REWORK:
+        start, end = decision.start_abs, decision.end_abs
+        for f in res.fixes:
+            if f.applicable and f.start is not None:
+                start = f.start if f.kind == "context_before" else max(start, f.start)
+            if f.applicable and f.end is not None:
+                end = max(end, f.end)
+        g.update({"rework_runs": runs + 1, "pending": {"start": round(start, 2), "end": round(end, 2),
+                                                        "fixes": [f.kind for f in res.fixes if f.applicable]}})
+        prov["gate"] = g
+        clip.provenance = prov
+        clip.reasons = list(dict.fromkeys(list(clip.reasons or []) + [f"Quality Gate: {reason}"]))[:14]
+        enqueue_analysis(db, clip, settings, priority=85)  # below live analysis
+        log.info("quality gate rework", extra={"clip_id": clip.id, "run": runs + 1, "bounds": [start, end]})
+        return True
+    prov["gate"] = g
+    clip.provenance = prov
+    if res.outcome == qg.CONTEXT_PENDING and clip.analysis_runs < 3:
+        clip.status = "waiting"
+        clip.error = "Aguardando o desfecho da situação para decidir"
+        return True
+    if res.outcome == qg.REJECTED:
+        clip.status = "rejected"
+        clip.error = "Descartado pelo Quality Gate: " + reason
+        log.info("clip rejected by quality gate", extra={"clip_id": clip.id, "reason": reason})
+        return True
+    if res.outcome in (qg.HUMAN_REVIEW, qg.CONTEXT_PENDING):
+        clip.reasons = list(dict.fromkeys(list(clip.reasons or []) + [f"Revisão humana: {reason}"]))[:14]
+    return False  # READY / HUMAN_REVIEW: render so a person can watch it
 
 
 def _needs_deep(db: Session, clip: Clip, decision: DirectorDecision, judgement: dict, settings: AISettings) -> bool:

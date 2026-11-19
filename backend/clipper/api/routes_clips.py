@@ -39,9 +39,13 @@ def _get(db: Session, cid: int) -> Clip:
 
 @router.get("")
 def list_clips(status: str | None = None, streamer_id: int | None = None, sort: str = "recent",
-               limit: int = 60, offset: int = 0, db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+               limit: int = 60, offset: int = 0, gate: str | None = None, db: Session = Depends(get_db),
+               _: CurrentUser = Depends(current_user)):
     q = select(Clip)
     cq = select(func.count()).select_from(Clip)
+    if gate:
+        q = q.where(Clip.gate == gate)
+        cq = cq.where(Clip.gate == gate)
     if status:
         statuses = [s for s in status.split(",") if s]
         q = q.where(Clip.status.in_(statuses))

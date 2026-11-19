@@ -176,6 +176,7 @@ class Clip(Base):
     # Phase 3: versions of code/models/settings that produced the clip
     provenance: Mapped[dict] = mapped_column(JSON, default=dict)
     # Phase 5: editorial judgement (preliminary at detection, final after review) and story link
+    gate: Mapped[str] = mapped_column(String(20), default="", index=True)  # Phase 6A outcome
     prelim_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     editorial_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
