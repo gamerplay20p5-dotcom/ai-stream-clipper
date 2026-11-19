@@ -57,22 +57,24 @@ export default function Overview() {
 
   return (
     <div>
-      <PageHeader title="Visão geral">
-        <time className="text-sm text-ink-muted first-letter:uppercase">{date.format(new Date())}</time>
-      </PageHeader>
+      <div className="overview-masthead">
+        <PageHeader title="Visão geral">
+          <time className="text-sm text-ink-muted first-letter:uppercase">{date.format(new Date())}</time>
+        </PageHeader>
+        <Link className="btn-take" to="/cortes?status=ready">Abrir central <ChevronRight size={16} aria-hidden /></Link>
+      </div>
       {failureLink && <div className="mb-3 xl:hidden">{failureLink}</div>}
 
-      <div className="grid grid-cols-1 gap-[var(--space-section)] border-t border-suite-line pt-5 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,0.38fr)] xl:pt-6">
+      <div className="grid grid-cols-1 gap-[var(--space-section)] pt-5 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,0.38fr)] xl:pt-6">
         <div className="min-w-0 space-y-[var(--space-section)]">
           <section aria-labelledby="review-queue-title">
-            <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <header className="mb-4">
               <div>
                 <h2 id="review-queue-title" className="display text-xl">Fila de revisão</h2>
                 {review.data && <p className="mt-1 text-sm text-ink-muted">
                   {number.format(review.data.total)} {review.data.total === 1 ? "corte pronto para revisar" : "cortes prontos para revisar"}
                 </p>}
               </div>
-              <Link className="btn-quiet self-center" to="/cortes?status=ready">Abrir central</Link>
             </header>
             <ErrorNote error={review.error} />
             {review.isLoading && <Skeleton label="Carregando cortes para revisar" />}

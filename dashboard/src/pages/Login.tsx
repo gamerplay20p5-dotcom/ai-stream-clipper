@@ -30,7 +30,7 @@ export default function Login({ onDone }: { onDone: () => void }) {
 
   return (
     <main className="login-layout">
-      <div className="login-art" aria-hidden="true"><div className="login-aperture"><img src="/site/clipper-mark.svg" alt=""/></div></div>
+      <div className="login-art" aria-hidden="true"><div className="login-aperture" /></div>
       <div className="login-access">
       <header><Brand /></header>
       <div className="login-form">

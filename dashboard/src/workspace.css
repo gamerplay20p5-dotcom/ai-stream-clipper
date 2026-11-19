@@ -80,7 +80,6 @@
   .login-layout {
     @apply mx-auto grid min-h-dvh max-w-[32rem] content-center gap-7 px-6 py-10 sm:px-10;
   }
-  .login-form { @apply border-y border-suite-line py-7; }
   .login-layout .product-brand img { @apply h-10 w-10; }
 
   .review-strip {
@@ -112,9 +111,9 @@
   .workspace-nav { @apply px-3 pt-4; }
   .nav-group + .nav-group { @apply mt-2 border-0 pt-0; }
   .nav-group-toggle { @apply min-h-7 font-semibold text-ink-faint; }
-  .workspace-link[aria-current="page"] { @apply bg-suite-raised text-ink; }
+  .workspace-link[aria-current="page"] { @apply bg-take-dim text-ink; }
   .workspace-link[aria-current="page"] svg { @apply text-take; }
-  .nav-count { @apply rounded bg-suite-panel px-1.5; }
+  .nav-count { @apply rounded bg-suite-panel px-1.5 text-take; }
   .account-avatar { @apply rounded-full border border-suite-outline; }
   .console-brand { display:none; }
   .operation-rail { @apply min-w-0 space-y-5 self-start rounded-lg border border-suite-line bg-suite-panel p-4; }
@@ -123,8 +122,30 @@
   .host-rack { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,19rem),1fr)); gap:1rem; }
   .host-rack > :only-child { max-width:48rem; }
   .cut-room .compact-status,.cut-bin .queue-toggle { display:none; }
-  .login-layout { @apply max-w-5xl; }
-  .login-art { display:none; }
+  .login-layout { @apply max-w-6xl px-4 py-6 sm:px-10; }
+  .login-art {
+    @apply relative grid place-items-center overflow-hidden rounded-lg border border-suite-line bg-suite-panel;
+    min-height: 8rem;
+    background-image: var(--coastal-art);
+    background-size: cover;
+    background-position: 64% 43%;
+  }
+  .login-aperture {
+    position: relative;
+    width: 40%;
+    height: 65%;
+    border: 1px solid rgb(var(--ink) / .26);
+    box-shadow: 0 0 0 40rem rgb(var(--media) / .16);
+  }
+  .login-aperture::before, .login-aperture::after {
+    content: "";
+    position: absolute;
+    width: 1.1rem;
+    height: 1.1rem;
+    border-color: rgb(var(--ink) / .9);
+  }
+  .login-aperture::before { top: -1px; left: -1px; border-top-width: 2px; border-left-width: 2px; }
+  .login-aperture::after { bottom: -1px; right: -1px; border-bottom-width: 2px; border-right-width: 2px; }
   .login-access { @apply mx-auto w-full max-w-md; }
   .login-form { @apply my-5 border-0 p-0; }
   .parameter-desk { @apply grid min-w-0 items-start gap-5; }
@@ -138,7 +159,31 @@
   .parameter-section h2 { @apply border-b border-suite-line pb-3; }
   .parameter-section > div > :last-child { padding-bottom:0; }
   .workspace-main .page-heading { margin-bottom:1.2rem; align-items:center; }
-  .workspace-main .page-heading h1 { letter-spacing:-.045em; }
+  .overview-masthead {
+    @apply overflow-hidden rounded-lg border border-suite-line px-4 py-5 sm:px-6;
+    background-color: rgb(var(--panel));
+    background-image:
+      linear-gradient(90deg, rgb(var(--media)) 0%, rgb(var(--media) / .95) 29%, rgb(var(--media) / .22) 75%),
+      var(--coastal-art);
+    background-position: center, right 52%;
+    background-size: cover;
+  }
+  .overview-masthead > .page-heading {
+    display: grid;
+    align-items: start;
+    justify-content: start;
+    gap: .55rem;
+    margin-bottom: .95rem;
+  }
+  .overview-masthead h1 { color: rgb(var(--action)); }
+  .overview-masthead time { color: rgb(var(--ink)); }
+  @media (max-width: 560px) {
+    .overview-masthead {
+      background-image:
+        linear-gradient(90deg, rgb(var(--media) / .96) 0%, rgb(var(--media) / .8) 51%, rgb(var(--media) / .2)),
+        var(--coastal-art);
+    }
+  }
   .workspace-main .view-switch { @apply gap-x-1 rounded-md border-0 bg-suite-media p-1; }
   .workspace-main .view-switch-item { @apply m-0 min-h-9 rounded border-0 px-3 transition-colors; }
   .workspace-main .view-switch-item:is([aria-pressed="true"],[aria-current="page"]) { @apply bg-suite-raised text-ink; box-shadow:inset 0 -2px rgb(var(--take)); }
@@ -152,14 +197,13 @@
     .parameter-nav { @apply sticky p-2.5; top:calc(var(--topbar-height) + 1rem); }
     .parameter-links { display:grid; }
     .parameter-save { @apply justify-center; }
-    .login-layout { grid-template-columns:minmax(0,1.1fr) minmax(0,1fr); align-items:center; gap:clamp(2rem,6vw,5rem); }
-    .login-art { @apply grid place-items-center rounded-lg border border-suite-line bg-suite-media; min-height:min(31rem,75vh);
-      background-image:linear-gradient(to right,rgb(var(--line) / .28) 1px,transparent 1px),linear-gradient(to bottom,rgb(var(--line) / .28) 1px,transparent 1px); background-size:32px 32px; }
-    .login-aperture { @apply grid aspect-short w-1/2 place-items-center border border-suite-outline bg-suite-panel; position:relative; box-shadow:0 0 0 8px rgb(var(--media)); }
-    .login-aperture img { width:46%; }
-    .login-aperture::before,.login-aperture::after { content:""; position:absolute; width:1.5rem; height:1.5rem; border-color:rgb(var(--take)); }
-    .login-aperture::before { top:-2px; left:-2px; border-top-width:3px; border-left-width:3px; }
-    .login-aperture::after { bottom:-2px; right:-2px; border-bottom-width:3px; border-right-width:3px; }
+    .login-layout {
+      grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
+      align-items: center;
+      gap: clamp(2rem, 6vw, 5rem);
+    }
+    .login-art { min-height: min(34rem, 75vh); }
+    .login-aperture { width: min(54%, 14.5rem); height: auto; aspect-ratio: 9/16; }
   }
   @media(min-width:960px) {
     .workspace { padding-top:var(--topbar-height); }

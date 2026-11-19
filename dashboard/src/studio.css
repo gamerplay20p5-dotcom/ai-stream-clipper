@@ -3,7 +3,7 @@
   .session-select select,.story-picker select { @apply min-w-0 max-w-full bg-suite-panel py-2 text-sm font-medium text-ink; }
   .session-band { @apply grid min-w-0 items-center gap-5 rounded-lg border border-suite-line bg-suite-panel px-4 py-4 sm:px-5; }
   .session-identity { @apply flex min-w-0 items-center gap-3; }
-  .source-symbol { @apply grid size-12 shrink-0 place-items-center rounded-lg border border-suite-outline bg-suite-raised text-ink; }
+  .source-symbol { @apply grid size-12 shrink-0 place-items-center rounded-lg border border-suite-outline bg-processing-dim text-processing; }
   .session-identity h2 { @apply mt-1 break-words text-xl font-semibold leading-tight; }
   .session-stats { @apply flex min-w-0 flex-wrap gap-x-5 gap-y-2; }
   .session-stats div { @apply border-l border-suite-outline pl-3; }
@@ -40,7 +40,7 @@
   .event-log { @apply overflow-hidden rounded-lg border border-suite-line; }
   .event-log li + li { @apply border-t border-suite-line; }
   .event-log button { @apply grid w-full items-center gap-3 bg-suite-panel px-4 py-3 text-left transition-colors hover:bg-suite-raised; grid-template-columns:3.4rem minmax(0,1fr) auto; }
-  .event-log button[aria-pressed="true"] { @apply bg-suite-raised; box-shadow:inset 3px 0 rgb(var(--take)); }
+  .event-log button[aria-pressed="true"] { @apply bg-take-dim; box-shadow:inset 3px 0 rgb(var(--take)); }
   .event-log button:focus-visible,.bin-clip:focus-visible { outline-offset:-3px; }
   .event-log time { @apply text-ink-muted; }
   .event-copy small,.bin-caption small { @apply block text-xs text-ink-muted; }
@@ -70,7 +70,7 @@
   .cut-bin header { @apply m-0 px-3 py-2.5; }
   .cut-bin ul { @apply flex min-w-0 snap-x overflow-auto border-y border-suite-line; scrollbar-width:thin; }
   .cut-bin li { @apply relative min-w-0 shrink-0 snap-start border-r border-suite-line py-1 pr-6; width:min(77vw,16rem); }
-  .cut-bin li[data-current="true"] { @apply bg-suite-raised; box-shadow:inset 3px 0 rgb(var(--take)); }
+  .cut-bin li[data-current="true"] { @apply bg-take-dim; box-shadow:inset 3px 0 rgb(var(--take)); }
   .bin-clip { @apply grid w-full min-w-0 items-center gap-3 p-2 text-left transition-colors hover:bg-suite-raised; grid-template-columns:3rem minmax(0,1fr); }
   .bin-frame { @apply grid aspect-short max-h-20 w-full place-items-center overflow-hidden rounded bg-suite-media; }
   .bin-frame img { @apply size-full object-cover; }

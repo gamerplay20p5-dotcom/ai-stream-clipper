@@ -31,7 +31,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid rgb(var(--take)); out
 /* hero */
 .hero { padding: 72px 0 48px; border-bottom: 1px solid rgb(var(--line)); }
 .eyebrow { color: rgb(var(--take)); font-size: 14px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 12px; }
-h1 { font-size: clamp(2rem, 5vw, 3.1rem); line-height: 1.08; margin: 0 0 18px; font-weight: 800; letter-spacing: -.01em; max-width: 20ch; }
+h1 { color: rgb(var(--action)); font-size: clamp(2rem, 5vw, 3.1rem); line-height: 1.08; margin: 0 0 18px; font-weight: 800; letter-spacing: -.01em; max-width: 20ch; }
 .lead { font-size: 1.15rem; color: rgb(var(--muted)); max-width: 62ch; margin: 0 0 28px; }
 .actions { display: flex; gap: 12px; flex-wrap: wrap; }
 .btn { display: inline-flex; align-items: center; gap: 8px; padding: 11px 18px; border-radius: 8px; font-weight: 600;
@@ -50,17 +50,15 @@ h3 { font-size: 1.05rem; margin: 0 0 6px; }
 .frame {
   display: grid; place-items: center; width: min(28vw, 260px); aspect-ratio: 9 / 12;
   border: 1px solid rgb(var(--line)); border-radius: var(--radius); position: relative;
-  background-color: rgb(var(--media));
-  background-image: linear-gradient(to right, rgb(var(--line) / 35%) 1px, transparent 1px),
-                    linear-gradient(to bottom, rgb(var(--line) / 35%) 1px, transparent 1px);
-  background-size: 24px 24px;
+  background: rgb(var(--panel)) var(--coastal-art) 64% center / cover no-repeat;
 }
 .frame::before {
-  content: ""; width: 45%; aspect-ratio: 9 / 16; border: 1px solid rgb(var(--outline)); background: rgb(var(--panel)) url("./clipper-mark.svg") center / 48% auto no-repeat;
+  content: ""; width: 45%; aspect-ratio: 9 / 16; border: 1px solid rgb(var(--ink) / .8); box-shadow: 0 0 0 2px rgb(var(--media) / .55);
 }
 .frame::after {
   content: "9:16"; position: absolute; bottom: 12px; right: 12px;
-  font: 12px/1 Consolas, monospace; color: rgb(var(--take));
+  padding: .35rem; border-radius: 4px; background: rgb(var(--media));
+  font: 12px/1 Consolas, monospace; color: rgb(var(--action));
 }
 .split { display: grid; gap: 32px; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .list { margin: 0; padding-left: 1.1rem; color: rgb(var(--muted)); }
