@@ -196,6 +196,9 @@ def referenced_files(db: Session, clip: Clip) -> set[str]:
     refs.update(p for (p,) in db.execute(select(Publication.video_path).where(
         Publication.clip_id == clip.id, Publication.video_path != "",
         Publication.status.in_(("draft", "proposed", "scheduled", "uploading", "processing", "uncertain")))).all() if p)
+    from .sharing import protected_files
+
+    refs.update(protected_files(db, clip))  # media frozen in valid shares (multi-user)
     return refs
 
 
