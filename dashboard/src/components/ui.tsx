@@ -9,7 +9,7 @@ export function Status({ tone = "neutral", children }: {
 }) {
   const tones = {
     neutral: "bg-suite-raised text-ink-muted",
-    accent: "bg-take-dim text-take",
+    accent: "bg-suite-raised text-ink",
     success: "bg-ok/10 text-ok",
     danger: "bg-tally-dim text-tally",
     warning: "bg-warning-dim text-warning",
@@ -31,8 +31,8 @@ export function ScoreMark({ score, size = "md" }: { score: number; size?: "md" |
   return (
     <span title={`Pontuação heurística ${score.toFixed(1)} de 100`}
       aria-label={`Pontuação ${score.toFixed(1)} de 100`}
-      className={`inline-flex shrink-0 items-center rounded-md border border-take/30 bg-take-dim font-mono font-semibold text-take ${size === "lg" ? "gap-1 px-2.5 py-2 text-lg" : "gap-0.5 px-1.5 text-xs"}`}>
-      {Math.round(score)}<span className="text-[10px] text-take/85" aria-hidden>/100</span>
+      className={`inline-flex shrink-0 items-center rounded-md bg-suite-media/95 font-mono font-semibold text-ink ${size === "lg" ? "gap-1 px-2.5 py-2 text-lg" : "gap-0.5 px-1.5 text-xs"}`}>
+      {Math.round(score)}<span className="text-[10px] text-ink-muted" aria-hidden>/100</span>
     </span>
   );
 }
@@ -42,7 +42,7 @@ export function Meter({ value, max = 10, tone = "take", label = "Medição" }: {
 }) {
   if (value === null || value === undefined) return <div className="h-1.5 w-full rounded-full bg-suite-line/50" />;
   const current = Math.max(0, Math.min(max, value));
-  const color = tone === "take" ? "bg-take" : tone === "tally" ? "bg-tally" : "bg-ink-muted";
+  const color = tone === "take" ? "bg-ink-muted" : tone === "tally" ? "bg-tally" : "bg-ink-muted";
   return (
     <div className="h-1.5 w-full rounded-full bg-suite-line" role="meter" aria-label={label} aria-valuenow={current} aria-valuemin={0} aria-valuemax={max}>
       <div className={`h-1.5 rounded-full ${color}`} style={{ width: `${(current / max) * 100}%` }} />
@@ -65,8 +65,8 @@ export function ClipFrame({ clip, onOpen, selected }: { clip: Clip; onOpen: () =
   const title = clip.title || "Sem título";
   return (
     <button type="button" onClick={onOpen} aria-current={selected ? "true" : undefined}
-      className={`panel group block w-full text-left transition-colors ${selected ? "border-take" : "hover:border-suite-outline"}`}>
-      <span className="relative grid aspect-short max-h-64 w-full place-items-center overflow-hidden rounded-t-[calc(var(--radius-panel)-1px)] border-b border-suite-line bg-suite-media">
+      className={`group block w-full min-w-0 rounded-lg text-left ${selected ? "ring-1 ring-take" : ""}`}>
+      <span className="relative grid aspect-short max-h-72 w-full place-items-center overflow-hidden rounded-lg border border-suite-line bg-suite-media transition-colors group-hover:border-suite-outline">
         {clip.has_thumbnail ? (
           <img src={`/api/clips/${clip.id}/thumbnail?v=${clip.version}`} alt="" loading="lazy"
             className={`absolute inset-0 size-full object-cover ${clip.status === "rejected" ? "opacity-60" : ""}`} />
@@ -74,14 +74,14 @@ export function ClipFrame({ clip, onOpen, selected }: { clip: Clip; onOpen: () =
         <span className="absolute left-2 top-2 text-xs font-semibold">
           {clip.is_test ? <Status tone="warning">Teste manual</Status> : <ScoreMark score={clip.score} />}
         </span>
-        <span className="absolute inset-x-2 bottom-2 flex items-center justify-between gap-2">
-          <span className="grid size-8 place-items-center rounded-md bg-suite-media/90 text-ink transition-colors group-hover:bg-take group-hover:text-take-ink">
-            <Play size={14} fill="currentColor" aria-hidden />
-          </span>
+        <span className="pointer-events-none absolute grid size-10 place-items-center rounded-full bg-suite-media/90 text-ink opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+          <Play size={16} fill="currentColor" aria-hidden />
+        </span>
+        <span className="absolute bottom-2 right-2">
           <span className="rounded bg-suite-media/95 px-1.5 py-0.5 font-mono text-xs text-ink">{seconds(clip.duration)}</span>
         </span>
       </span>
-      <span className="block px-3 pb-3 pt-2.5">
+      <span className="block pb-1 pt-2.5 group-hover:text-take">
         <span className="line-clamp-2 text-sm font-semibold leading-tight" title={title}>{title}</span>
         {clip.streamer && <span className="mt-1 block truncate text-xs text-ink-muted">{clip.streamer.display_name}</span>}
       </span>

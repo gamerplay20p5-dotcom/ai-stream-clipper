@@ -27,8 +27,8 @@ const groups = [
   ] },
   { label: "Inteligência", items: [
     { to: "/diretor", label: "Diretor IA", icon: Sparkles },
-    { to: "/referencias", label: "Laboratório de referências", icon: Library },
-    { to: "/ia", label: "Configurações da IA", icon: SlidersHorizontal },
+    { to: "/referencias", label: "Referências", icon: Library },
+    { to: "/ia", label: "Parâmetros", icon: SlidersHorizontal },
   ] },
   { label: "Administração", items: [
     { to: "/infra", label: "Infraestrutura", icon: Server },

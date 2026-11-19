@@ -239,10 +239,10 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions }: {
             </Notice>}
           </div>}
 
-          <div className="grid items-start gap-5 lg:grid-cols-[minmax(240px,0.86fr)_minmax(0,1.14fr)]">
-            <section hidden={view === "versions"} className="panel lg:sticky lg:top-[calc(var(--topbar-height)+1rem)]" aria-label="Prévia do corte">
-              <div className="panel-heading"><h2 className="text-sm font-semibold">Prévia</h2><span className="font-mono text-xs text-ink-muted">9:16 / {seconds(c.duration)}</span></div>
-              <div className="panel-body space-y-3">
+          <div className="grid items-start gap-6 lg:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.1fr)] lg:gap-8">
+            <section hidden={view === "versions"} className="min-w-0 lg:sticky lg:top-[calc(var(--topbar-height)+1rem)]" aria-label="Prévia do corte">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h2 className="display text-lg">Prévia</h2><span className="font-mono text-xs text-ink-muted">9:16 / {seconds(c.duration)}</span></div>
+              <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-2">
                   <button className="btn-take" disabled={!["ready", "rejected"].includes(c.status) || action.isPending} onClick={() => action.mutate("approve")}>
                     <Check size={16} aria-hidden /> Aprovar
@@ -275,15 +275,15 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions }: {
             </section>
 
             <div hidden={view !== "review"} className="min-w-0 space-y-4">
-              <section className="panel">
-                <div className="panel-heading">
+              <section className="min-w-0">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-suite-line pb-3">
                   <h2 className="display text-lg">Leitura editorial</h2>
                   <button className="btn-quiet" disabled={evaluate.isPending} onClick={() => evaluate.mutate()}>
                     <ClipboardCheck size={15} aria-hidden /> Avaliar para a IA
                   </button>
                 </div>
-                <div className="panel-body space-y-4">
-                  {c.reasons.length > 0 && <ul className="space-y-2 border-l-2 border-take pl-3 text-sm">{c.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>}
+                <div className="space-y-4 py-4">
+                  {c.reasons.length > 0 && <ul className="space-y-2 border-l border-suite-outline pl-3 text-sm">{c.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>}
                   {dims.length > 0 && (
                     <section>
                       <h3 className="mb-3 text-sm font-semibold">Pontuação por critério</h3>
