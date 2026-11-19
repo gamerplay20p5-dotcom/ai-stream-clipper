@@ -210,22 +210,6 @@ def test_without_a_recorded_attempt_a_caption_match_is_not_enough(meta):
     assert st["state"] == "uncertain" and meta.publish_count == 0
 
 
-def test_unanswered_call_on_a_still_unpublished_container_is_retried_only_after_a_while(meta):
-    saved = []
-    recent = {"container_id": "C123", "ig_user_id": "1789", "publish_called_at": _called(1)}
-    st = instagram.status(_pub(upload_state=recent), TOK, saved.append)
-    assert st["state"] == "processing" and meta.publish_count == 0  # Meta may still be publishing
-    old = {**recent, "publish_called_at": _called(15)}
-    st = instagram.status(_pub(upload_state=old), TOK, saved.append)
-    assert st["state"] == "processing" and "publish_called_at" not in saved[-1] and meta.publish_count == 0
-
-
-def test_clear_refusal_of_media_publish_is_not_uncertain(meta):
-    saved = []
-    meta.fail["/media_publish"] = httpx.Response(400, json={"error": {"message": "media not ready", "code": 9007}})
-    with pytest.raises(PublishError):
-        instagram.status(_pub(upload_state={"container_id": "C123", "ig_user_id": "1789"}), TOK, saved.append)
-    assert saved and "publish_called_at" not in saved[-1]  # Meta said no: nothing published
 
 
 def test_server_error_on_media_publish_is_uncertain(meta):
@@ -400,3 +384,159 @@ def test_clip_with_an_uncertain_publication_is_protected_from_cleanup(admin):
         db.flush()
         why = storage_lifecycle.protection(db, db.get(Clip, cid))
         assert "publicado ou agendado" in why
+
+
+
+# ------------------------------------------------------------------ PR #3 third review: retry cycle
+def _poll_pub(pid):
+    from clipper.models import Publication
+
+    with session_scope() as db:
+        return db.get(Publication, pid)
+
+
+def _processing_pub(tag, state):
+    from clipper.models import Publication
+
+    cid, aid = _setup(tag)
+    with session_scope() as db:
+        p = Publication(clip_id=cid, account_id=aid, platform="instagram", status="processing", privacy="public",
+                        title="A fuga", description="Créditos: X", upload_state=state, remote_id=state.get("container_id", ""))
+        db.add(p)
+        db.flush()
+        return cid, aid, p.id
+
+
+@pytest.fixture()
+def poll_env(monkeypatch):
+    from clipper.publish import service
+
+    monkeypatch.setattr(service, "tokens_for", lambda db, acct: TOK)
+
+
+def test_definitive_4xx_refusal_fails_once_and_is_never_called_again(admin, meta, poll_env):
+    from clipper.publish import runner
+
+    meta.fail["/media_publish"] = httpx.Response(400, json={"error": {"message": "caption too long", "code": 100,
+                                                                      "error_subcode": 2207032}})
+    _c, _a, pid = _processing_pub("ref", {"container_id": "C123", "ig_user_id": "1789", "uploaded": True})
+    runner.poll_processing()
+    p = _poll_pub(pid)
+    assert p.status == "failed" and p.remote_status["failure"] == "rejected_by_platform" and "2207032" in p.last_error
+    assert p.upload_state.get("publish_refused") and not p.upload_state.get("publish_called_at")
+    for _ in range(3):  # many later polls: a failed publication is not polled, no new call
+        runner.poll_processing()
+    assert meta.publish_count == 0 or sum(1 for m, u in meta.calls if u.endswith("/media_publish")) == 1
+
+
+def test_auth_and_rate_limit_refusals_are_handled_differently(admin, meta, poll_env):
+    from clipper.models import PublishAccount
+    from clipper.publish import runner
+
+    meta.fail["/media_publish"] = httpx.Response(400, json={"error": {"message": "invalid token", "code": 190}})
+    _c, aid, pid = _processing_pub("auth4", {"container_id": "C123", "ig_user_id": "1789", "uploaded": True})
+    runner.poll_processing()
+    p = _poll_pub(pid)
+    assert p.status == "failed" and p.remote_status["failure"] == "before_publish"
+    with session_scope() as db:
+        assert db.get(PublishAccount, aid).status == "expired"  # reconnect needed
+    meta.fail["/media_publish"] = httpx.Response(400, json={"error": {"message": "limit", "code": 4}})
+    _c, _a, pid2 = _processing_pub("rate4", {"container_id": "C123", "ig_user_id": "1789", "uploaded": True})
+    before = sum(1 for m, u in meta.calls if u.endswith("/media_publish"))
+    runner.poll_processing()
+    runner.poll_processing()  # inside the wait window: no new call
+    p2 = _poll_pub(pid2)
+    assert p2.status == "processing" and p2.upload_state.get("publish_not_before")
+    assert sum(1 for m, u in meta.calls if u.endswith("/media_publish")) - before == 1
+
+
+def test_unreadable_4xx_is_uncertain_not_a_safe_failure(meta):
+    meta.fail["/media_publish"] = httpx.Response(403, text="<html>forbidden</html>")
+    st = instagram.status(_pub(upload_state={"container_id": "C123", "ig_user_id": "1789"}), TOK, lambda s: None)
+    assert st["state"] == "uncertain"
+
+
+def test_timeout_then_container_finished_for_more_than_ten_minutes_stays_uncertain(meta):
+    saved = []
+    state = {"container_id": "C123", "ig_user_id": "1789", "publish_called_at": _called(45)}
+    for _ in range(3):
+        st = instagram.status(_pub(upload_state=state), TOK, saved.append)
+        assert st["state"] == "uncertain"
+    assert meta.publish_count == 0 and not saved  # never calls again, never clears the attempt
+
+
+def test_uncertain_publication_never_makes_a_second_call_in_the_runner(admin, meta, poll_env, monkeypatch):
+    from clipper.publish import runner
+
+    monkeypatch.setattr(instagram, "_client", _timeout_on_publish(meta))
+    _c, _a, pid = _processing_pub("unc2", {"container_id": "C123", "ig_user_id": "1789", "uploaded": True})
+    runner.poll_processing()  # call -> timeout -> uncertain
+    assert _poll_pub(pid).status == "uncertain"
+    for _ in range(5):  # FINISHED forever, then PUBLISHED without a match
+        runner.poll_processing()
+    meta.container_status = "PUBLISHED"
+    runner.poll_processing()
+    assert meta.publish_count == 1 and _poll_pub(pid).status == "uncertain"
+    assert admin.post(f"/api/publish/publications/{pid}/retry", headers=CSRF).status_code == 409
+
+
+def test_later_reconciliation_of_a_reel_that_was_published(admin, meta, poll_env, monkeypatch):
+    from clipper.publish import runner
+
+    monkeypatch.setattr(instagram, "_client", _timeout_on_publish(meta))
+    _c, _a, pid = _processing_pub("recon", {"container_id": "C123", "ig_user_id": "1789", "uploaded": True})
+    runner.poll_processing()
+    assert _poll_pub(pid).status == "uncertain"
+    meta.container_status, meta.media_list = "PUBLISHED", [_reel("M999")]
+    runner.poll_processing()
+    runner.poll_processing()
+    p = _poll_pub(pid)
+    assert p.status == "published" and p.remote_url and meta.publish_count == 1
+    assert admin.post(f"/api/publish/publications/{pid}/retry", headers=CSRF).status_code == 409  # evidence kept
+
+
+def test_error_container_then_admin_retry_creates_a_new_container(admin, meta, poll_env, monkeypatch, tmp_path):
+    from clipper import storage
+    from clipper.publish import runner
+
+    meta.container_status = "ERROR"
+    cid, _a, pid = _processing_pub("err", {"container_id": "C-OLD", "ig_user_id": "1789", "uploaded": True})
+    with session_scope() as db:
+        db.get(Clip, cid).sha256 = ""
+    meta.fail["/C-OLD"] = httpx.Response(200, json={"status_code": "ERROR", "status": "unsupported codec"})
+    runner.poll_processing()
+    p = _poll_pub(pid)
+    assert p.status == "failed" and p.remote_status["failure"] == "rejected_by_platform"
+    r = admin.post(f"/api/publish/publications/{pid}/retry", headers=CSRF)
+    assert r.status_code == 200, r.text
+    p = _poll_pub(pid)
+    assert p.upload_state == {} and p.remote_id == ""  # refused session invalidated
+    prev = p.remote_status["previous_attempts"][-1]
+    assert prev["upload_state"]["container_id"] == "C-OLD" and prev["failure"] == "rejected_by_platform"
+    assert any(e["event"] == "previous_attempt" for e in p.log)  # history kept
+    # the next run creates a NEW container
+    meta.fail.clear()
+    meta.container_status = "FINISHED"
+    v = _video(tmp_path, 50_000)
+    monkeypatch.setattr(storage, "resolve", lambda rel: v)
+    monkeypatch.setattr(runner, "MIN_GAP_BETWEEN_UPLOADS_S", 0)
+    from clipper import queue
+
+    with session_scope() as db:
+        jobs = queue.claim(db, runner.worker_id(), ["publish"], has_gpu=False, limit=20, lease_seconds=600)
+        jid = next(j.id for j in jobs if j.payload["publication_id"] == pid)
+        for j in jobs:
+            if j.id != jid:
+                queue.complete(db, j.id, runner.worker_id(), {})
+    runner.run_publish(jid, pid)
+    p = _poll_pub(pid)
+    assert p.upload_state.get("container_id") == "C123" and p.status == "processing"  # new container
+
+
+def test_archive_refuses_uncertain_and_published():
+    from clipper.models import Publication
+    from clipper.publish import service
+
+    for status in ("uncertain", "published"):
+        with pytest.raises(ValueError):
+            service.archive_attempt(Publication(status=status, upload_state={"container_id": "X"}), "x")

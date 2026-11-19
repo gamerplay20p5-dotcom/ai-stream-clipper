@@ -380,9 +380,13 @@ def retry(pid: int, request: Request, db: Session = Depends(get_db), user: Curre
         raise HTTPException(409, blockers[0])
     if p.remote_id and p.platform not in ("tiktok", "instagram"):
         raise HTTPException(409, "esta publicação já tem um vídeo na plataforma; verifique-o lá antes de reenviar")
+    if (p.remote_status or {}).get("failure") == "rejected_by_platform":
+        # Meta refused the previous container for good: archive it and start a NEW session/container
+        service.archive_attempt(p, f"recusado pela plataforma; nova sessão por {user.email}")
     p.status, p.scheduled_at, p.attempts, p.last_error = "scheduled", None, 0, ""
     service.log_event(p, "retry_admin", f"por {user.email}")
     audit(db, request, user, "publish.retry", f"publication:{pid}")
+    db.flush()  # autoflush is off: enqueue_due must see the new status, or the job waits for the next tick
     service.enqueue_due(db)
     db.commit()
     return _pub(db, p)

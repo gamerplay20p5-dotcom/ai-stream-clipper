@@ -40,6 +40,23 @@ ACTIVE = ("scheduled", "uploading", "processing", "uncertain")
 SAFE_FAILURES = ("before_publish", "rejected_by_platform", "confirmed_not_published")
 
 
+def archive_attempt(pub: Publication, reason: str) -> None:
+    """Keep the previous attempt as evidence (remote_status.previous_attempts + log) and invalidate
+    its upload session, so the next run creates a new container. Never used on uncertain or
+    published publications."""
+    if pub.status in ("uncertain", "published"):
+        raise ValueError("tentativa com resultado incerto ou publicada não pode ser descartada")
+    prev = {"upload_state": dict(pub.upload_state or {}), "remote_id": pub.remote_id, "failure":
+            (pub.remote_status or {}).get("failure"), "last_error": (pub.last_error or "")[:500],
+            "archived_at": utcnow().isoformat(), "reason": reason}
+    rs = dict(pub.remote_status or {})
+    rs["previous_attempts"] = (list(rs.get("previous_attempts") or []) + [prev])[-10:]
+    rs.pop("failure", None)
+    pub.remote_status = rs
+    log_event(pub, "previous_attempt", f"contêiner {prev['upload_state'].get('container_id', '-')} arquivado: {reason}")
+    pub.upload_state, pub.remote_id = {}, ""
+
+
 def reuse_blockers(pub: Publication) -> list[str]:
     """Why an existing publication of this clip on this account must NOT be restarted."""
     if pub.status in ("cancelled", "expired"):
@@ -392,6 +409,8 @@ def create_publication(db: Session, clip: Clip, acct: PublishAccount, *, origin:
     if origin == "manual" and scheduled_at is None and published_today(db, acct, "America/Sao_Paulo") >= max_day:
         raise PublishRefused([f"limite diário de {max_day} publicações atingido nesta conta"])
     meta = suggest_metadata(db, clip, acct.platform, rule)
+    if existing is not None and (existing.upload_state or existing.remote_id):
+        archive_attempt(existing, f"nova publicação criada por {user}")  # evidence kept, session invalidated
     pub = existing or Publication(clip_id=clip.id, account_id=acct.id, platform=acct.platform)
     pub.rule_id = rule.id if rule else None
     pub.origin, pub.created_by = origin, user

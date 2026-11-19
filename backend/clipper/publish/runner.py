@@ -247,6 +247,8 @@ def poll_processing() -> None:
                     pub.remote_url = f"https://www.tiktok.com/@{acct.handle}/video/{st['post_id']}"
                 service.log_event(pub, "published", pub.remote_url)
             elif st["state"] == "failed":
+                if st.get("auth"):
+                    acct.status, acct.last_error = "expired", str(st.get("detail", ""))[:2000]
                 pub.status, pub.last_error = "failed", str(st.get("detail", ""))[:2000]
                 pub.remote_status = {**(pub.remote_status or {}), "failure": st.get("failure") or "rejected_by_platform"}
                 service.log_event(pub, "failed", pub.last_error)

@@ -161,8 +161,21 @@ A tela mostrava uma privacidade diferente da que seria enviada.
 **Proteções:**
 - **Uma chamada por tentativa:** o `media_publish` é registrado (`publish_called_at`) e gravado no banco **antes** de ser chamado, e nunca é repetido depois de uma resposta perdida.
 - **O que vira incerto:** timeout, erro de conexão ou erro 5xx no `media_publish`, e contêiner `PUBLISHED` sem identificação segura do Reel.
-- **Recusa clara 4xx da Meta** (sem permissão, mídia não pronta): conta como não publicado e permite nova tentativa.
-- **Contêiner ainda `FINISHED` 10 minutos depois de uma chamada sem resposta:** a Meta não publicou, e uma nova tentativa é segura.
+- **Resposta 4xx ao `media_publish`, classificada pelo código de erro da Meta** (revisão 3):
+
+  | Código | Tratamento |
+  |---|---|
+  | Autorização (190, 102, 10, 200) | `failed`, `before_publish`, nada publicado; a conta fica "expirada" para reconectar |
+  | Limite de uso (4, 17, 32, 613, 80002) | continua `processing` e espera 1 h (`publish_not_before`), sem chamada antes disso |
+  | Mídia não pronta (9007, subcódigo 2207027) ou `is_transient` | espera 2 min e tenta de novo |
+  | Qualquer outro código | **recusa definitiva**: `failed`, `rejected_by_platform`, e nunca uma nova chamada automática para esse contêiner |
+  | 4xx sem erro legível da Meta | **incerto** (não é tratado como recusa segura) |
+- **Sem pressupor ausência de publicação:** depois de uma chamada sem resposta, um contêiner que continua `FINISHED`, por mais tempo que passe, **não** prova que nada foi publicado. O resultado fica **incerto** até o Reel ser encontrado ou você conferir. A regra antiga dos 10 minutos foi removida, porque é melhor não duplicar do que publicar de novo a qualquer custo.
+- **Reenvio após contêiner `ERROR`/`EXPIRED`:**
+  - o reenvio administrativo **arquiva** a tentativa anterior em `remote_status.previous_attempts` e no log (contêiner, estado, motivo);
+  - invalida a sessão recusada, e a próxima execução cria **um contêiner novo**;
+  - isso nunca é feito para publicações incertas ou publicadas (`archive_attempt` recusa).
+- **Correção:** o reenvio administrativo não enfileirava o job na hora (autoflush desligado); agora enfileira.
 - **Reconciliação** (`_find_published`): só confirma quando há **exatamente um** Reel que cumpre ao mesmo tempo:
   - tipo `REELS`;
   - legenda **inteira** igual à enviada;

@@ -215,7 +215,8 @@ def upload(pub, tokens: Tokens, video: Path, save_state) -> UploadResult:
 
 UNCERTAIN = ("o resultado da publicação no Instagram é incerto: o Reel pode já estar no perfil. Nada será "
              "enviado de novo até a conferência (automática ou sua)")
-RETRY_PUBLISH_AFTER_S = 600  # container still FINISHED this long after an unanswered media_publish -> not published
+NOT_READY_CODES = {9007}  # "media is not ready to be published": nothing published, try again later
+NOT_READY_SUBCODES = {2207027}
 
 
 def _caption(pub) -> str:
@@ -248,15 +249,12 @@ def status(pub, tokens: Tokens, save_state=None) -> dict:
             return {"state": "failed", "failure": "rejected_by_platform",
                     "detail": f"o Instagram recusou o vídeo: {d.get('status') or code}"}
         if code == "PUBLISHED" or called:
-            if code == "FINISHED" and called and _age(called) >= RETRY_PUBLISH_AFTER_S:
-                # the container is still unpublished long after the unanswered call: Meta did NOT
-                # publish it -> a new attempt is safe (recorded again before calling)
-                st.pop("publish_called_at", None)
-                if save_state:
-                    save_state(st)
-                return {"state": "processing", "detail": "a publicação anterior não se concretizou; nova tentativa"}
-            if code == "FINISHED":
-                return {"state": "processing", "detail": "aguardando a confirmação da publicação"}
+            if code != "PUBLISHED":
+                # an attempt without a confirmed answer: a container still FINISHED is NOT proof that
+                # nothing was published (Meta may update it late). Never call again by ourselves:
+                # stay uncertain until the Reel is found or a person checks the profile.
+                return {"state": "uncertain",
+                        "detail": f"{UNCERTAIN} (a Meta ainda não confirmou; contêiner {code or 'sem estado'})"}
             # PUBLISHED: never call media_publish again - reconcile with strong evidence only
             mid, why = _find_published(c, base, st.get("ig_user_id"), pub, tokens, called)
             if mid:
@@ -265,6 +263,9 @@ def status(pub, tokens: Tokens, save_state=None) -> dict:
             return {"state": "uncertain", "detail": f"{UNCERTAIN} ({why})"}
         if code != "FINISHED":
             return {"state": "processing", "detail": code}
+        wait = st.get("publish_not_before")
+        if wait and _age(wait) < 0:  # rate limit / media not ready: Meta asked us to wait
+            return {"state": "processing", "detail": "aguardando para tentar publicar"}
         st["publish_called_at"] = _now_iso()
         if save_state:
             save_state(st)  # committed BEFORE the call
@@ -275,23 +276,52 @@ def status(pub, tokens: Tokens, save_state=None) -> dict:
             return {"state": "uncertain", "detail": f"{UNCERTAIN} (sem resposta da Meta: {type(exc).__name__})"}
         if r.status_code >= 500:
             return {"state": "uncertain", "detail": f"{UNCERTAIN} (erro {r.status_code} da Meta ao publicar)"}
-        try:
-            d = check_response(r, "publicação (Instagram)")
-        except PublishError:
-            # a clear 4xx refusal (permission, media not ready...): Meta did not publish it
-            st.pop("publish_called_at", None)
-            if save_state:
-                save_state(st)
-            raise
+        if r.status_code >= 400:
+            return _refusal(r, st, save_state)
+        d = check_response(r, "publicação (Instagram)")
         if not d.get("id"):
             return {"state": "uncertain", "detail": f"{UNCERTAIN} (resposta sem ID)"}
         return {"state": "processing", "detail": "publicado; buscando o link", "media_id": d.get("id")}
 
 
-def _now_iso() -> str:
-    from datetime import datetime, timezone
+def _refusal(r, st: dict, save_state) -> dict:
+    """A 4xx answer to media_publish, classified by Meta's error code. Only a recognised error
+    means "not published"; a 4xx we cannot read stays uncertain."""
+    try:
+        err = (r.json() or {}).get("error") or {}
+    except ValueError:
+        err = {}
+    code, sub = err.get("code"), err.get("error_subcode")
+    msg = str(err.get("error_user_msg") or err.get("message") or "")[:300]
 
-    return datetime.now(timezone.utc).isoformat()
+    def keep(**changes) -> None:
+        st.pop("publish_called_at", None)
+        st.update(changes)
+        if save_state:
+            save_state(st)
+
+    if code is None:
+        return {"state": "uncertain", "detail": f"{UNCERTAIN} (HTTP {r.status_code} sem erro reconhecível)"}
+    if code in AUTH_CODES:  # the request was rejected before any processing: nothing published
+        keep()
+        return {"state": "failed", "failure": "before_publish", "auth": True,
+                "detail": f"autorização da Meta inválida ou sem permissão ao publicar ({msg}): reconecte a conta"}
+    if code in RATE_CODES:
+        keep(publish_not_before=_now_iso(3600))
+        return {"state": "processing", "detail": f"limite de uso da Meta: nova tentativa em 1 h ({msg})"}
+    if code in NOT_READY_CODES or sub in NOT_READY_SUBCODES or err.get("is_transient"):
+        keep(publish_not_before=_now_iso(120))
+        return {"state": "processing", "detail": f"a Meta pediu para aguardar ({msg})"}
+    # a definitive refusal: never call media_publish again for this container by ourselves
+    keep(publish_refused={"code": code, "subcode": sub, "message": msg, "at": _now_iso()})
+    return {"state": "failed", "failure": "rejected_by_platform",
+            "detail": f"o Instagram recusou a publicação (código {code}{'/' + str(sub) if sub else ''}): {msg}"}
+
+
+def _now_iso(plus_s: float = 0.0) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    return (datetime.now(timezone.utc) + timedelta(seconds=plus_s)).isoformat()
 
 
 def _age(iso: str) -> float:
