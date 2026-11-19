@@ -245,10 +245,17 @@ def remap_for_segments(spec: RenderSpec, plan: dict, segs: list[dict]) -> tuple[
 
     total = sum(float(s["b"]) - float(s["a"]) for s in segs)
     words = []
+    pos, bounds = 0.0, []
+    for s in segs:  # output-time interval of each segment
+        d = float(s["b"]) - float(s["a"])
+        bounds.append((pos, pos + d))
+        pos += d
     for w in spec.words:
         t = map_time(segs, w.start)
         if t is not None:
-            words.append(SubWord(t, t + max(0.05, w.end - w.start), w.text, w.speaker))
+            seg_end = next((b for a, b in bounds if a - 1e-6 <= t < b), t + 0.05)
+            end = min(t + max(0.05, w.end - w.start), seg_end)  # never continue after a cut
+            words.append(SubWord(t, max(end, t + 0.05), w.text, w.speaker))
     p = dict(plan)
 
     def rel(items: list[dict], key: str = "t") -> list[dict]:

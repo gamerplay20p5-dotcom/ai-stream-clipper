@@ -95,3 +95,22 @@ def test_image_rollback_needs_the_db_downgrade_first(tmp_path):
         command.upgrade(cfg, "head")  # what v0.5.7 would do at startup
     downgrade_db(url, "0008")  # step 1 of the rollback, run with the newer image
     command.upgrade(cfg, "head")  # now the old image starts normally
+
+
+def test_0010_downgrade_preserves_human_votes_and_upgrade_restores_them(tmp_path):
+    url = f"sqlite:///{tmp_path / 'm.db'}"
+    upgrade_db(url, "head")
+    eng = sa.create_engine(url)
+    with eng.begin() as c:
+        c.execute(sa.text("PRAGMA foreign_keys=OFF"))
+        c.execute(sa.text("INSERT INTO edit_comparisons (id, clip_id, left, right, left_structure, right_structure, "
+                          "winner, blind, reviewer, note, created_at) VALUES (1, 1, 'main', 'edit', 'O', 'A', 'right', "
+                          "1, 'humano', '', '2026-11-19 00:00:00')"))
+    downgrade_db(url, "0009")
+    names = sa.inspect(eng).get_table_names()
+    assert "edit_comparisons" not in names and "edit_comparisons_preserved" in names
+    assert "video_path" not in {c["name"] for c in sa.inspect(eng).get_columns("publications")}
+    upgrade_db(url, "head")
+    with eng.begin() as c:
+        assert c.execute(sa.text("SELECT winner, reviewer FROM edit_comparisons WHERE id = 1")).one() == ("right", "humano")
+    assert "edit_comparisons_preserved" not in sa.inspect(eng).get_table_names()

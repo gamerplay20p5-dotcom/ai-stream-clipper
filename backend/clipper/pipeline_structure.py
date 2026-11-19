@@ -114,15 +114,18 @@ def _budget_ok(db: Session, settings) -> bool:
 
 
 def enqueue_variant(db: Session, clip: Clip, name: str) -> None:
+    """Queue a variant render bound to THIS plan revision (``render_id``): any other delivery is stale."""
+    import uuid
+
     v = _variants(clip)
     rec = dict(v[name])
     rec["round"] = int(rec.get("round", 0)) + 1
-    rec.update({"state": "queued", "error": "", "queued_at": utcnow().isoformat()})
+    rid = uuid.uuid4().hex[:12]
+    rec.update({"state": "queued", "error": "", "queued_at": utcnow().isoformat(), "render_id": rid})
     v[name] = rec
     _save_variants(clip, v)
-    queue.enqueue(db, "render", {"clip_id": clip.id, "version": clip.version, "variant": name},
-                  idempotency_key=f"render:{clip.id}:{name}{rec['round']}:v{clip.version}",
-                  priority=VARIANT_PRIORITY, max_attempts=2)
+    queue.enqueue(db, "render", {"clip_id": clip.id, "version": clip.version, "variant": name, "render_id": rid},
+                  idempotency_key=f"render:{clip.id}:{name}:{rid}", priority=VARIANT_PRIORITY, max_attempts=2)
 
 
 def plan_variant(db: Session, clip: Clip, settings, key: str = "auto", teaser: bool | None = None,
@@ -160,18 +163,35 @@ def variant_spec(db: Session, clip: Clip, name: str, base: dict) -> dict:
             "store_source": False}
 
 
-def store_variant(db: Session, clip: Clip, name: str, video_rel: str, thumb_rel: str, size: int) -> list[str]:
-    """Record a finished variant render; returns files of the previous render of this variant."""
+def store_variant(db: Session, clip: Clip, name: str, video_rel: str, thumb_rel: str, size: int,
+                  sha: str = "", seconds: float = 0.0, render_id: str = "") -> tuple[bool, list[str]]:
+    """Record a finished variant render. Returns (stored, files to delete). A delivery whose
+    ``render_id`` is not the one expected for this variant (older plan, out-of-order finish,
+    dropped variant) is stale: its own files are returned for deletion, nothing changes."""
     v = _variants(clip)
-    if name not in v:  # stale: the variant was dropped (e.g. a new analysis) while it rendered
-        return [p for p in (video_rel, thumb_rel) if p]
-    rec = dict(v[name])
+    rec = dict(v.get(name) or {})
+    if not rec or (render_id and rec.get("render_id") and render_id != rec["render_id"]):
+        return False, [p for p in (video_rel, thumb_rel) if p]
     old = [p for p in (rec.get("video_path"), rec.get("thumb_path")) if p and p not in (video_rel, thumb_rel)]
-    rec.update({"state": "done", "video_path": video_rel, "thumb_path": thumb_rel, "size": size,
-                "done_at": utcnow().isoformat()})
+    rec.update({"state": "done", "video_path": video_rel, "thumb_path": thumb_rel, "size": size, "sha256": sha,
+                "render_seconds": round(float(seconds), 2), "done_at": utcnow().isoformat()})
     v[name] = rec
     _save_variants(clip, v)
-    return old
+    return True, old
+
+
+def referenced_files(db: Session, clip: Clip) -> set[str]:
+    """Files that must never be deleted or overwritten: the main video, every variant, and every
+    media snapshot of a publication that is still pending or in progress."""
+    from .models import Publication
+
+    refs = {p for p in (clip.video_path, clip.thumb_path) if p}
+    for rec in _variants(clip).values():
+        refs.update(p for p in (rec.get("video_path"), rec.get("thumb_path")) if p)
+    refs.update(p for (p,) in db.execute(select(Publication.video_path).where(
+        Publication.clip_id == clip.id, Publication.video_path != "",
+        Publication.status.in_(("draft", "proposed", "scheduled", "uploading", "processing")))).all() if p)
+    return refs
 
 
 def variant_failed(db: Session, clip_id: int, name: str, error: str) -> None:
@@ -186,30 +206,50 @@ def variant_failed(db: Session, clip_id: int, name: str, error: str) -> None:
 
 def promote(db: Session, clip: Clip, name: str, user: str) -> dict:
     """Make a finished variant the main video (no new render); the old main becomes a variant."""
+    from .models import Publication
+
     v = _variants(clip)
     rec = v.get(name)
-    if not rec or rec.get("state") != "done" or not rec.get("video_path"):
+    if not rec or rec.get("state") != "done" or not rec.get("video_path") or not rec.get("sha256"):
         raise ValueError("a variante ainda não foi renderizada")
-    if clip.status in ("rendering", "analyzing", "candidate"):
+    if clip.status in ("rendering", "analyzing", "candidate", "waiting"):
         raise ValueError("o corte está em processamento")
+    busy = db.query(Publication).filter(Publication.clip_id == clip.id,
+                                        Publication.status.in_(("uploading", "processing"))).count()
+    if busy:
+        raise ValueError("há uma publicação deste corte sendo enviada agora: espere terminar")
+    pending = db.query(Publication).filter(Publication.clip_id == clip.id,
+                                           Publication.status.in_(("draft", "proposed", "scheduled"))).count()
     old_plan = dict(clip.edit_plan or {})
+    # the previous main keeps ALL its media metadata (it can be promoted back without a render)
     old_main = {"structure": old_plan.get("structure") or "O", "label": st.LABELS.get(old_plan.get("structure") or "O"),
                 "plan": {"segments": old_plan.get("segments") or [{"a": clip.start, "b": clip.end, "role": "main"}]},
                 "metrics": rec.get("original_metrics") if name == "edit" else rec.get("metrics_main", {}),
                 "state": "done", "video_path": clip.video_path, "thumb_path": clip.thumb_path, "size": clip.file_size,
-                "start": clip.start, "end": clip.end}
+                "sha256": clip.sha256, "render_seconds": clip.render_seconds, "start": clip.start, "end": clip.end,
+                "version": clip.version, "render_id": "promoted"}
     segs = rec["plan"]["segments"]
     new_plan = dict(old_plan)
     new_plan.update({"segments": segs, "structure": rec.get("structure"), "structure_reason": rec.get("reason", "")})
     clip.edit_plan = new_plan
     clip.start, clip.end = float(rec.get("start", min(s["a"] for s in segs))), float(rec.get("end", max(s["b"] for s in segs)))
-    clip.video_path, clip.thumb_path, clip.file_size = rec["video_path"], rec.get("thumb_path", ""), int(rec.get("size", 0))
+    clip.video_path, clip.thumb_path = rec["video_path"], rec.get("thumb_path", "")
+    clip.file_size, clip.sha256 = int(rec.get("size", 0)), rec["sha256"]
+    clip.render_seconds = float(rec.get("render_seconds", 0.0))
+    # new version: any main render still queued for the previous version is now stale
+    clip.version += 1
+    prov = dict(clip.provenance or {})
+    prov["render"] = {"expected": None, "version": clip.version, "promoted": name}
+    clip.provenance = prov
     other = "original" if name == "edit" else "edit"
+    v = _variants(clip)
     v.pop(name, None)
     v[other] = old_main
     _save_variants(clip, v)
     log.info("variant promoted", extra={"clip_id": clip.id, "variant": name, "by": user})
-    return {"main": rec.get("structure"), "variant": other}
+    return {"main": rec.get("structure"), "variant": other, "pending_publications": pending,
+            "note": (f"{pending} publicação(ões) já agendada(s) continua(m) com o vídeo aprovado no agendamento"
+                     if pending else "")}
 
 
 def compare(db: Session, clip: Clip, left: str, right: str, winner: str, blind: bool, user: str,

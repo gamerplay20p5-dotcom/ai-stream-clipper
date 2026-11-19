@@ -459,6 +459,8 @@ class Publication(Base):
     privacy: Mapped[str] = mapped_column(String(16), default="private")
     video_sha256: Mapped[str] = mapped_column(String(64), default="")
     video_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    # Phase 6B: immutable media snapshot - the exact file approved/scheduled (never "whatever is current")
+    video_path: Mapped[str] = mapped_column(String(512), default="")
     upload_state: Mapped[dict] = mapped_column(JSON, default=dict)  # resumable session (never tokens)
     remote_id: Mapped[str] = mapped_column(String(255), default="")
     remote_url: Mapped[str] = mapped_column(String(1024), default="")

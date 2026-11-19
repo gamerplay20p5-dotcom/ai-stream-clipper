@@ -85,7 +85,7 @@ def test_promote_swaps_main_and_variant_and_comparison_is_recorded(client, admin
     with session_scope() as db:
         c = db.get(Clip, cid)
         ps.plan_variant(db, c, load_ai_settings(db), manual=True)
-        ps.store_variant(db, c, "edit", "clips/promo/clip_v1_edit.mp4", "", 1234)
+        ps.store_variant(db, c, "edit", "clips/promo/clip_v1_edit.mp4", "", 1234, "ab" * 32, 3.5)
     r = admin.post(f"/api/clips/{cid}/compare", json={"left": "main", "right": "edit", "winner": "right"}, headers=CSRF)
     assert r.status_code == 200 and r.json()["right_structure"] == "C" and r.json()["left_structure"] == "O"
     r = admin.post(f"/api/clips/{cid}/variants/edit/promote", headers=CSRF)
@@ -123,5 +123,5 @@ def test_stale_variant_upload_is_discarded(client):
     cid = _clip("stale")
     with session_scope() as db:
         c = db.get(Clip, cid)
-        drop = ps.store_variant(db, c, "edit", "clips/stale/clip_v1_edit.mp4", "", 10)
-        assert drop == ["clips/stale/clip_v1_edit.mp4"] and "variants" not in (c.provenance or {})
+        stored, drop = ps.store_variant(db, c, "edit", "clips/stale/clip_v1_edit.mp4", "", 10, "cd" * 32)
+        assert not stored and drop == ["clips/stale/clip_v1_edit.mp4"] and "variants" not in (c.provenance or {})

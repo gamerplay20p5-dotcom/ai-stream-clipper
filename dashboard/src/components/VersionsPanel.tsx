@@ -6,7 +6,9 @@ import { ErrorNote } from "./ui";
 type Seg = { a: number; b: number; role: string };
 type Metrics = { duration: number; time_to_peak: number; teaser: boolean; dead_s: number; dead_ratio: number; cuts: number;
   reactions_kept: boolean; chronological: boolean; words_kept: number; words_in_span: number;
-  words_dropped_vs_original?: number; words_original?: number };
+  words_dropped_vs_original?: number; words_original?: number;
+  reactions_original?: number; reactions_preserved?: number; reactions_dropped_by_bounds?: number; reactions_dropped_inside?: number;
+  words_cut_at_boundaries?: number; context_lost_before_s?: number; context_lost_after_s?: number; context_lost_text?: string };
 type Variant = { structure: string; label: string; reason?: string; metrics?: Metrics; original_metrics?: Metrics;
   state?: string; error?: string; segments: Seg[]; video: boolean; manual?: boolean };
 type Overview = { main: { structure: string; label: string; segments: Seg[]; video: boolean; version: number };
@@ -36,7 +38,17 @@ function MetricRows({ m }: { m?: Metrics }) {
       <li>Duração: <b className="text-ink">{m.duration.toFixed(1)}s</b> · {m.cuts} corte(s){m.teaser ? " · com prévia" : ""}</li>
       <li>Ponto alto aos <b className="text-ink">{m.time_to_peak.toFixed(1)}s</b></li>
       <li>Tempo sem fala: {m.dead_s.toFixed(0)}s ({Math.round(m.dead_ratio * 100)}%)</li>
-      <li>{m.reactions_kept ? "Reações preservadas" : "ATENÇÃO: reação removida"} · {m.chronological ? "ordem real" : "ordem alterada"}</li>
+      <li>{m.reactions_original === undefined ? (m.reactions_kept ? "Reações preservadas" : "ATENÇÃO: reação removida")
+        : m.reactions_original === 0 ? "Nenhuma reação sonora detectada no original (nada a medir)"
+        : <span className={m.reactions_kept ? "" : "text-tally"}>Reações: {m.reactions_preserved} de {m.reactions_original} do original
+            {m.reactions_dropped_by_bounds ? ` · ${m.reactions_dropped_by_bounds} ficaram fora do novo início/fim` : ""}
+            {m.reactions_dropped_inside ? ` · ${m.reactions_dropped_inside} removidas no corte de pausas` : ""}</span>}
+        {" · "}{m.chronological ? "ordem real" : "ordem alterada"}</li>
+      {(m.context_lost_before_s || m.context_lost_after_s) ? (
+        <li className="text-tally">Contexto fora: {m.context_lost_before_s ? `${m.context_lost_before_s.toFixed(0)}s antes` : ""}
+          {m.context_lost_after_s ? ` ${m.context_lost_after_s.toFixed(0)}s depois` : ""}
+          {m.context_lost_text ? <> — “{m.context_lost_text}…”</> : null}</li>) : null}
+      {m.words_cut_at_boundaries ? <li className="text-tally">{m.words_cut_at_boundaries} palavra(s) cortada(s) numa transição</li> : null}
       <li>Falas mantidas: {m.words_kept}/{m.words_in_span}{m.words_original ? ` · ${m.words_dropped_vs_original ?? 0} de ${m.words_original} palavras do original ficaram de fora` : ""}</li>
     </ul>
   );
@@ -54,7 +66,10 @@ export default function VersionsPanel({ clipId, version, onChanged }: { clipId: 
   const [voted, setVoted] = useState<string | null>(null);
   const done = () => { qc.invalidateQueries({ queryKey: ["variants", clipId] }); onChanged(); };
   const restructure = useMutation({ mutationFn: () => api.post(`/api/clips/${clipId}/restructure`, { structure: key, teaser }), onSuccess: () => { setVoted(null); done(); } });
-  const promote = useMutation({ mutationFn: (n: string) => api.post(`/api/clips/${clipId}/variants/${n}/promote`), onSuccess: done });
+  const promote = useMutation({
+    mutationFn: (n: string) => api.post<{ promotion?: { note?: string } }>(`/api/clips/${clipId}/variants/${n}/promote`),
+    onSuccess: (d) => { if (d.promotion?.note) window.alert(d.promotion.note); done(); },
+  });
   const vote = useMutation({
     mutationFn: (w: "left" | "right" | "equal") => api.post<{ winner: string }>(`/api/clips/${clipId}/compare`,
       { left: flip ? alt : "main", right: flip ? "main" : alt, winner: w, blind }),

@@ -15,8 +15,10 @@ exec(open(os.path.join(os.environ["TEMP"], "asc_api.py"), encoding="utf-8").read
 wh = FasterWhisperProvider("small", "int8", 4, Path("data/models/whisper"))
 yam = get_classifier("data/models")
 rows, plan_ms = [], []
+infos = {m["id"]: c.get(f"/api/clips/{m['id']}").json() for m in meta}  # before the long Whisper runs
+c.close()
 for m in meta:
-    info = c.get(f"/api/clips/{m['id']}").json()
+    info = infos[m["id"]]
     raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", m["path"], "-ac", "1", "-ar", "16000", "-f", "f32le", "-"],
                          capture_output=True).stdout
     x = np.frombuffer(raw, dtype=np.float32).copy()
@@ -57,5 +59,13 @@ print(json.dumps({
     "original_words_dropped_pct": round(100 * sum(r["new"]["words_dropped_vs_original"] for r in ok) / max(1, sum(r["new"]["words_original"] for r in ok)), 1),
     "min_time_to_peak": min(r["new"]["time_to_peak"] for r in ok),
     "words_kept_pct": round(100 * sum(r["new"]["words_kept"] for r in ok) / max(1, sum(r["new"]["words_in_span"] for r in ok)), 1),
+    "reactions_original_total": sum(r["new"]["reactions_original"] for r in ok),
+    "reactions_preserved_total": sum(r["new"]["reactions_preserved"] for r in ok),
+    "reactions_dropped_by_bounds_total": sum(r["new"]["reactions_dropped_by_bounds"] for r in ok),
+    "reactions_dropped_inside_total": sum(r["new"]["reactions_dropped_inside"] for r in ok),
+    "clips_with_all_reactions_kept": sum(1 for r in ok if r["new"]["reactions_kept"]),
+    "clips_with_reactions": sum(1 for r in ok if r["new"]["reactions_original"]),
+    "words_cut_at_boundaries": sum(r["new"]["words_cut_at_boundaries"] for r in ok),
+    "context_lost_before_s_mean": round(statistics.mean(r["new"]["context_lost_before_s"] for r in ok), 1),
     "planner_ms_mean": round(statistics.mean(plan_ms), 2)}, ensure_ascii=False, indent=1))
 (d / "structure_report.json").write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")

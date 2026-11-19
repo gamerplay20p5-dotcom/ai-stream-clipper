@@ -368,7 +368,7 @@ def promote_variant(cid: int, name: Literal["edit", "original"], request: Reques
         raise HTTPException(409, str(exc)) from exc
     audit(db, request, user, "clip.variant_promote", f"clip:{cid}", {"variant": name, **out})
     db.commit()
-    return ser.clip(c)
+    return {**ser.clip(c), "promotion": out}
 
 
 @router.post("/{cid}/compare")

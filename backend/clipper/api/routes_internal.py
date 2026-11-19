@@ -7,6 +7,9 @@ segment servers).
 
 from __future__ import annotations
 
+import re
+import uuid
+
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -427,53 +430,72 @@ def get_source(cid: int, _: str = Depends(worker_auth), db: Session = Depends(ge
 
 
 @router.put("/clips/{cid}/thumbnail")
-async def put_thumb(cid: int, request: Request, version: int, variant: str = "",
+async def put_thumb(cid: int, request: Request, version: int, variant: str = "", render_id: str = "",
                     auth: tuple[str, str] = Depends(worker_auth_upload), db: Session = Depends(get_db)):
     _clip_or_404(db, cid)
-    suffix = f"_{_variant_name(variant)}" if variant else ""
-    dest = storage.clip_dir(cid) / f"thumb_v{int(version)}{suffix}.jpg"
+    dest = storage.clip_dir(cid) / _media_name("thumb", version, variant, render_id, "jpg")
     await _receive(request, dest, MAX_THUMB_BYTES, auth[1])
     return {"ok": True}
 
 
 @router.put("/clips/{cid}/video")
 async def put_video(cid: int, request: Request, version: int, seconds: float = 0.0, layout: str = "",
-                    variant: str = "", auth: tuple[str, str] = Depends(worker_auth_upload),
+                    variant: str = "", render_id: str = "", auth: tuple[str, str] = Depends(worker_auth_upload),
                     db: Session = Depends(get_db)):
+    """The SERVER names every file (unique per render: ``render_id``), so no delivery can ever
+    overwrite a file referenced by the main video, a variant or a publication snapshot."""
+    from ..pipeline_structure import referenced_files, store_variant
+
     clip = _clip_or_404(db, cid)
     d = storage.clip_dir(cid)
-    if variant:  # an alternative edit: stored next to the main video, nothing else changes
-        from ..pipeline_structure import store_variant
-
-        name = _variant_name(variant)
-        dest = d / f"clip_v{int(version)}_{name}.mp4"
-        size = await _receive(request, dest, MAX_VIDEO_BYTES, auth[1])
-        thumb = d / f"thumb_v{int(version)}_{name}.jpg"
-        old = store_variant(db, clip, name, storage.rel(dest), storage.rel(thumb) if thumb.exists() else "", size)
-        db.commit()
-        for rel_path in old:
-            try:
-                storage.resolve(rel_path).unlink(missing_ok=True)
-            except ValueError:
-                pass
-        return {"ok": True, "variant": name}
-    dest = d / f"clip_v{int(version)}.mp4"
+    rid = render_id if _RID.match(render_id or "") else uuid.uuid4().hex[:12]
+    refs = referenced_files(db, clip)
+    dest = d / _media_name("clip", version, variant, rid, "mp4")
+    if storage.rel(dest) in refs:  # defensive: never write over a referenced file
+        rid = uuid.uuid4().hex[:12]
+        dest = d / _media_name("clip", version, variant, rid, "mp4")
     size = await _receive(request, dest, MAX_VIDEO_BYTES, auth[1])
-    thumb = d / f"thumb_v{int(version)}.jpg"
+    thumb = d / _media_name("thumb", version, variant, render_id, "jpg")
+    thumb_rel = storage.rel(thumb) if thumb.exists() else ""
+    if variant:  # an alternative edit: stored next to the main video, nothing else changes
+        name = _variant_name(variant)
+        stored, drop = store_variant(db, clip, name, storage.rel(dest), thumb_rel, size, auth[1], seconds, render_id)
+        db.commit()
+        _delete_unreferenced(db, clip, drop)
+        return {"ok": stored, "variant": name, **({} if stored else {"stale": True})}
+    expected = ((clip.provenance or {}).get("render") or {}).get("expected")
     old = [clip.video_path, clip.thumb_path]
-    stored = pipeline.store_render(db, cid, int(version), storage.rel(dest),
-                                   storage.rel(thumb) if thumb.exists() else "", size, auth[1], seconds, layout[:16])
+    stale = bool(render_id and expected and render_id != expected) or (
+        render_id and expected is None and ((clip.provenance or {}).get("render") or {}).get("promoted"))
+    stored = (not stale) and pipeline.store_render(db, cid, int(version), storage.rel(dest), thumb_rel, size, auth[1],
+                                                   seconds, layout[:16])
     db.commit()
-    if not stored:
-        dest.unlink(missing_ok=True)
+    if not stored:  # older version / other render id: an obsolete render never replaces a newer video
+        _delete_unreferenced(db, clip, [storage.rel(dest), thumb_rel])
         return {"ok": False, "stale": True}
-    for rel_path in old:  # remove previous version files
-        if rel_path and rel_path not in (storage.rel(dest), storage.rel(thumb)):
+    _delete_unreferenced(db, clip, old)
+    return {"ok": True}
+
+
+_RID = re.compile(r"^[0-9a-f]{6,32}$")
+
+
+def _media_name(kind: str, version: int, variant: str, render_id: str, ext: str) -> str:
+    rid = render_id if _RID.match(render_id or "") else ""
+    return f"{kind}_v{int(version)}" + (f"_{_variant_name(variant)}" if variant else "") + (f"_{rid}" if rid else "") + f".{ext}"
+
+
+def _delete_unreferenced(db: Session, clip: Clip, paths: list[str]) -> None:
+    from ..pipeline_structure import referenced_files
+
+    db.refresh(clip)
+    keep = referenced_files(db, clip)
+    for rel_path in paths:
+        if rel_path and rel_path not in keep:
             try:
                 storage.resolve(rel_path).unlink(missing_ok=True)
             except ValueError:
                 pass
-    return {"ok": True}
 
 
 def _variant_name(v: str) -> str:

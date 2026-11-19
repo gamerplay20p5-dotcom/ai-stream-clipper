@@ -158,8 +158,29 @@ def _outcome(m: Moment) -> float | None:
     return float(t) if t is not None and m.start <= float(t) <= m.end + 0.5 else None
 
 
+def snap_to_words(segs: list[Seg], words: list) -> list[Seg]:
+    """A segment boundary never cuts a word: a word crossing a boundary is kept whole."""
+    ws = [(float(w[0]), float(w[1])) for w in words]
+    out = []
+    for s in segs:
+        a, b = s.a, s.b
+        for x, y in ws:
+            if x < a < y:
+                a = round(x - 0.05, 2)
+            if x < b < y:
+                b = round(y + 0.05, 2)
+        out.append(Seg(a, b, s.role))
+    merged: list[Seg] = []
+    for s in out:  # snapping can make neighbours touch: merge them (same role)
+        if merged and s.a <= merged[-1].b + 0.05 and s.role == merged[-1].role:
+            merged[-1] = Seg(merged[-1].a, max(merged[-1].b, s.b), s.role)
+        else:
+            merged.append(s)
+    return merged
+
+
 def _finish(key: str, segs: list[Seg], m: Moment, notes: list[str], teaser: bool) -> Plan:
-    segs = [s for s in segs if s.dur >= 0.3]
+    segs = snap_to_words([s for s in segs if s.dur >= 0.3], m.words)
     if not segs:
         return Plan(key, LABELS[key], [], False, "nenhum trecho restou")
     for s in segs:
@@ -169,8 +190,12 @@ def _finish(key: str, segs: list[Seg], m: Moment, notes: list[str], teaser: bool
     if total > m.max_len + 0.5:
         return Plan(key, LABELS[key], segs, False, f"ficaria com {total:.0f}s, acima do limite")
     if teaser and key in ("A", "B", "D") and m.peak > segs[0].a + 6:
-        t = Seg(round(m.peak - 0.5, 2), round(min(m.peak + 2.0, m.end), 2), "teaser")
-        if covered(m.media, t.a, t.b):
+        t = snap_to_words([Seg(round(m.peak - 0.5, 2), round(min(m.peak + 2.0, m.end), 2), "teaser")], m.words)[0]
+        if not covered(m.media, t.a, t.b):
+            notes.append("prévia não incluída: trecho não está gravado")
+        elif total + t.dur > m.max_len + 0.5:  # the limit applies to the FINAL duration, teaser included
+            notes.append(f"prévia não incluída: passaria do limite de {m.max_len:.0f}s")
+        else:
             segs = [t] + segs
             notes.append(f"prévia do clímax no início, marcada como '{TEASER_LABEL}'")
     return Plan(key, LABELS[key], segs, True, "", notes)
@@ -283,17 +308,41 @@ def metrics(plan: Plan, m: Moment) -> dict:
             continue
         dead += dead_time(m.words, s.a, s.b)[0] if s.dur > 0 else 0.0
     total = plan.duration
-    kept_reactions = all(any(s.a <= (a + b) / 2 <= s.b for s in segs) for a, b in m.reactions
-                         if plan.span[0] <= (a + b) / 2 <= plan.span[1])
+    main = [s for s in segs if s.role != "teaser"]
+
+    def kept(t: float) -> bool:
+        return any(s.a <= t <= s.b for s in main)
+
+    # reactions: denominators are explicit. "original" = reactions inside the ORIGINAL cut [start, end]
+    orig_r = [(a + b) / 2 for a, b in m.reactions if m.start <= (a + b) / 2 <= m.end]
+    span_r = [t for t in orig_r if plan.span[0] <= t <= plan.span[1]]
+    r_kept = sum(1 for t in orig_r if kept(t))
+    r_out_of_bounds = sum(1 for t in orig_r if not (plan.span[0] <= t <= plan.span[1]))  # new start/end
+    r_cut_inside = sum(1 for t in span_r if not kept(t))  # removed by pause cutting (should be 0)
+    kept_reactions = r_kept == len(orig_r)
     chronological = all(x.a >= y.b - 0.01 for y, x in zip([s for s in segs if s.role != "teaser"],
                                                              [s for s in segs if s.role != "teaser"][1:]))
     words_in = sum(1 for w in m.words if plan.span[0] <= float(w[0]) < plan.span[1])
     words_kept = sum(1 for w in m.words if map_time(segs, float(w[0])) is not None)
     orig_words = [w for w in m.words if m.start <= float(w[0]) < m.end]
     dropped = sum(1 for w in orig_words if map_time(segs, float(w[0])) is None)
+    # context loss: speech of the original left out, before the new start and after the new end
+    lost = [w for w in m.words if m.start <= float(w[0]) < m.end and map_time(segs, float(w[0])) is None]
+    first = min((s.a for s in main), default=m.start)
+    last = max((s.b for s in main), default=m.end)
+    lost_before = [w for w in lost if float(w[0]) < first]
+    lost_after = [w for w in lost if float(w[0]) >= last]
+    words_cut = sum(1 for w in m.words for s in segs if float(w[0]) < s.a < float(w[1]) or float(w[0]) < s.b < float(w[1]))
     return {"duration": total, "time_to_peak": round(out_peak, 1), "teaser": teaser,
             "dead_s": round(dead, 1), "dead_ratio": round(dead / total, 2) if total else 0.0,
             "cuts": len(segs) - 1, "reactions_kept": kept_reactions, "chronological": chronological,
+            "reactions_original": len(orig_r), "reactions_preserved": r_kept,
+            "reactions_dropped_by_bounds": r_out_of_bounds, "reactions_dropped_inside": r_cut_inside,
+            "reactions_in_selection": len(span_r), "reactions_preserved_in_selection": len(span_r) - r_cut_inside,
+            "words_cut_at_boundaries": words_cut,
+            "context_lost_before_s": round(max(0.0, first - m.start), 1) if lost_before else 0.0,
+            "context_lost_after_s": round(max(0.0, m.end - last), 1) if lost_after else 0.0,
+            "context_lost_text": " ".join(str(w[2]) for w in (lost_before or lost)[:30] if len(w) > 2)[:300],
             "words_kept": words_kept, "words_in_span": words_in,
             # speech of the ORIGINAL cut left out (e.g. context before a hook): shown, never hidden
             "words_dropped_vs_original": dropped, "words_original": len(orig_words)}

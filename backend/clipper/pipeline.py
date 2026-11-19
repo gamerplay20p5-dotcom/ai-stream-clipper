@@ -590,10 +590,17 @@ def _route_new_clip(db: Session, clip: Clip, settings: AISettings) -> None:
 
 
 def enqueue_render(db: Session, clip: Clip) -> Job:
+    import uuid
+
     clip.status = "rendering"
     clip.error = ""
-    return queue.enqueue(db, "render", {"clip_id": clip.id, "version": clip.version},
-                         idempotency_key=f"render:{clip.id}:v{clip.version}", priority=70, max_attempts=3)
+    job = queue.enqueue(db, "render", {"clip_id": clip.id, "version": clip.version, "render_id": uuid.uuid4().hex[:12]},
+                        idempotency_key=f"render:{clip.id}:v{clip.version}", priority=70, max_attempts=3)
+    # the delivery must carry this id (an existing job of the same key keeps its own id)
+    prov = dict(clip.provenance or {})
+    prov["render"] = {"expected": (job.payload or {}).get("render_id"), "version": clip.version}
+    clip.provenance = prov
+    return job
 
 
 # ---------------------------------------------------------------------------

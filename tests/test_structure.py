@@ -100,3 +100,57 @@ def test_original_is_preserved_when_a_different_structure_is_not_meaningful():
 def test_map_time_drops_removed_moments():
     segs = [st.Seg(0, 5), st.Seg(10, 15)]
     assert st.map_time(segs, 2) == 2 and st.map_time(segs, 12) == 7 and st.map_time(segs, 7) is None
+
+
+# ------------------------------------------------------------------ PR #2 review: 5 and 6
+def test_review_reactions_have_explicit_denominators_and_bound_drops_are_visible():
+    # a laugh at 4-6 s (before the hook) and the main one at 30-33 s
+    m = M(reactions=[(4.0, 6.0), (30.0, 33.0)])
+    a = st.build("A", m)
+    met = st.metrics(a, m)
+    assert met["reactions_original"] == 2 and met["reactions_preserved"] == 1
+    assert met["reactions_dropped_by_bounds"] == 1 and met["reactions_dropped_inside"] == 0
+    assert met["reactions_in_selection"] == 1 and met["reactions_preserved_in_selection"] == 1
+    assert met["reactions_kept"] is False  # the early laugh was left out by the new start: never hidden
+    d = st.metrics(st.build("D", m), m)
+    assert d["reactions_preserved"] == d["reactions_original"] == 2 and d["reactions_kept"]
+
+
+def test_review_teaser_never_breaks_the_duration_limit():
+    plain = st.build("D", M()).duration
+    m = M(max_len=plain + 1.0)  # the structure fits, the structure + a 2.5 s teaser does not
+    p = st.build("D", m, teaser=True)
+    assert p.applicable and not any(s.role == "teaser" for s in p.segments)
+    assert any("limite" in n for n in p.notes) and p.duration <= m.max_len + 0.5
+    roomy = st.build("D", M(max_len=plain + 10), teaser=True)
+    assert roomy.segments[0].role == "teaser" and roomy.duration <= plain + 10.5
+
+
+def test_review_segment_boundaries_never_cut_a_word():
+    words = W((10.0, 11.0, "palavra"), (11.1, 12.5, "longa"), (20.0, 20.6, "fim."))
+    segs = st.snap_to_words([st.Seg(10.5, 12.0), st.Seg(19.8, 20.3)], words)
+    assert segs[0].a <= 10.0 and segs[0].b >= 12.5 and segs[1].b >= 20.6
+    m = M()
+    for key in "ABCDE":
+        p = st.build(key, m)
+        if p.applicable:
+            assert st.metrics(p, m)["words_cut_at_boundaries"] == 0, key
+
+
+def test_review_context_loss_is_reported_with_the_text():
+    m = M()
+    met = st.metrics(st.build("A", m), m)
+    assert met["context_lost_before_s"] > 15 and "então." in met["context_lost_text"]
+    assert met["words_dropped_vs_original"] > 0
+
+
+def test_review_captions_stop_at_the_transition():
+    from clipper.render.renderer import RenderSpec, remap_for_segments
+    from clipper.render.subtitles import SubWord
+    from pathlib import Path
+
+    spec = RenderSpec(source=Path("x.mp4"), source_start=0, start=0, end=20, peak=5,
+                      words=[SubWord(4.5, 6.0, "atravessa")])  # word runs past the end of segment 1 (5.0)
+    _s, _p, (words, _notes) = remap_for_segments(spec, {}, [{"a": 0, "b": 5.0, "role": "main"},
+                                                           {"a": 10, "b": 20, "role": "main"}])
+    assert words[0].start == 4.5 and words[0].end <= 5.0  # never shown over the next part

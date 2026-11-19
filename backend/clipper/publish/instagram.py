@@ -175,6 +175,8 @@ def upload(pub, tokens: Tokens, video: Path, save_state) -> UploadResult:
 def status(pub, tokens: Tokens) -> dict:
     st = dict(pub.upload_state or {})
     base = st.get("graph") or _base(tokens)
+    if not st.get("media_id") and not st.get("container_id"):
+        return {"state": "failed", "detail": "publicação sem contêiner do Instagram: o envio não chegou a começar"}
     with _client() as c:
         if st.get("media_id"):
             r = c.get(f"{base}/{st['media_id']}", params={"fields": "permalink", "access_token": tokens.access_token})

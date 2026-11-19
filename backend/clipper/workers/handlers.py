@@ -390,6 +390,8 @@ async def handle_render(ctx: JobContext) -> dict:
         raise JobError(f"unexpected output size {vs.get('width')}x{vs.get('height')}", retryable=False)
     version = int(spec["version"])
     extra = {"variant": variant} if variant else {}
+    if ctx.payload.get("render_id"):  # binds the delivery to the plan revision that was queued
+        extra["render_id"] = str(ctx.payload["render_id"])
     await ctx.client.upload(f"/internal/clips/{clip_id}/thumbnail", res.thumbnail, params={"version": version, **extra})
     r = await ctx.client.upload(f"/internal/clips/{clip_id}/video", res.video,
                                 params={"version": version, "seconds": f"{res.seconds:.2f}", "layout": res.layout,
