@@ -137,7 +137,8 @@ def test_rollback_check_needs_the_pause_and_cancels_mismatched_pending_publicati
         done = rollback.cancel_mismatched(db, "t")
         assert stale_id in done and same_id not in done
         assert db.get(Publication, stale_id).status == "cancelled" and db.get(Publication, same_id).status == "scheduled"
-        assert rollback.check(db)["safe_to_rollback"] is True
+        mine = [b for b in rollback.check(db)["blockers"] if f"#{stale_id} " in b or f"#{same_id} " in b]
+        assert mine == [] and rollback.check(db)["paused"]  # (the check is global: other tests' rows may block)
         set_paused(db, False, "", "t")
 
 
@@ -153,3 +154,46 @@ def test_cli_pause_and_check(client, capsys):
     assert '"safe_to_rollback"' in capsys.readouterr().out
     cli.main(["publish-pause", "off"])
     assert '"paused": false' in capsys.readouterr().out
+
+
+def test_rollback_is_refused_with_an_active_upload_even_without_divergence(client):
+    """PR #2 final review 3: an uploading publication whose snapshot MATCHES the current video still
+    blocks the rollback, with an explicit reason; so does one waiting for the platform."""
+    cid = _clip("active")
+    with session_scope() as db:
+        a = PublishAccount(platform="instagram", external_id="rb-act", status="connected", connected_by="t@x")
+        db.add(a)
+        db.flush()
+        up = Publication(clip_id=cid, account_id=a.id, platform="instagram", status="uploading", privacy="public",
+                         video_path="clips/active/clip_v1_aaaa.mp4", video_sha256="a" * 64)  # same as the clip
+        db.add(up)
+        db.flush()
+        set_paused(db, True, "rollback", "t")
+        out = rollback.check(db)
+        assert not any(r["publication_id"] == up.id for r in out["mismatched"])  # no divergence
+        assert out["safe_to_rollback"] is False
+        assert any(f"#{up.id}" in b and "uploading" in b for b in out["blockers"])
+        up.status = "processing"
+        db.flush()
+        out = rollback.check(db)
+        assert out["safe_to_rollback"] is False and any("processing" in b for b in out["blockers"])
+        up.status = "published"
+        db.flush()
+        assert not any(f"#{up.id} " in b for b in rollback.check(db)["blockers"])  # finished: no longer blocks
+        set_paused(db, False, "", "t")
+        assert any("não está pausada" in b for b in rollback.check(db)["blockers"])
+
+
+def test_running_publish_job_blocks_the_rollback(client):
+    from clipper.models import Job
+
+    with session_scope() as db:
+        set_paused(db, True, "rollback", "t")
+        j = Job(type="publish", payload={"publication_id": 0}, status="running")
+        db.add(j)
+        db.flush()
+        out = rollback.check(db)
+        assert j.id in out["running_jobs"] and not out["safe_to_rollback"]
+        j.status = "done"
+        db.flush()
+        set_paused(db, False, "", "t")

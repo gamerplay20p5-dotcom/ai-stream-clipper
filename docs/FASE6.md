@@ -193,7 +193,12 @@ sudo -n asc-ctl exec asc-api -- clipper publish-pause on --reason "rollback 0010
 
 # 2. conferir publicações pendentes cuja mídia aprovada difere da atual do corte
 sudo -n asc-ctl exec asc-api -- clipper rollback-check
-#    saída 1 = ainda não é seguro (sem pausa, ou uma divergente já está enviando: espere terminar)
+#    saída 1 = ainda não é seguro; o campo "blockers" diz exatamente por quê:
+#      - publicação não pausada;
+#      - QUALQUER envio ativo (uploading, ou processing aguardando a plataforma) ou job de envio rodando,
+#        mesmo sem divergência: a v0.6.0 consultaria o status e poderia chamar media_publish sem as
+#        proteções novas, então espere terminar ou confira o resultado;
+#      - publicação pendente com mídia aprovada diferente da atual
 #    para cancelar (nunca apagar) as divergentes ainda não enviadas:
 sudo -n asc-ctl exec asc-api -- clipper rollback-check --cancel-mismatched
 
@@ -247,6 +252,8 @@ Ao voltar para a v0.6.2, o `alembic upgrade` restaura os votos e os snapshots.
 - Avaliar o resultado com o VLM depois do render é a próxima etapa, sem usar a nota do próprio modelo como prova.
 
 ---
+
+**Rollback check (EN):** `clipper rollback-check` reports every blocker: not paused, any active send (uploading/processing or a running publish job, even without media divergence) and mismatched pending publications. It exits 1 until none remain.
 
 **EN summary:** the audit found a single-number, binary keep/reject decision whose edit suggestions are never applied, and a renderer limited to one continuous segment. YouTube retention needs the Analytics API scope, which we do not hold. Instagram Business Discovery is not assumed to be available. Phase 6 adds a four-dimension quality gate with REWORK (6A), segment-based structural editing (6B), a references lab with permitted metadata and image-based format profiles (6C), abstract pattern library from authorised media (6D), performance learning on our own posts (6E) and fixed-sample validation (6F).
 

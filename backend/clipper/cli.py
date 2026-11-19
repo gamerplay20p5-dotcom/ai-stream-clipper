@@ -167,9 +167,9 @@ def cmd_publish_pause(args) -> None:
 
 
 def cmd_rollback_check(args) -> None:
-    """Lists pending publications whose approved media differs from the clip's current media.
-    Exit code 1 while a rollback across migration 0010 is not safe (not paused, or a mismatched
-    publication is already uploading/processing)."""
+    """Lists every reason a rollback across migration 0010 is not safe yet (``blockers``): not
+    paused, an active send (uploading/processing or a running publish job), or pending publications
+    whose approved media differs from the clip's current one. Exit code 1 while any blocker remains."""
     from .db import init_engine, session_scope
     from .publish import rollback
 
