@@ -7,6 +7,7 @@ import AnalysisPanel, { AnalysisStatus } from "../components/AnalysisPanel";
 import PublishPanel from "../components/PublishPanel";
 import CaptionEditor from "../components/CaptionEditor";
 import BatchBar from "../components/BatchBar";
+import VersionsPanel from "../components/VersionsPanel";
 import { StorageFlags } from "./Storage";
 import { ClipFrame, ClipStatus, Empty, ErrorNote, Meter, PageHeader, ScoreMark } from "../components/ui";
 import { dimensionLabel, platformName, seconds, timecode } from "../lib/format";
@@ -243,6 +244,8 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
       <AnalysisPanel clip={c} busy={action.isPending} onReanalyze={() => action.mutate("reanalyze")} />
 
       <CaptionEditor clipId={c.id} onSaved={invalidate} />
+
+      {c.has_video && <VersionsPanel clipId={c.id} version={c.version} onChanged={invalidate} />}
 
       <ClipEditor clip={c} onSaved={invalidate} />
     </aside>

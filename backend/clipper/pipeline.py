@@ -590,10 +590,17 @@ def _route_new_clip(db: Session, clip: Clip, settings: AISettings) -> None:
 
 
 def enqueue_render(db: Session, clip: Clip) -> Job:
+    import uuid
+
     clip.status = "rendering"
     clip.error = ""
-    return queue.enqueue(db, "render", {"clip_id": clip.id, "version": clip.version},
-                         idempotency_key=f"render:{clip.id}:v{clip.version}", priority=70, max_attempts=3)
+    job = queue.enqueue(db, "render", {"clip_id": clip.id, "version": clip.version, "render_id": uuid.uuid4().hex[:12]},
+                        idempotency_key=f"render:{clip.id}:v{clip.version}", priority=70, max_attempts=3)
+    # the delivery must carry this id (an existing job of the same key keeps its own id)
+    prov = dict(clip.provenance or {})
+    prov["render"] = {"expected": (job.payload or {}).get("render_id"), "version": clip.version}
+    clip.provenance = prov
+    return job
 
 
 # ---------------------------------------------------------------------------
@@ -662,13 +669,15 @@ def vision_timeouts(db: Session) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _source_location(db: Session, clip: Clip) -> dict:
-    """Where the worker should fetch source media for this clip."""
-    if clip.source_path and clip.source_start <= clip.start + 0.01 and \
-            clip.end <= clip.source_start + clip.source_duration + 0.01:
+def _source_location(db: Session, clip: Clip, start: float | None = None, end: float | None = None) -> dict:
+    """Where the worker should fetch source media for this clip (or for [start, end])."""
+    s0 = clip.start if start is None else start
+    s1 = clip.end if end is None else end
+    if clip.source_path and clip.source_start <= s0 + 0.01 and \
+            s1 <= clip.source_start + clip.source_duration + 0.01:
         return {"source": "api", "source_start": clip.source_start}
     sess = db.get(StreamSession, clip.session_id)
-    a, b = clip.start - SOURCE_MARGIN_S, clip.end + SOURCE_MARGIN_S
+    a, b = s0 - SOURCE_MARGIN_S, s1 + SOURCE_MARGIN_S
     segs = db.scalars(select(Segment).where(Segment.session_id == clip.session_id, Segment.available.is_(True),
                                             Segment.start < b, Segment.start + Segment.duration > a)
                       .order_by(Segment.idx)).all()
@@ -685,7 +694,7 @@ def _source_location(db: Session, clip: Clip) -> dict:
     return {"source": "missing"}
 
 
-def render_spec(db: Session, clip_id: int) -> dict:
+def render_spec(db: Session, clip_id: int, variant: str = "") -> dict:
     from .pipeline_ai import effective_plan
 
     clip = db.get(Clip, clip_id)
@@ -698,7 +707,7 @@ def render_spec(db: Session, clip_id: int) -> dict:
         start = max(start, clip.source_start)
         end = min(end, clip.source_start + clip.source_duration)
     words = [[w[0], w[1], w[2], w[3]] for w in caption_words(db, clip, start - 0.5, end)]
-    return {
+    spec = {
         **loc,
         "clip_id": clip.id,
         "version": clip.version,
@@ -717,6 +726,14 @@ def render_spec(db: Session, clip_id: int) -> dict:
         "crf": settings.export_crf,
         "fps": settings.export_fps,
     }
+    if variant:
+        from .pipeline_structure import variant_spec
+
+        try:
+            return variant_spec(db, clip, variant, spec)
+        except LookupError as exc:
+            raise NotFound("variant") from exc
+    return spec
 
 
 def caption_words(db: Session, clip: Clip, a: float, b: float) -> list[tuple[float, float, str, str]]:
@@ -779,8 +796,14 @@ def store_render(db: Session, clip_id: int, version: int, video_rel: str, thumb_
 def on_job_dead(db: Session, job: Job) -> None:
     """Keep pipeline state consistent when a job lands in the dead-letter queue."""
     p = job.payload or {}
-    if job.type == "render":
-        mark_render_failed(db, int(p.get("clip_id", 0)), job.last_error or "render failed")
+    if job.type == "render" and p.get("variant"):  # a failed alternative never fails the clip
+        from .pipeline_structure import variant_failed
+
+        variant_failed(db, int(p.get("clip_id", 0)), str(p["variant"]), job.last_error or "render failed",
+                       str(p.get("render_id") or ""))
+    elif job.type == "render":
+        mark_render_failed(db, int(p.get("clip_id", 0)), job.last_error or "render failed",
+                           version=p.get("version"), render_id=str(p.get("render_id") or ""))
     elif job.type == "audio_analyze":
         seg = db.scalar(select(Segment).where(Segment.session_id == p.get("session_id"),
                                               Segment.idx == p.get("segment_idx")))
@@ -804,11 +827,20 @@ def on_job_dead(db: Session, job: Job) -> None:
             post_vision(db, clip.id, None, job.last_error[:80])
 
 
-def mark_render_failed(db: Session, clip_id: int, error: str) -> None:
+def mark_render_failed(db: Session, clip_id: int, error: str, *, version=None, render_id: str = "") -> bool:
+    """Fail the clip only for the render it is waiting for: a dead job of an older version or of
+    another render id (late failure after a newer render was queued) changes nothing."""
     clip = db.get(Clip, clip_id)
-    if clip is not None and clip.status == "rendering":
-        clip.status = "failed"
-        clip.error = error[:2000]
+    if clip is None or clip.status != "rendering":
+        return False
+    if version is not None and int(version) != clip.version:
+        return False
+    expected = ((clip.provenance or {}).get("render") or {}).get("expected")
+    if render_id and expected and render_id != expected:
+        return False
+    clip.status = "failed"
+    clip.error = error[:2000]
+    return True
 
 
 # ---------------------------------------------------------------------------

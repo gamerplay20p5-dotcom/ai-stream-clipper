@@ -459,6 +459,8 @@ class Publication(Base):
     privacy: Mapped[str] = mapped_column(String(16), default="private")
     video_sha256: Mapped[str] = mapped_column(String(64), default="")
     video_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    # Phase 6B: immutable media snapshot - the exact file approved/scheduled (never "whatever is current")
+    video_path: Mapped[str] = mapped_column(String(512), default="")
     upload_state: Mapped[dict] = mapped_column(JSON, default=dict)  # resumable session (never tokens)
     remote_id: Mapped[str] = mapped_column(String(255), default="")
     remote_url: Mapped[str] = mapped_column(String(1024), default="")
@@ -557,3 +559,20 @@ class SpeakerProfile(Base):
     source: Mapped[str] = mapped_column(String(32), default="auto")  # auto | confirmed_cluster | reference
     sample: Mapped[dict] = mapped_column(JSON, default=dict)  # {session_id, start, end, text}
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class EditComparison(Base):
+    """Phase 6B: a person compared two edits of the same clip (optionally blind)."""
+
+    __tablename__ = "edit_comparisons"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    clip_id: Mapped[int] = mapped_column(ForeignKey("clips.id", ondelete="CASCADE"), index=True)
+    left: Mapped[str] = mapped_column(String(16))
+    right: Mapped[str] = mapped_column(String(16))
+    left_structure: Mapped[str] = mapped_column(String(8))
+    right_structure: Mapped[str] = mapped_column(String(8))
+    winner: Mapped[str] = mapped_column(String(8))  # left | right | equal
+    blind: Mapped[bool] = mapped_column(Boolean, default=True)
+    reviewer: Mapped[str] = mapped_column(String(255), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

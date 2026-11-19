@@ -422,7 +422,7 @@ def create_publication(db: Session, clip: Clip, acct: PublishAccount, *, origin:
     pub.status = "proposed" if origin == "semi" else "scheduled"  # a proposal waits for a human
     pub.last_error, pub.upload_state, pub.attempts = "", {}, 0
     pub.remote_id = pub.remote_url = ""
-    pub.video_sha256, pub.video_bytes = clip.sha256, clip.file_size
+    pub.video_sha256, pub.video_bytes, pub.video_path = clip.sha256, clip.file_size, clip.video_path
     if existing is None:
         db.add(pub)
     try:

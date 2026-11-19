@@ -203,11 +203,99 @@ def linear_gain(measured: dict, target: float, ceiling_tp: float = -1.0) -> floa
     return round(max(-20.0, min(20.0, gain)), 2)
 
 
+def _segments(plan: dict) -> list[dict]:
+    segs = [s for s in (plan.get("segments") or []) if float(s["b"]) - float(s["a"]) > 0.05]
+    return segs if (len(segs) > 1 or any(s.get("role") == "teaser" for s in segs)) else []
+
+
+async def concat_segments(spec: RenderSpec, segs: list[dict], workdir: Path, has_audio: bool) -> tuple[Path, float]:
+    """Pass 1 of a structural edit: the kept source segments, in plan order, as one intermediate
+    file (near-lossless). 30 ms audio fades at every join avoid clicks; video joins are hard cuts."""
+    lo = min(float(s["a"]) for s in segs)
+    ss = max(0.0, lo - spec.source_start - 1.0)  # input seek a little before the first segment
+    base = spec.source_start + ss
+    parts, labels = [], []
+    for i, s in enumerate(segs):
+        a, b = float(s["a"]) - base, float(s["b"]) - base
+        d = b - a
+        parts.append(f"[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS,fps={spec.fps}[v{i}]")
+        labels.append(f"[v{i}]")
+        if has_audio:
+            parts.append(f"[0:a]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS,"
+                         f"afade=t=in:st=0:d=0.03,afade=t=out:st={max(0.0, d - 0.03):.3f}:d=0.03[a{i}]")
+            labels.append(f"[a{i}]")
+    n = len(segs)
+    graph = ";".join(parts) + ";" + "".join(labels) + f"concat=n={n}:v=1:a={1 if has_audio else 0}[v]" + \
+        ("[a]" if has_audio else "")
+    out = workdir / "structure.mkv"
+    span = max(float(s["b"]) for s in segs) - base + 0.5
+    args = [media.FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{ss:.3f}", "-i",
+            str(spec.source.resolve()), "-t", f"{span:.3f}", "-filter_complex", graph, "-map", "[v]"]
+    if has_audio:
+        args += ["-map", "[a]", "-c:a", "pcm_s16le"]
+    args += ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "12", "-threads", str(spec.threads), out.name]
+    await media.run(args, cwd=workdir, timeout=max(600, span * 20))
+    return out, round(sum(float(s["b"]) - float(s["a"]) for s in segs), 3)
+
+
+def remap_for_segments(spec: RenderSpec, plan: dict, segs: list[dict]) -> tuple[RenderSpec, dict, list]:
+    """Move every session-time element (words, zooms, crop keyframes, faces, peak) to the edited
+    timeline. Removed moments disappear; the teaser gets its on-screen label."""
+    from ..ai.structure import TEASER_LABEL, map_time
+
+    total = sum(float(s["b"]) - float(s["a"]) for s in segs)
+    words = []
+    pos, bounds = 0.0, []
+    for s in segs:  # output-time interval of each segment
+        d = float(s["b"]) - float(s["a"])
+        bounds.append((pos, pos + d))
+        pos += d
+    for w in spec.words:
+        t = map_time(segs, w.start)
+        if t is not None:
+            seg_end = next((b for a, b in bounds if a - 1e-6 <= t < b), t + 0.05)
+            end = min(t + max(0.05, w.end - w.start), seg_end)  # never continue after a cut
+            words.append(SubWord(t, max(end, t + 0.05), w.text, w.speaker))
+    p = dict(plan)
+
+    def rel(items: list[dict], key: str = "t") -> list[dict]:
+        out = []
+        for it in items or []:
+            t = map_time(segs, spec.start + float(it[key]))
+            if t is not None:
+                out.append({**it, key: round(t, 3)})
+        return out
+
+    p["zooms"] = rel(plan.get("zooms") or [])
+    p["crop_keyframes"] = rel(plan.get("crop_keyframes") or []) or ([{"t": 0.0, "cx": 0.5}]
+                                                                    if plan.get("crop_keyframes") else [])
+    p["face_track"] = rel(plan.get("face_track") or [])
+    notes, pos = [], 0.0
+    for s in segs:
+        d = float(s["b"]) - float(s["a"])
+        if s.get("role") == "teaser":
+            notes.append((pos, pos + d, TEASER_LABEL))
+        pos += d
+    peak = map_time(segs, spec.peak)
+    new = RenderSpec(**{**spec.__dict__, "source_start": 0.0, "start": 0.0, "end": total,
+                        "peak": peak if peak is not None else total / 2, "words": [], "plan": p})
+    return new, p, [words, notes]
+
+
 async def render(spec: RenderSpec, workdir: Path) -> RenderResult:
     t0 = time.monotonic()
     workdir.mkdir(parents=True, exist_ok=True)
     plan = spec.plan or {}
     info = await media.probe(spec.source)
+    notes: list = []
+    mapped_words = None
+    segs = _segments(plan)
+    if segs:  # Phase 6B structural edit: pass 1 builds the edited sequence, pass 2 is the usual render
+        has_a = media.audio_stream(info) is not None
+        mezz, _total = await concat_segments(spec, segs, workdir, has_a)
+        spec, plan, (mapped_words, notes) = remap_for_segments(spec, plan, segs)
+        spec = RenderSpec(**{**spec.__dict__, "source": mezz})
+        info = await media.probe(mezz)
     vs = media.video_stream(info)
     if vs is None:
         raise media.MediaError("source has no video stream")
@@ -224,15 +312,16 @@ async def render(spec: RenderSpec, workdir: Path) -> RenderResult:
     if src_dur and offset + duration > src_dur + 0.5:
         duration = max(1.0, src_dur - offset)
 
-    words = [SubWord(w.start - spec.start, w.end - spec.start, w.text, w.speaker) for w in spec.words
-             if spec.start <= w.start < spec.start + duration]
+    words = mapped_words if mapped_words is not None else [
+        SubWord(w.start - spec.start, w.end - spec.start, w.text, w.speaker) for w in spec.words
+        if spec.start <= w.start < spec.start + duration]
     title = plan.get("title", spec.title) if plan else spec.title
     title = title if (spec.show_title and layout != "split") else ""
     want_subs = caption_style != "none" or bool(title)
     if want_subs:
         ass = build_ass(words, style=caption_style, margin_v=caption_margin(layout), title=title,
                         duration=duration, emphasis=set(plan.get("emphasis_words") or []),
-                        opts=caption_options(spec.captions))
+                        opts=caption_options(spec.captions), notes=notes)
         (workdir / "subs.ass").write_text(ass, encoding="utf-8")
         applied.append(f"captions:{caption_style}")
     if plan.get("zooms"):
@@ -286,4 +375,6 @@ async def render(spec: RenderSpec, workdir: Path) -> RenderResult:
     await media.run([media.FFMPEG, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{t_thumb:.2f}", "-i",
                      str(out.name), "-frames:v", "1", "-vf", "scale=540:-2", "-q:v", "3", "thumb.jpg"],
                     cwd=workdir, timeout=120)
+    if segs:
+        applied.append(f"structure:{plan.get('structure', '?')}:{len(segs)}seg")
     return RenderResult(out, thumb, duration, layout, time.monotonic() - t0, audio_info, applied)

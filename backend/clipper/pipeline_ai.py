@@ -274,6 +274,7 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
         from .pipeline import enqueue_render
 
         clip.version += 0 if first else 1
+        _structure(db, clip, settings)
         enqueue_render(db, clip)
         return
     if settings.director_enabled and not decision.keep and not clip.is_test and judgement.get("waiting_context")             and clip.analysis_runs < 3:  # bounded: never waits forever
@@ -296,6 +297,39 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
 
     clip.version += 0 if first else 1
     enqueue_render(db, clip)
+
+
+def _structure(db: Session, clip: Clip, settings: AISettings) -> None:
+    """Phase 6B: alternative structure for the comparison (never blocks the main render)."""
+    if settings.editor_mode == "off" or clip.is_test:
+        return
+    from . import pipeline_structure as ps
+
+    try:
+        with db.begin_nested():
+            v = dict((clip.provenance or {}).get("variants") or {})
+            v.pop("edit", None)  # a new analysis invalidates an older alternative
+            prov = dict(clip.provenance or {})
+            prov["variants"] = v
+            clip.provenance = prov
+            if settings.editor_mode == "shadow":
+                ps.plan_variant(db, clip, settings)  # main = original, variant = restructured
+            else:  # "on": main = restructured, variant = original for the comparison
+                prop = ps.propose(db, clip, settings)
+                if prop["applicable"] and prop["meaningful"]:
+                    segs = prop["plan"]["segments"]
+                    ep = dict(clip.edit_plan or {})
+                    ep.update({"segments": segs, "structure": prop["structure"], "structure_reason": prop["reason"]})
+                    clip.edit_plan = ep
+                    v["original"] = {"structure": "O", "label": "Original", "metrics": prop["original_metrics"],
+                                     "plan": {"segments": [{"a": clip.start, "b": clip.end, "role": "main"}]},
+                                     "start": clip.start, "end": clip.end}
+                    clip.start, clip.end = min(s["a"] for s in segs), max(s["b"] for s in segs)
+                    prov["variants"] = v
+                    clip.provenance = prov
+                    ps.enqueue_variant(db, clip, "original")
+    except Exception:
+        log.exception("structural editor failed (main render unaffected)")
 
 
 def visual_relevant(v: VisualAnalysis) -> bool:

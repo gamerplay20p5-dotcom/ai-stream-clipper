@@ -136,6 +136,125 @@ sudo -n asc-ctl exec asc-api -- clipper migrate --downgrade 0008   # no 210
 
 O downgrade apaga apenas a coluna `gate`, que é recalculada na próxima análise; nenhum corte, rótulo ou publicação é afetado. O mesmo cuidado vale para qualquer rollback que cruze uma migração.
 
+## 4. Etapa 6B: editor estrutural (v0.6.1)
+
+**Implementado**
+- **`ai/structure.py`** (funções puras):
+  - cinco estruturas (A gancho imediato, B suspense, C humor de reação, D história completa, E momento rápido) e a escolha explicada por categoria, configurável;
+  - corte de pausas com intervalos protegidos: ponto alto, reações, desfecho e os últimos 2,5 s;
+  - prévia opcional do clímax, sempre marcada como "Daqui a pouco..." e seguida da sequência real em ordem;
+  - métricas objetivas: duração, tempo até o ponto alto, tempo sem fala, cortes, reações preservadas, ordem cronológica, falas mantidas e **falas do original deixadas de fora**.
+- **Renderer:** um passo 1 emenda os trechos num intermediário quase sem perdas, com fades de 30 ms no áudio. O passo 2 é o render normal, com palavras, zooms, enquadramento e rostos remapeados para a nova linha do tempo.
+- **Variantes (`pipeline_structure.py`):** a reedição é renderizada ao lado do vídeo principal.
+  - nunca o substitui;
+  - nunca sobrescreve a fonte armazenada do corte;
+  - uma falha no render dela nunca marca o corte como falho;
+  - um upload obsoleto é descartado.
+- **Modos:**
+  - **sombra** (padrão): o vídeo principal continua o original;
+  - **ligado**: a reestruturada vira a principal e o original fica como variante;
+  - **desligado**.
+- **Comparação:** lado a lado, cega por padrão; os votos ficam em `edit_comparisons` (migração 0010). A promoção da variante não exige novo render. Há um resultado agregado por estrutura.
+- **Orçamento:** variantes automáticas só quando a mudança é relevante, até 12 por hora (configurável) e com prioridade 80, abaixo das lives e dos renders principais.
+
+### Revisão do PR #2 (correções antes da implantação)
+
+1. **SHA-256 na promoção (crítico):** cada variante grava SHA-256, tamanho e tempo de render. A promoção atualiza de forma consistente caminho, SHA-256, tamanho, tempo de render, limites e plano, e **sobe a versão**. O vídeo anterior vira a variante "original" com todos os seus metadados e pode voltar sem novo render.
+2. **Sobrescrita (crítico):** o servidor nomeia cada arquivo como `clip_v{versão}[_{variante}]_{render_id}.mp4`, com o `render_id` gerado na fila. Antes de gravar, o servidor confere se o nome colide com um arquivo referenciado. Arquivos antigos só são apagados se nada os referencia: vídeo principal, variantes ou snapshot de publicação ativa.
+3. **Renders concorrentes ou obsoletos:** cada job leva o `render_id` da revisão do plano.
+   - Uma entrega com outro id é descartada, com os arquivos dela apagados.
+   - Testado: conclusão fora de ordem, nova entrega do mesmo job (reinício do worker) e render principal na fila antes de uma promoção.
+4. **Publicações:**
+   - cada publicação guarda um **snapshot imutável** (`publications.video_path`, SHA-256 e tamanho) e o publicador envia **exatamente** esse arquivo;
+   - publicações antigas, sem snapshot, recusam o envio se o vídeo do corte mudou desde a criação, explicando o motivo;
+   - a promoção é bloqueada enquanto uma publicação estiver sendo enviada; com publicações só agendadas, ela avisa que elas continuam com o vídeo aprovado;
+   - testado com YouTube e Instagram simulados no runner real.
+5. **Reações com denominador explícito:**
+   - **base:** as reações do corte original;
+   - **contagens separadas:** preservadas, fora do novo início ou fim, removidas pelo corte de pausas, e as que estão dentro do trecho escolhido.
+
+   **Reavaliação:** nos 12 cortes reais o YAMNet não detectou nenhuma reação no limiar de 0,5. O "12 de 12" que relatei antes era **0 de 0**, não uma prova. A proteção de reações está testada só com dados sintéticos; nesses vídeos quem protegeu o momento foi a janela em volta do ponto alto.
+6. **Integridade editorial:**
+   - a prévia só entra se a duração **final** couber no limite;
+   - nenhum limite de trecho corta uma palavra (0 nos cortes reais);
+   - uma legenda nunca continua depois de uma transição;
+   - a comparação mostra o contexto perdido (segundos antes e depois, e o começo do texto que saiu).
+7. **Rollback da 0010 sem perder votos nem snapshots:** o downgrade **não apaga** os votos humanos (a tabela vira `edit_comparisons_preserved`) nem os snapshots das publicações (copiados para `publication_snapshots_preserved` antes de remover a coluna). O upgrade seguinte restaura os dois (testado).
+8. **Falha tardia de render antigo:** a falha de um job só marca a variante ou o corte se for o render **esperado** (mesmo `render_id` e mesma versão). Uma falha antiga que chega depois de um novo pedido não muda nada (testado com dois renders concorrentes, de variante e principal).
+9. **Achado extra:** uma publicação malformada derrubava a consulta de status de **todas** as outras. Agora cada uma é isolada.
+
+### Procedimento de rollback da v0.6.2 para a v0.6.0 (atravessa a 0010)
+
+A v0.6.0 não conhece o snapshot de mídia das publicações e enviaria o vídeo **atual** do corte. Por isso a ordem abaixo é obrigatória. Todos os comandos rodam no 210, **com a imagem v0.6.2 ainda no ar**:
+
+```
+# 1. pausar os envios (a v0.6.0 também respeita a pausa)
+sudo -n asc-ctl exec asc-api -- clipper publish-pause on --reason "rollback 0010"
+
+# 2. conferir publicações pendentes cuja mídia aprovada difere da atual do corte
+sudo -n asc-ctl exec asc-api -- clipper rollback-check
+#    saída 1 = ainda não é seguro; o campo "blockers" diz exatamente por quê:
+#      - publicação não pausada;
+#      - QUALQUER envio ativo (uploading, ou processing aguardando a plataforma) ou job de envio rodando,
+#        mesmo sem divergência: a v0.6.0 consultaria o status e poderia chamar media_publish sem as
+#        proteções novas, então espere terminar ou confira o resultado;
+#      - publicação pendente com mídia aprovada diferente da atual
+#    para cancelar (nunca apagar) as divergentes ainda não enviadas:
+sudo -n asc-ctl exec asc-api -- clipper rollback-check --cancel-mismatched
+
+# 3. backup e downgrade (votos e snapshots preservados em tabelas *_preserved)
+sudo -n asc-ctl backup-db
+sudo -n asc-ctl exec asc-api -- clipper migrate --downgrade 0009      # ou 0008 para voltar antes da 6A
+
+# 4. trocar a tag nos três servidores (ASC_IMAGE_TAG=0.6.0; env-install + compose up no 210; set-tag + compose up no 206 e 201)
+
+# 5. manter a pausa até decidir: retomar na v0.6.0 só se o passo 2 ficou limpo
+#    (pelo painel, Publicação, "Retomar publicações")
+```
+
+Ao voltar para a v0.6.2, o `alembic upgrade` restaura os votos e os snapshots.
+
+**Reaproveitado:** palavras do Whisper, categorias do YAMNet (reações), memória da história (início e clímax), Quality Gate (segmentos gravados e `dead_time`), legendas inteligentes e o renderer existente (passo 2 sem mudança).
+
+**Testes:** 261 passando, com 46 novos nesta etapa (31 iniciais e 15 da revisão: `test_media_integrity.py`, reações, prévia, palavras, legendas e votos preservados) (`test_structure.py`, `test_structure_pipeline.py`, render estrutural com ffmpeg real e migração 0010). Eles cobrem:
+- abertura ruim que vira gancho perto da ação;
+- conversa engraçada que mantém a fala e a risada inteira;
+- suspense que exige situação longa;
+- prévia explícita e cronológica;
+- momento rápido que recusa situações que precisam de contexto;
+- trecho fora da gravação;
+- render interrompido que não derruba o corte;
+- corte aprovado que mantém o vídeo principal;
+- upload obsoleto descartado.
+
+**Validação nos mesmos 12 cortes reais da Etapa E** (`docs/benchmarks/etapa_6b_validacao.py`, Whisper small e YAMNet locais, sem memória da história):
+
+| Medida (média) | Original | Estrutura escolhida |
+|---|---|---|
+| Duração | 32,2 s | 14,4 s |
+| Ponto alto aos | 19,9 s | 4,1 s |
+| Tempo sem fala | 54% | 37% |
+| Reações sonoras detectadas no original (YAMNet ≥ 0,5) | **0** nos 12 cortes | — |
+| Reações preservadas | — | 0 de 0: **não medido** (ver revisão) |
+| Ordem real / palavras cortadas nas transições | — | 12 de 12 / 0 |
+| Contexto deixado antes do novo início | — | 15,7 s em média |
+| Falas do original deixadas de fora | — | **38,8%** (contexto antes do gancho) |
+
+- **Estruturas escolhidas:** 11 de 12 foram A (sem a memória da história, quase tudo cai no gancho imediato) e 1 foi C. O planejador leva 0,5 ms por corte.
+- **Leitura honesta:** isto mede a mecânica, não a qualidade. A preservação de reações não foi medida em vídeo real (nenhuma reação detectada nesses 12). O gancho fica mais rápido, mas joga fora quase 40% da fala original. Se isso melhora o vídeo, só as comparações cegas vão dizer. Por isso o padrão é o modo **sombra**.
+
+**Custo:** cada variante é um render extra no 206: um passo rápido (ultrafast) mais o render normal de um vídeo mais curto. O teto é o orçamento por hora.
+
+**Limitações**
+- Um corte de pausa pode cair no meio do movimento da tela; o enquadramento não é reavaliado por trecho.
+- O ponto alto pode ficar a menos de 3 s do início quando a pausa antes dele é removida (mínimo observado: 1,9 s).
+- A transição é um corte seco: sem efeitos, por escolha.
+- Avaliar o resultado com o VLM depois do render é a próxima etapa, sem usar a nota do próprio modelo como prova.
+
 ---
 
+**Rollback check (EN):** `clipper rollback-check` reports every blocker: not paused, any active send (uploading/processing or a running publish job, even without media divergence) and mismatched pending publications. It exits 1 until none remain.
+
 **EN summary:** the audit found a single-number, binary keep/reject decision whose edit suggestions are never applied, and a renderer limited to one continuous segment. YouTube retention needs the Analytics API scope, which we do not hold. Instagram Business Discovery is not assumed to be available. Phase 6 adds a four-dimension quality gate with REWORK (6A), segment-based structural editing (6B), a references lab with permitted metadata and image-based format profiles (6C), abstract pattern library from authorised media (6D), performance learning on our own posts (6E) and fixed-sample validation (6F).
+
+**6B (v0.6.1):** five faithful structures, pause removal that never touches reactions, peak or outcome, an optional explicitly labelled teaser, segment rendering, shadow variants with blind human comparison and promotion. On 12 real clips the chosen structure shortened clips from 32.2 s to 14.4 s and moved the peak from 19.9 s to 4.1 s, keeping all reactions, but it left out 38.8% of the original speech. No quality improvement is claimed until blind comparisons exist.

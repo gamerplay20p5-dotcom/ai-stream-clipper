@@ -112,6 +112,17 @@ def _reschedule(pub: Publication, err: PublishError | str, retry_after: float | 
     service.log_event(pub, "retry", f"nova tentativa em {int(wait)} s: {msg}")
 
 
+def media_for(pub: Publication, clip: Clip) -> tuple[str | None, str]:
+    """(relative path, expected sha) of the media this publication must send, or (None, reason)."""
+    if pub.video_path:  # snapshot taken at creation (v0.6.1+)
+        return pub.video_path, pub.video_sha256 or ""
+    # older publications: only the clip's current file, and only if it is still the scheduled one
+    if pub.video_sha256 and clip.sha256 and pub.video_sha256 != clip.sha256:
+        return None, ("o vídeo do corte mudou depois que esta publicação foi criada; crie a publicação de novo "
+                      "para enviar a versão atual")
+    return clip.video_path, clip.sha256 or ""
+
+
 def run_publish(job_id: int, pub_id: int) -> None:
     wid = worker_id()
     with session_scope() as db:
@@ -153,12 +164,20 @@ def run_publish(job_id: int, pub_id: int) -> None:
                 _reschedule(pub, exc, exc.retry_after)
             queue.complete(db, job_id, wid, {"error": str(exc)[:300]})
             return
-        path = storage.resolve(clip.video_path)
+        # the publication sends EXACTLY the media approved when it was created (snapshot), never
+        # "whatever the clip shows now": a re-render or a promoted variant must not change it silently
+        rel, want = media_for(pub, clip)
+        if rel is None:
+            pub.status, pub.last_error = "failed", want
+            service.log_event(pub, "refused", want)
+            queue.complete(db, job_id, wid, {"error": "media changed"})
+            return
+        path = storage.resolve(rel)
         if not path.is_file():
             pub.status, pub.last_error = "failed", "arquivo do vídeo não encontrado no armazenamento"
             queue.complete(db, job_id, wid, {"error": "missing file"})
             return
-        if clip.sha256 and sha256_file(path) != clip.sha256:
+        if want and sha256_file(path) != want:
             pub.status, pub.last_error = "failed", "o arquivo do vídeo não confere com o SHA-256 registrado"
             queue.complete(db, job_id, wid, {"error": "sha mismatch"})
             return
@@ -234,6 +253,10 @@ def poll_processing() -> None:
                     st = service.provider(pub.platform).status(_snapshot(pub), tokens)
             except PublishError as exc:
                 pub.last_error = str(exc)[:2000]
+                continue
+            except Exception as exc:  # one malformed publication must never stop the polling of the others
+                log.exception("status poll failed", extra={"publication_id": pid})
+                pub.last_error = f"consulta de status falhou: {type(exc).__name__}"[:2000]
                 continue
             pub.remote_status = {**(pub.remote_status or {}), **{k: v for k, v in st.items() if k != "raw"}}
             if st.get("media_id"):  # Instagram: container published -> media id

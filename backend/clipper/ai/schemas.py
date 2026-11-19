@@ -182,3 +182,7 @@ class EditPlan(BaseModel):
     base_start_abs: float = 0.0  # session offset that clip-relative times refer to
     rationale: list[str] = Field(default_factory=list)
     source: Literal["ai", "heuristic", "user"] = "heuristic"
+    # Phase 6B structural edit: source segments (session times) played in order; empty = [start, end]
+    segments: list[dict] = Field(default_factory=list, max_length=60)
+    structure: str = ""
+    structure_reason: str = ""

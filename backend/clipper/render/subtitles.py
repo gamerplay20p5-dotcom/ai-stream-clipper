@@ -139,6 +139,7 @@ def build_ass(
     duration: float = 0.0,
     emphasis: set[str] | None = None,
     opts: CaptionOptions | None = None,
+    notes: list[tuple[float, float, str]] | None = None,
 ) -> str:
     o = opts or CaptionOptions()
     emph_set = {e.lower().strip(".,!?") for e in (emphasis or set())}
@@ -168,6 +169,8 @@ def build_ass(
         f"Style: Title,{font},58,{WHITE},{WHITE},{BOX},{BOX},-1,0,0,0,100,100,0,0,3,18,0,8,80,80,{title_margin_v},1\n"
         f"Style: Mark,{font},34,{wm_col},{wm_col},&H80000000,&H00000000,-1,0,0,0,100,100,1,0,1,1,0,{wm_align},"
         f"60,150,{wm_mv},1\n"
+        f"Style: Note,{font},44,{WHITE},{WHITE},{BOX},{BOX},-1,1,0,0,100,100,0,0,3,12,0,8,{SAFE_SIDE},{SAFE_SIDE},"
+        f"{title_margin_v + 120},1\n"
         f"Style: Cta,{font},54,{WHITE},{WHITE},{BOX},{BOX},-1,0,0,0,100,100,0,0,3,16,0,5,{SAFE_SIDE},{SAFE_SIDE},0,1\n\n"
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
@@ -178,6 +181,8 @@ def build_ass(
     end_all = duration if duration > 0 else 3600
     if title:
         lines.append(f"Dialogue: 1,{_ts(0)},{_ts(end_all)},Title,,0,0,0,,{_esc(title)}")
+    for a, b, text in notes or []:  # structural edit labels (e.g. the teaser's "Daqui a pouco...")
+        lines.append(f"Dialogue: 4,{_ts(a)},{_ts(b)},Note,,0,0,0,,{_esc(_clean_overlay(text)[:60])}")
     mark = _clean_overlay(o.watermark)[:40]
     if mark:
         lines.append(f"Dialogue: 2,{_ts(0)},{_ts(end_all)},Mark,,0,0,0,,{_esc(mark)}")

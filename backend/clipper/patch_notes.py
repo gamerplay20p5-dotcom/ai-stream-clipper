@@ -6,6 +6,14 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.6.2", "date": "2026-11-19", "title": "Editor estrutural", "items": [
+        "Cinco estruturas para o mesmo acontecimento: gancho imediato, suspense, humor de reação, história completa e momento rápido.",
+        "Corte de pausas que nunca remove reações, o ponto alto nem o desfecho; só trechos reais, na ordem real.",
+        "Prévia opcional do clímax no início, sempre marcada como 'Daqui a pouco...'.",
+        "Modo sombra: o vídeo principal continua o original e a versão reestruturada fica ao lado para comparar.",
+        "Comparação lado a lado, inclusive às cegas, e opção de usar a variante como vídeo principal.",
+        "Cada publicação envia exatamente o vídeo aprovado no agendamento, mesmo que o corte mude depois.",
+    ]},
     {"version": "0.6.1", "date": "2026-11-19", "title": "Correção da publicação no Instagram", "items": [
         "A tela mostrava 'Público' mas enviava 'Privado' para o Instagram, e o botão ficava bloqueado: corrigido.",
         "Reels exigem confirmação explícita de que serão públicos; nada é escolhido em silêncio.",

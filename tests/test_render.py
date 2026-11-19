@@ -34,3 +34,28 @@ def test_render_vertical_h264_aac(tmp_path, layout, webcam):
     assert "OH" in ass and "WAY" in ass
     # title overlay only where there is free space (split layout has the webcam on top)
     assert ("Dialogue: 1," in ass) == (layout != "split")
+
+
+def test_structural_render_concatenates_segments_and_remaps_captions(tmp_path):
+    """Phase 6B: segments (with a labelled teaser) -> one continuous vertical video whose captions
+    follow the edited timeline; removed words disappear, nothing is reordered except the teaser."""
+    words = [SubWord(w[0], w[1], w[2]) for w in TL["words"] if 10 <= w[0] < 32]
+    segs = [{"a": 23.5, "b": 25.5, "role": "teaser"}, {"a": 12.0, "b": 15.0, "role": "intro"},
+            {"a": 20.0, "b": 30.0, "role": "main"}]
+    plan = {"segments": segs, "structure": "B", "zooms": [{"t": 12.0, "duration": 1.0, "scale": 1.1}],
+            "caption_style": "bold"}
+    spec = RenderSpec(source=FIXTURES / "gameplay_event.mp4", source_start=0.0, start=12.0, end=30.0, peak=24.0,
+                      words=words, title="", layout="gameplay", preset="ultrafast", crf=28, threads=4, plan=plan)
+    res = asyncio.run(render(spec, tmp_path / "s"))
+    info = media.probe_sync(res.video)
+    assert abs(media.duration_of(info) - 15.0) < 0.6  # 2 + 3 + 10 s
+    assert media.audio_stream(info) is not None
+    ass = (tmp_path / "s" / "subs.ass").read_text(encoding="utf-8")
+    assert "Daqui a pouco" in ass
+    assert any(x.startswith("structure:B") for x in res.applied)
+    # a word spoken at 22-24 s (main part) appears at 5 + (t - 20) s in the output, never in the cut 15-20 s gap
+    import re
+
+    starts = [float(m.group(1)) * 60 + float(m.group(2)) for m in
+              re.finditer(r"Dialogue: 0,0:(\d\d):(\d\d\.\d\d),", ass)]
+    assert starts and max(starts) <= 15.0

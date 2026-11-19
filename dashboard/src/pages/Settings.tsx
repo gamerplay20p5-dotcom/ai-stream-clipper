@@ -173,6 +173,31 @@ export default function Settings() {
           <input type="number" min={0} max={5} className="field" value={s.gate_max_rework} onChange={num("gate_max_rework")} />
         </Row>
       </Section>
+      <Section title="Editor estrutural">
+        <Row label="Modo" hint="Sombra: o vídeo principal continua o original e a versão reestruturada fica ao lado para você comparar. Ligado: a reestruturada vira a principal (o original fica guardado).">
+          <select className="field" value={s.editor_mode} onChange={sel("editor_mode")}>
+            <option value="shadow">Sombra (comparar antes)</option><option value="on">Ligado</option><option value="off">Desligado</option>
+          </select>
+        </Row>
+        <Row label="Pausa mínima removível (s)" hint="Silêncios maiores que isso podem ser cortados, nunca durante reações, o ponto alto ou o desfecho.">
+          <input type="number" step={0.1} min={0.4} max={3} className="field" value={s.editor_min_gap} onChange={num("editor_min_gap")} />
+        </Row>
+        <Row label="Prévia do clímax no início" hint="Mostra 2–3 s do clímax com o aviso “Daqui a pouco…” e depois a sequência real, em ordem.">
+          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.editor_teaser} onChange={bool("editor_teaser")} />
+        </Row>
+        <Row label="Variantes automáticas por hora" hint="Orçamento de renderizações extras no servidor 206.">
+          <input type="number" min={0} max={120} className="field" value={s.editor_variants_per_hour} onChange={num("editor_variants_per_hour")} />
+        </Row>
+        {(["police_chase", "shootout", "conflict", "funny_conversation", "scare"] as const).map((k) => (
+          <Row key={k} label={`Estrutura para ${({ police_chase: "perseguição", shootout: "tiroteio", conflict: "treta", funny_conversation: "conversa engraçada", scare: "susto" })[k]}`}>
+            <select className="field" value={s.editor_structure_prefs[k] ?? "auto"}
+              onChange={(e) => setS({ ...s, editor_structure_prefs: { ...s.editor_structure_prefs, [k]: e.target.value } })}>
+              <option value="auto">Automática</option><option value="A">A · Gancho imediato</option><option value="B">B · Suspense</option>
+              <option value="C">C · Humor de reação</option><option value="D">D · História completa</option><option value="E">E · Momento rápido</option>
+            </select>
+          </Row>
+        ))}
+      </Section>
       <Section title="Legendas inteligentes">
         <Row label="Reconhecer quem está falando" hint="Separa a voz do streamer das outras (rádio, personagens). Confirme a voz na página Streamers.">
           <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.speakers_enabled} onChange={bool("speakers_enabled")} />

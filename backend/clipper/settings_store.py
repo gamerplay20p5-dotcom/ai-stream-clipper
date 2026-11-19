@@ -94,6 +94,12 @@ class AISettings(BaseModel):
     gate_narrative_min: float = Field(5.0, ge=0, le=10, description="cut quality to be READY (0-10)")
     gate_recovery_min: float = Field(4.0, ge=0, le=10, description="editing potential to try a REWORK")
     gate_max_rework: int = Field(2, ge=0, le=5, description="automatic re-edits per clip")
+    # Phase 6B - structural editor (variants are compared before any becomes the main video)
+    editor_mode: Literal["off", "shadow", "on"] = "shadow"
+    editor_min_gap: float = Field(0.9, ge=0.4, le=3.0, description="silence (s) that can be cut")
+    editor_teaser: bool = False
+    editor_structure_prefs: dict[str, str] = Field(default_factory=dict, description="category -> A..E | auto")
+    editor_variants_per_hour: int = Field(12, ge=0, le=120, description="automatic variant renders per hour")
     # Phase 5 stage E - who is talking (voice embeddings on the audio worker)
     speakers_enabled: bool = True
     # Phase 5 stage E - smart captions

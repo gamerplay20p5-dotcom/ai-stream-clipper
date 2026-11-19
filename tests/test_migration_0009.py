@@ -13,8 +13,9 @@ from clipper.migrate import alembic_config, downgrade_db, upgrade_db
 def test_single_head_and_chain(tmp_path):
     url = f"sqlite:///{tmp_path / 'm.db'}"
     script = ScriptDirectory.from_config(alembic_config(url))
-    assert script.get_heads() == ["0009"]
+    assert len(script.get_heads()) == 1  # a single, linear chain
     assert script.get_revision("0009").down_revision == "0008"
+    assert script.get_revision("0010").down_revision == "0009"
 
 
 def test_upgrade_keeps_rows_downgrade_and_reupgrade(tmp_path):
@@ -53,7 +54,8 @@ def test_upgrade_keeps_rows_downgrade_and_reupgrade(tmp_path):
     assert any(ix["name"] == "ix_clips_gate" for ix in insp.get_indexes("clips"))
     with eng.begin() as c:
         assert c.execute(sa.text("SELECT title, gate FROM clips WHERE id = 1")).one() == ("antes", "")
-    downgrade_db(url, "0008")
+    downgrade_db(url, "0008")  # also removes 0010 (edit_comparisons) on the way down
+    assert "edit_comparisons" not in sa.inspect(eng).get_table_names()
     assert "gate" not in {c["name"] for c in sa.inspect(eng).get_columns("clips")}
     with eng.begin() as c:
         assert c.execute(sa.text("SELECT title FROM clips WHERE id = 1")).scalar() == "antes"  # data kept
@@ -85,11 +87,30 @@ def test_image_rollback_needs_the_db_downgrade_first(tmp_path):
     url = f"sqlite:///{tmp_path / 'm.db'}"
     upgrade_db(url, "head")
     old = tmp_path / "old_migrations"
-    shutil.copytree(MIGRATIONS, old, ignore=shutil.ignore_patterns("0009_*", "__pycache__"))
+    shutil.copytree(MIGRATIONS, old, ignore=shutil.ignore_patterns("0009_*", "0010_*", "__pycache__"))
     cfg = Config()
     cfg.set_main_option("script_location", str(old))
     cfg.set_main_option("sqlalchemy.url", url)
     with pytest.raises(Exception):
         command.upgrade(cfg, "head")  # what v0.5.7 would do at startup
-    downgrade_db(url, "0008")  # step 1 of the rollback, run with the v0.6.0 image
+    downgrade_db(url, "0008")  # step 1 of the rollback, run with the newer image
     command.upgrade(cfg, "head")  # now the old image starts normally
+
+
+def test_0010_downgrade_preserves_human_votes_and_upgrade_restores_them(tmp_path):
+    url = f"sqlite:///{tmp_path / 'm.db'}"
+    upgrade_db(url, "head")
+    eng = sa.create_engine(url)
+    with eng.begin() as c:
+        c.execute(sa.text("PRAGMA foreign_keys=OFF"))
+        c.execute(sa.text("INSERT INTO edit_comparisons (id, clip_id, left, right, left_structure, right_structure, "
+                          "winner, blind, reviewer, note, created_at) VALUES (1, 1, 'main', 'edit', 'O', 'A', 'right', "
+                          "1, 'humano', '', '2026-11-19 00:00:00')"))
+    downgrade_db(url, "0009")
+    names = sa.inspect(eng).get_table_names()
+    assert "edit_comparisons" not in names and "edit_comparisons_preserved" in names
+    assert "video_path" not in {c["name"] for c in sa.inspect(eng).get_columns("publications")}
+    upgrade_db(url, "head")
+    with eng.begin() as c:
+        assert c.execute(sa.text("SELECT winner, reviewer FROM edit_comparisons WHERE id = 1")).one() == ("right", "humano")
+    assert "edit_comparisons_preserved" not in sa.inspect(eng).get_table_names()

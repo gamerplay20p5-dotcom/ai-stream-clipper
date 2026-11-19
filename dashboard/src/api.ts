@@ -336,6 +336,11 @@ export type AISettings = {
   show_title_overlay: boolean;
   speakers_enabled: boolean;
   gate_enabled: boolean;
+  editor_mode: "off" | "shadow" | "on";
+  editor_min_gap: number;
+  editor_teaser: boolean;
+  editor_structure_prefs: Record<string, string>;
+  editor_variants_per_hour: number;
   gate_event_min: number;
   gate_narrative_min: number;
   gate_recovery_min: number;
