@@ -181,3 +181,9 @@ export function ConfirmAction({ title, description, confirmLabel, pending, onCon
     </>
   );
 }
+
+const decisionTone = { sugestao: "decision-suggestion", confirmado: "decision-confirmed", automatico: "decision-auto" } as const;
+/** Suggestion, confirmed or automatic: always icon shape + text, never colour alone. */
+export function DecisionChip({ kind, label }: { kind: "sugestao" | "confirmado" | "automatico"; label: string }) {
+  return <span className={`decision-chip ${decisionTone[kind]}`}><span className="decision-mark" aria-hidden />{label}</span>;
+}

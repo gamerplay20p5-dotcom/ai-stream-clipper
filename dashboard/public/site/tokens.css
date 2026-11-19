@@ -21,6 +21,8 @@
   --processing: 165 225 236;
   --processing-dim: 31 54 69;
   --media: 14 14 27;
+  --auto: 128 222 214;
+  --auto-dim: 24 56 62;
   --coastal-art: url("/site/orla-ao-entardecer.webp");
   --space-section: clamp(1.5rem, 3vw, 2.5rem);
   --radius-control: 0.35rem;

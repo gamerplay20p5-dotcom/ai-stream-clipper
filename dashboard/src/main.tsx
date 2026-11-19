@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import React, { useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { api, ApiError } from "./api";
+import { api, ApiError, type Me } from "./api";
 import { Skeleton } from "./components/ui";
 import Layout from "./components/Layout";
 import "./index.css";
@@ -12,9 +12,11 @@ import Director from "./pages/Director";
 import Evaluation from "./pages/Evaluation";
 import Publishing from "./pages/Publishing";
 import Infrastructure from "./pages/Infrastructure";
+import LibraryApp from "./pages/Library";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
 import PatchNotes from "./pages/PatchNotes";
+import People from "./pages/People";
 import References from "./pages/References";
 import Settings from "./pages/Settings";
 import Storage from "./pages/Storage";
@@ -33,7 +35,7 @@ const qc = new QueryClient({
 function App() {
   const me = useQuery({
     queryKey: ["me"],
-    queryFn: () => api.get<{ email: string; role: string }>("/api/auth/me"),
+    queryFn: () => api.get<Me>("/api/auth/me"),
     retry: false,
   });
   useEffect(() => {
@@ -44,6 +46,16 @@ function App() {
 
   if (me.isLoading) return <main className="mx-auto max-w-md p-6"><Skeleton label="Verificando sessão" /></main>;
   const user = me.data;
+  // External accounts only ever get their library: no staff navigation, no staff requests.
+  // This is presentation only; every API route is authorized by the backend.
+  if (user && !(user.staff ?? user.role === "admin")) {
+    return (
+      <Routes>
+        <Route path="/biblioteca" element={<LibraryApp email={user.email} />} />
+        <Route path="*" element={<Navigate to="/biblioteca" replace />} />
+      </Routes>
+    );
+  }
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login onDone={() => me.refetch()} />} />
@@ -61,6 +73,7 @@ function App() {
           <Route path="patch-notes" element={<PatchNotes />} />
           <Route path="referencias" element={<References />} />
           <Route path="publicacao" element={<Publishing />} />
+          <Route path="pessoas" element={<People />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       ) : (

@@ -253,3 +253,9 @@
     .library-filters { grid-template-columns:auto minmax(0,1fr); }
   }
 }
+/* v0.7.1 navigation: daily work first, configuration and system collapsed by default */
+@layer components {
+  .nav-group-label { @apply flex min-h-7 items-center px-2.5 text-xs font-semibold text-ink-faint; }
+  .nav-group[data-secondary] { @apply mt-3 border-t border-suite-line/70 pt-2; }
+  .nav-group[data-secondary] + .nav-group[data-secondary] { @apply mt-1 border-0 pt-0; }
+}

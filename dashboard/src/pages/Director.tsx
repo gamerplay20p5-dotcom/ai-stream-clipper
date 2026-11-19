@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, ArrowUpRight, AudioLines, Clapperboard, Crosshair, Layers3, Radio, ScanLine } from "lucide-react";
+import { Activity, ArrowUpRight, Clapperboard, Crosshair, Layers3, Radio } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Clip } from "../api";
-import { ClipStatus, Disclosure, Empty, ErrorNote, Meter, PageHeader, Skeleton, Status, Tally } from "../components/ui";
+import { ClipStatus, Disclosure, Empty, ErrorNote, Meter, PageHeader, Skeleton, Tally } from "../components/ui";
 import { platformName, timecode } from "../lib/format";
 
 type SessionRow = { id: number; streamer: string; platform: string; status: string; title: string; covered_until: number;
@@ -42,7 +42,7 @@ export default function Director() {
     queryFn: () => api.get<SessionStory>(`/api/director/sessions/${row!.id}`),
   });
   return <div className="director">
-    <PageHeader title="Diretor IA" description="Leitura narrativa da transmissão">
+    <PageHeader title="Diretor IA" description="O que a IA entendeu da live, em histórias: o que aconteceu, por que importa e o que ela fez com isso.">
       {row && <label className="session-select"><Radio size={17} aria-hidden /><select aria-label="Live selecionada" value={row.id} onChange={e => select(Number(e.target.value))}>
         {rows.map(s => <option key={s.id} value={s.id}>{s.streamer || "Live"} / sessão #{s.id}</option>)}
       </select></label>}
@@ -81,17 +81,25 @@ function Session({ row, story }: { row: SessionRow; story: SessionStory }) {
         <div><dt>Decisões</dt><dd>{decisions.reduce((total, [, n]) => total + n, 0)}</dd></div>
       </dl>
     </section>
-    <div className="session-readout"><Activity size={15} aria-hidden/><span>Captura até {timecode(story.session.covered_until)}</span>
-      <span>{row.open} em andamento</span>{decisions.map(([key,n]) => <span key={key}>{n} {decisionLabel[key] ?? key}</span>)}</div>
+    <p className="director-summary">{plainSession(decisions, row.open)}</p>
+    <Disclosure title="Avançado: decisões por motivo">
+      <div className="session-readout"><Activity size={15} aria-hidden/><span>Captura até {timecode(story.session.covered_until)}</span>
+        <span>{row.open} em andamento</span>{decisions.map(([key,n]) => <span key={key}>{n} {decisionLabel[key] ?? key}</span>)}</div>
+    </Disclosure>
     {current ? <div className="narrative-desk">
-      <div className="min-w-0">
-        <div className="desk-heading"><AudioLines aria-hidden/><h2>Timeline narrativa</h2></div>
-        {situations.length > 1 && <label className="story-picker"><span>Situação</span><select aria-label="Situação" value={current.id} onChange={e => select(Number(e.target.value))}>
-          {situations.map(s => <option key={s.id} value={s.id}>{timecode(s.start)} / {s.kind_label} · #{s.id}</option>)}
+      <div className="min-w-0 space-y-4">
+        {situations.length > 1 && <label className="story-picker"><span>História</span><select aria-label="História" value={current.id} onChange={e => select(Number(e.target.value))}>
+          {situations.map(s => <option key={s.id} value={s.id}>{timecode(s.start)} · {s.kind_label}</option>)}
         </select></label>}
-        <EventSheet s={current} events={events} selected={selectedEvent} onSelect={event => setMarked({ situation: current.id, event })} />
+        <PlainStory key={current.id} s={current} events={events} />
+        <Disclosure title="Avançado: linha do tempo, evidências e confiança">
+          <div className="space-y-5">
+            <EventSheet s={current} events={events} selected={selectedEvent} onSelect={event => setMarked({ situation: current.id, event })} />
+            <Facts s={current} evidence={selectedEvent} />
+          </div>
+        </Disclosure>
       </div>
-      <Inspector key={current.id} s={current} evidence={selectedEvent} />
+      <Inspector key={current.id} s={current} />
     </div> : <Empty title="Nenhuma situação narrativa registrada nesta live">A memória é criada quando o diretor reconhece uma história na transmissão.</Empty>}
     {story.isolated_clips.length > 0 && <Disclosure title={`Cortes isolados (${story.isolated_clips.length})`}>
       <ul>{story.isolated_clips.map(c => <li key={c.id} className="flex flex-wrap items-center gap-3 border-b border-suite-line py-2">
@@ -134,36 +142,94 @@ function EventSheet({ s, events, selected, onSelect }: {
   </section>;
 }
 
-function Inspector({ s, evidence }: { s: Situation; evidence?: StoryEvent }) {
+const confidenceWord = (v: number) => (v >= 0.75 ? "alta" : v >= 0.5 ? "média" : "baixa");
+const clipAction: Record<string, string> = {
+  story: "corte com o contexto da história", isolated: "corte só do momento", second_cut: "segundo corte da mesma história",
+};
+const clipStatusWord: Record<string, string> = {
+  ready: "esperando revisão", approved: "aprovado", rejected: "rejeitado", failed: "falhou ao renderizar",
+  rendering: "renderizando", analyzing: "em análise", candidate: "em análise", waiting: "aguardando contexto",
+};
+
+function plainSession(decisions: [string, number][], open: number) {
+  const total = decisions.reduce((sum, [, n]) => sum + n, 0);
+  if (!total) return open ? `${countLabel(open, "história em andamento", "histórias em andamento")}. Nenhum momento foi avaliado ainda.` : "Nenhum momento foi avaliado nesta live ainda.";
+  const accepted = decisions.find(([k]) => k === "accepted")?.[1] ?? 0;
+  const merged = decisions.filter(([k]) => k === "story_merged" || k === "story_duplicate").reduce((sum, [, n]) => sum + n, 0);
+  return `A IA avaliou ${total} ${total === 1 ? "momento" : "momentos"} desta live e transformou ${accepted} em corte.`
+    + (merged ? ` Juntou ${merged} a uma história que já estava acompanhando.` : "")
+    + (open ? ` ${countLabel(open, "história segue", "histórias seguem")} em andamento.` : "");
+}
+
+/** The four questions, answered only with fields the director recorded (no generated prose). */
+function PlainStory({ s, events }: { s: Situation; events: StoryEvent[] }) {
+  const climax = events.find(e => e.phase === "climax");
+  const steps = events.slice(0, 6);
+  const meaning = s.complete ? "Tem começo, meio e fim claros." : s.status === "ongoing" ? "Ainda está acontecendo na live."
+    : s.complete === false ? "A IA não viu como terminou." : "";
+  return <article className="plain-story" aria-labelledby={`story-${s.id}`}>
+    <header>
+      <h2 id={`story-${s.id}`} className="display text-xl">{s.kind_label}</h2>
+      <p className="text-sm text-ink-muted">{timecode(s.start)} a {timecode(s.last)} da live{s.participants.length > 0 && ` · com ${s.participants.join(", ")}`}</p>
+    </header>
+    <section>
+      <h3>O que aconteceu?</h3>
+      {steps.length ? <ol className="plain-steps">{steps.map((e, i) => <li key={i}><time>{timecode(e.t)}</time> {e.label}</li>)}</ol>
+        : <p>{s.summary || "A IA ainda não marcou acontecimentos com horário."}</p>}
+    </section>
+    <section>
+      <h3>Por que importa?</h3>
+      <p>{[meaning, climax && `O ponto alto foi “${climax.label}” (${timecode(climax.t)}).`,
+        s.goals.length > 0 && `Objetivo: ${s.goals.join(", ")}.`, s.conflicts.length > 0 && `Conflito: ${s.conflicts.join(", ")}.`,
+        s.related_to && "Continua uma história anterior desta live."].filter(Boolean).join(" ") || "A IA não registrou por que esta história se destaca."}</p>
+    </section>
+    <section>
+      <h3>O que a IA decidiu?</h3>
+      {s.clips.length ? <ul>{s.clips.map(c => <li key={c.id}>
+        <Link className="text-take hover:underline" to={`/cortes/${c.id}?status=`}>{c.title || `Corte #${c.id}`}</Link>
+        {": "}{clipAction[c.story_action ?? ""] ?? "corte"}, {clipStatusWord[c.status] ?? c.status}.</li>)}</ul>
+        : <p>Ainda não fez corte desta história.</p>}
+    </section>
+    <section>
+      <h3>Resultado</h3>
+      <p>{s.outcome && s.outcome !== "none" ? `Desfecho: ${outcomeLabel[s.outcome] ?? s.outcome}.` : "Sem desfecho registrado."}
+        {" "}Certeza da leitura: {confidenceWord(s.confidence)}.</p>
+      {s.uncertain.length > 0 && <p className="mt-1 text-sm text-warning">A IA não tem certeza sobre: {s.uncertain.join(", ")}.</p>}
+    </section>
+  </article>;
+}
+
+function Facts({ s, evidence }: { s: Situation; evidence?: StoryEvent }) {
+  const criteria = [["Participantes",s.participants],["Mudanças",s.changes],["Objetivos",s.goals],["Conflitos",s.conflicts],["Incertezas",s.uncertain]] as const;
+  return <section aria-label="Ficha técnica da situação" className="space-y-3">
+    <p className="text-xs text-ink-muted">Situação #{s.id} · {s.summary}</p>
+    <div className="confidence-label"><span>Confiança da leitura</span><strong>{Math.round(s.confidence*100)}%</strong></div>
+    <Meter value={s.confidence} max={1} label="Confiança do Diretor IA" />
+    <dl className="decision-facts">
+      {evidence && <div><dt>Evidência</dt><dd>{evidence.label}<span className="block text-xs text-ink-muted">{timecode(evidence.t)} / {evidence.source}</span></dd></div>}
+      {s.climax_t != null && <div><dt>Clímax</dt><dd>{timecode(s.climax_t)}</dd></div>}
+      {s.outcome && <div><dt>Desfecho</dt><dd>{outcomeLabel[s.outcome] ?? s.outcome}</dd></div>}
+      {criteria.map(([name,values]) => values.length > 0 && <div key={name}><dt>{name}</dt><dd>{values.join(", ")}</dd></div>)}
+    </dl>
+  </section>;
+}
+
+function Inspector({ s }: { s: Situation }) {
   const leadId = s.clips[0]?.id;
   const cover = useQuery({
     queryKey: ["clip", leadId], enabled: leadId != null, staleTime: 30_000,
     queryFn: () => api.get<Clip>(`/api/clips/${leadId}`),
   });
-  const criteria = [["Participantes",s.participants],["Mudanças",s.changes],["Objetivos",s.goals],["Conflitos",s.conflicts],["Incertezas",s.uncertain]] as const;
-  return <aside className="story-inspector" aria-label="Contexto da situação">
-    <div className="desk-heading"><ScanLine aria-hidden/><h2>Leitura do diretor</h2></div>
-    <div className="inspector-body">
-      <div className="flex flex-wrap items-center gap-2"><span className="text-sm text-ink-muted">Situação #{s.id}</span>
-        {s.complete ? <Status tone="success">História completa</Status> : s.status === "ongoing" && <Status tone="processing">Em andamento</Status>}</div>
-      <h3>{s.kind_label}</h3><p>{s.summary}</p>
-      {s.related_to && <p className="quiet-copy">Continua a situação #{s.related_to}</p>}
-      <div className="confidence-label"><span>Confiança da leitura</span><strong>{Math.round(s.confidence*100)}%</strong></div>
-      <Meter value={s.confidence} max={1} label="Confiança do Diretor IA" />
-      <dl className="decision-facts">
-        {evidence && <div><dt>Evidência</dt><dd>{evidence.label}<span className="block text-xs text-ink-muted">{timecode(evidence.t)} / {evidence.source}</span></dd></div>}
-        {s.climax_t != null && <div><dt>Clímax</dt><dd>{timecode(s.climax_t)}</dd></div>}
-        {s.outcome && <div><dt>Desfecho</dt><dd>{outcomeLabel[s.outcome] ?? s.outcome}</dd></div>}
-        {criteria.map(([name,values]) => values.length > 0 && <div key={name}><dt>{name}</dt><dd>{values.join(", ")}</dd></div>)}
-      </dl>
-    </div>
-    <section className="inspector-clips"><h3><Clapperboard size={17} aria-hidden/>{countLabel(s.clips.length,"corte associado","cortes associados")}</h3>
+  return <aside className="story-inspector" aria-label="Cortes desta história">
+    <div className="desk-heading"><Clapperboard aria-hidden/><h2>Cortes desta história</h2></div>
+    <section className="inspector-clips">
+      {s.clips.length === 0 && <p className="quiet-copy">Nenhum corte ainda.</p>}
       {s.clips.map(c => <Link key={c.id} to={`/cortes/${c.id}?status=`} className="linked-cut" data-media={c.id === leadId && Boolean(cover.data?.has_thumbnail)}>
         {c.id === leadId && cover.data?.has_thumbnail && <img className="linked-still" alt="" loading="lazy"
           src={`/api/clips/${c.id}/thumbnail?v=${cover.data.version}`}/>}
         <strong>{c.title || `Corte #${c.id}`} <ArrowUpRight size={14} aria-hidden/></strong>
-        <span>#{c.id} · {Math.round(c.end-c.start)} s · nota {Math.round(c.score)}</span>
-        <span>{actionLabel[c.story_action ?? ""]}{c.editorial_score != null ? ` Editorial ${Math.round(c.editorial_score)}/100` : c.prelim_score != null ? ` Preliminar ${Math.round(c.prelim_score)}/100` : ""}</span>
+        <span>{Math.round(c.end-c.start)} s · nota {Math.round(c.editorial_score ?? c.score)}</span>
+        <span>{actionLabel[c.story_action ?? ""]}</span>
         <ClipStatus status={c.status}/></Link>)}
     </section>
   </aside>;

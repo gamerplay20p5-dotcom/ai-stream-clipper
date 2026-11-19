@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListVideo, Film, ArrowLeft, Check, ChevronLeft, ChevronRight, ClipboardCheck, Download, RotateCcw, Trash2, X } from "lucide-react";
+import { ListVideo, Film, ArrowLeft, Check, ChevronLeft, ChevronRight, ClipboardCheck, Download, Keyboard, Minus, Plus, RotateCcw, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type Clip, type Streamer } from "../api";
@@ -8,6 +8,7 @@ import PublishPanel from "../components/PublishPanel";
 import CaptionEditor from "../components/CaptionEditor";
 import BatchBar from "../components/BatchBar";
 import VersionsPanel from "../components/VersionsPanel";
+import SharePanel from "../components/SharePanel";
 import { StorageFlags } from "./Storage";
 import { ClipStatus, ClipVideo, ConfirmAction, Disclosure, Empty, ErrorNote, Meter, Notice, PageHeader, ScoreMark, Skeleton, Status } from "../components/ui";
 import { dimensionLabel, platformName, seconds, timecode } from "../lib/format";
@@ -43,6 +44,7 @@ export default function Clips() {
   const items = list.data?.items ?? [];
   const selectedId = id ? Number(id) : null;
   const [queueOpen, setQueueOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const toggle = (cid: number) => setPicked((p) => (p.includes(cid) ? p.filter((x) => x !== cid) : [...p, cid]));
 
@@ -61,9 +63,11 @@ export default function Clips() {
     if (selectedId) navigate({ pathname: "/cortes", search: next.toString() });
     else setParams(next);
   }
-  return <div className="cut-room">
+  return <div className="cut-room" data-focus={selectedId !== null || undefined}>
     <PageHeader title="Central de cortes">
-      <div className="flex flex-wrap gap-2">
+      <button type="button" className="btn-quiet filters-toggle" aria-expanded={filtersOpen} aria-controls="cut-filters"
+        onClick={() => setFiltersOpen(!filtersOpen)}><SlidersHorizontal size={15} aria-hidden /> Filtros</button>
+      <div id="cut-filters" className="cut-filters" data-open={filtersOpen || undefined}>
         <select className="field w-auto" value={streamer} onChange={(e) => filter("streamer", e.target.value)} aria-label="Filtrar por streamer">
           <option value="">Todos os streamers</option>
           {(streamers.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
@@ -115,11 +119,13 @@ export default function Clips() {
 }
 
 const reviewViews = [
-  { key: "review", label: "Revisão" },
-  { key: "versions", label: "Versões e comparação" },
-  { key: "edit", label: "Edição e legendas" },
-  { key: "publish", label: "Publicação" },
+  { key: "review", label: "Revisar" },
+  { key: "versions", label: "Comparar versões" },
+  { key: "edit", label: "Editar" },
+  { key: "publish", label: "Publicar" },
+  { key: "share", label: "Compartilhar" },
 ] as const;
+const needsVideo: string[] = ["versions", "publish", "share"];
 
 function ReviewBench({ clipId, items, onNavigate, startInVersions, explicit }: {
   clipId: number; items: Clip[]; onNavigate: (id: number | null) => void; startInVersions: boolean; explicit: boolean;
@@ -127,6 +133,7 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions, explicit }: {
   const [requestedView, setView] = useState<(typeof reviewViews)[number]["key"]>(startInVersions ? "versions" : "review");
   const [visited, setVisited] = useState<Set<string>>(() => new Set([startInVersions ? "versions" : "review"]));
   const bench = useRef<HTMLDivElement>(null);
+  const help = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const qc = useQueryClient();
   const clip = useQuery({
@@ -135,7 +142,7 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions, explicit }: {
     refetchInterval: (q) => (q.state.data && ["ready", "approved", "rejected", "failed"].includes(q.state.data.status) ? false : 3000),
   });
   const c = clip.data;
-  const view = c?.has_video || requestedView === "edit" ? requestedView : "review";
+  const view = c?.has_video || !needsVideo.includes(requestedView) ? requestedView : "review";
   const idx = items.findIndex((x) => x.id === clipId);
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["clips"] });
@@ -168,9 +175,13 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions, explicit }: {
       if (t.closest("input, textarea, select, video, [contenteditable], dialog") || document.querySelector("dialog[open]")
         || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
-      if (k === "j" && idx >= 0 && items[idx + 1]) onNavigate(items[idx + 1].id);
+      if (e.key === "?") { e.preventDefault(); help.current?.showModal(); }
+      else if (k === " " && !t.closest("button, a, summary")) {
+        const video = bench.current?.querySelector<HTMLVideoElement>("[data-clip-video] video");
+        if (video) { e.preventDefault(); if (video.paused) void video.play(); else video.pause(); }
+      }
+      else if (k === "j" && idx >= 0 && items[idx + 1]) onNavigate(items[idx + 1].id);
       else if (k === "k" && idx > 0) onNavigate(items[idx - 1].id);
-      else if (!explicit) return;
       else if (k === "a" && !action.isPending && c && ["ready", "rejected"].includes(c.status)) action.mutate("approve");
       else if (k === "r" && !action.isPending && c && ["ready", "approved", "failed"].includes(c.status)) action.mutate("reject");
       else if (k === "escape") onNavigate(null);
@@ -200,9 +211,11 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions, explicit }: {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           {explicit && <button className="icon-action" title="Voltar à fila" aria-label="Voltar à fila" onClick={() => onNavigate(null)}><ArrowLeft size={16} aria-hidden/></button>}
-          <span className="monitor-label"><Film size={16} aria-hidden/> Monitor <b>#{clipId}</b></span>
+          <span className="monitor-label"><Film size={16} aria-hidden/> Corte <b>#{clipId}</b></span>
         </div>
         <div className="flex items-center gap-2">
+          <button type="button" className="icon-action hidden md:inline-grid" onClick={() => help.current?.showModal()}
+            aria-label="Atalhos de teclado (?)" title="Atalhos de teclado (?)"><Keyboard size={16} aria-hidden /></button>
           <button className="icon-action" disabled={idx <= 0} onClick={() => onNavigate(items[idx - 1].id)} aria-label="Corte anterior (K)">
             <ChevronLeft size={17} aria-hidden />
           </button>
@@ -219,20 +232,20 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions, explicit }: {
           <header className="mb-4 flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <h2 ref={heading} tabIndex={-1} className="display break-words text-xl outline-none sm:text-2xl">{c.title || "Sem título"}</h2>
-              <p className="mt-2 text-sm text-ink-muted">
+              <p className="clip-meta mt-2 text-sm text-ink-muted">
                 {c.streamer?.display_name} / {platformName[c.streamer?.platform ?? ""] ?? "Live"} / Sessão #{c.session_id}
                 <span className="ml-2 font-mono text-xs">{timecode(c.start)} a {timecode(c.end)}</span>
               </p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 {c.is_test && <Status tone="warning">Teste manual</Status>}
-                <ClipStatus status={c.status} /><AnalysisStatus clip={c} />
+                <ClipStatus status={c.status} /><span className="hidden md:inline-flex"><AnalysisStatus clip={c} /></span>
               </div>
             </div>
             <ScoreMark score={c.score} size="lg" />
           </header>
 
           <nav className="view-switch mb-5" aria-label="Áreas do corte">
-            {reviewViews.filter((item) => c.has_video || !["versions", "publish"].includes(item.key)).map((item) => (
+            {reviewViews.filter((item) => c.has_video || !needsVideo.includes(item.key)).map((item) => (
               <button type="button" key={item.key} className="view-switch-item" aria-pressed={item.key === view}
                 onClick={() => changeView(item.key)}>{item.label}</button>
             ))}
@@ -258,12 +271,16 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions, explicit }: {
                     {c.status === "failed" ? "A renderização falhou." : "O vídeo aparece aqui quando a renderização terminar."}
                   </div>
                 )}
-                <div className="grid grid-cols-2 gap-2">
+                <div className="decision-bar" role="group" aria-label="Decisão sobre o corte">
                   <button className="btn-take" disabled={!["ready", "rejected"].includes(c.status) || action.isPending} onClick={() => action.mutate("approve")}>
                     <Check size={16} aria-hidden /> Aprovar
                   </button>
                   <button className="btn-quiet" disabled={!["ready", "approved", "failed"].includes(c.status) || action.isPending} onClick={() => action.mutate("reject")}>
                     <X size={16} aria-hidden /> Rejeitar
+                  </button>
+                  <button className="btn-quiet decision-next" disabled={idx < 0 || idx + 1 >= items.length}
+                    onClick={() => onNavigate(items[idx + 1].id)} aria-label="Próximo corte">
+                    <ChevronRight size={16} aria-hidden /><span className="decision-next-label">Próximo</span>
                   </button>
                 </div>
                 <Disclosure title="Arquivo e ações">
@@ -276,20 +293,14 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions, explicit }: {
                   </div>
                   <StorageFlags clipId={c.id} protectedFlag={c.protected} favorite={c.favorite} lifecycle={c.lifecycle} purgeAfter={c.purge_after} />
                 </Disclosure>
-                {explicit && <p className="key-guide"><kbd>A</kbd> Aprovar <kbd>R</kbd> Rejeitar <kbd>J</kbd><kbd>K</kbd> Navegar <kbd>Esc</kbd> Fila</p>}
+                <p className="key-guide hidden md:flex"><kbd>A</kbd> Aprovar <kbd>R</kbd> Rejeitar <kbd>J</kbd><kbd>K</kbd> Navegar <kbd>?</kbd> Todos os atalhos</p>
               </div>
             </section>
 
             <div hidden={view !== "review"} className="min-w-0 space-y-4">
-              <section className="min-w-0">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-suite-line pb-3">
-                  <h2 className="display text-lg">Leitura editorial</h2>
-                  <button className="btn-quiet" disabled={evaluate.isPending} onClick={() => evaluate.mutate()}>
-                    <ClipboardCheck size={15} aria-hidden /> Avaliar para a IA
-                  </button>
-                </div>
-                <div className="space-y-4 py-4">
-                  {c.reasons.length > 0 && <ul className="space-y-2 border-l border-suite-outline pl-3 text-sm">{c.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>}
+              <WhyCard clip={c} />
+              <Disclosure title="Detalhes técnicos da IA">
+                <div className="space-y-5">
                   {dims.length > 0 && (
                     <section>
                       <h3 className="mb-3 text-sm font-semibold">Pontuação por critério</h3>
@@ -305,9 +316,12 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions, explicit }: {
                       <p className="mt-2 text-xs text-ink-muted">Notas heurísticas de 0 a 10. n/d indica sinal indisponível.</p>
                     </section>
                   )}
+                  <AnalysisPanel clip={c} busy={action.isPending} onReanalyze={() => action.mutate("reanalyze")} />
+                  <button className="btn-quiet" disabled={evaluate.isPending} onClick={() => evaluate.mutate()}>
+                    <ClipboardCheck size={15} aria-hidden /> Enviar para a avaliação editorial
+                  </button>
                 </div>
-              </section>
-              <AnalysisPanel clip={c} busy={action.isPending} onReanalyze={() => action.mutate("reanalyze")} />
+              </Disclosure>
               <Disclosure title="Transcrição">
                 <p className="max-h-64 overflow-y-auto text-sm leading-relaxed">{c.transcript || "Sem fala detectada."}</p>
               </Disclosure>
@@ -323,10 +337,65 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions, explicit }: {
             {c.has_video && visited.has("publish") && <div hidden={view !== "publish"} className="panel panel-body min-w-0">
               <PublishPanel clipId={c.id} isTest={c.is_test} />
             </div>}
+            {c.has_video && visited.has("share") && <div hidden={view !== "share"} className="panel panel-body min-w-0">
+              <SharePanel clipId={c.id} clipTitle={c.title || `Corte #${c.id}`} />
+            </div>}
           </div>
         </>
       )}
+      <dialog ref={help} className="confirmation-modal" aria-labelledby="keys-title">
+        <h2 id="keys-title" className="display text-xl">Atalhos da Central</h2>
+        <dl className="shortcut-list">
+          <div><dt><kbd>Espaço</kbd></dt><dd>Reproduzir ou pausar o vídeo</dd></div>
+          <div><dt><kbd>A</kbd></dt><dd>Aprovar o corte na tela e ir para o próximo</dd></div>
+          <div><dt><kbd>R</kbd></dt><dd>Rejeitar o corte na tela e ir para o próximo</dd></div>
+          <div><dt><kbd>J</kbd> / <kbd>K</kbd></dt><dd>Próximo / anterior da fila</dd></div>
+          <div><dt><kbd>Esc</kbd></dt><dd>Voltar para a fila</dd></div>
+          <div><dt><kbd>?</kbd></dt><dd>Mostrar esta lista</dd></div>
+        </dl>
+        <p className="mt-3 text-xs text-ink-muted">Os atalhos não funcionam enquanto você digita em um campo.</p>
+        <div className="mt-5 flex justify-end"><button type="button" className="btn-take" onClick={() => help.current?.close()}>Entendi</button></div>
+      </dialog>
     </div>
+  );
+}
+
+const confidenceWord = (v: number) => (v >= 0.75 ? "alta" : v >= 0.5 ? "média" : "baixa");
+
+/** "Why this clip?" in plain words, assembled only from what the pipeline recorded. Numbers live in the technical details. */
+function WhyCard({ clip: c }: { clip: Clip }) {
+  const g = c.gate_detail;
+  const visual = c.analysis?.visual;
+  const sawSomething = visual && !visual.fallback && visual.summary;
+  return (
+    <section className="why-card" aria-labelledby="why-title">
+      <h2 id="why-title" className="display text-lg">Por que este corte?</h2>
+      {g && g.outcome && (
+        <div className="why-gate" data-outcome={g.outcome}>
+          <strong>{g.outcome_label}</strong>
+          {g.reasons.length > 0 && <ul>{g.reasons.slice(0, 3).map((r, i) => <li key={i}>{r}</li>)}</ul>}
+          {g.blocking.length > 0 && <p className="text-xs">O que impede a aprovação automática: {g.blocking.join("; ")}</p>}
+        </div>
+      )}
+      {c.reasons.length > 0 ? (
+        <div>
+          <h3 className="why-label">O que chamou a atenção da IA</h3>
+          <ul className="why-reasons">{c.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>
+        </div>
+      ) : <p className="text-sm text-ink-muted">A IA não registrou motivos para este corte.</p>}
+      {sawSomething && (
+        <div>
+          <h3 className="why-label">O que a IA viu na imagem</h3>
+          <p className="text-sm">{visual.summary}</p>
+        </div>
+      )}
+      <dl className="why-facts">
+        <div><dt>Trecho da live</dt><dd className="font-mono">{timecode(c.start)} a {timecode(c.end)}</dd></div>
+        <div><dt>Duração</dt><dd>{seconds(c.duration)}</dd></div>
+        <div><dt>Nota</dt><dd>{Math.round(c.editorial_score ?? c.score)} de 100</dd></div>
+        {c.confidence != null && <div><dt>Certeza da IA</dt><dd>{confidenceWord(c.confidence)} ({Math.round(c.confidence * 100)}%)</dd></div>}
+      </dl>
+    </section>
   );
 }
 
@@ -379,14 +448,22 @@ function ClipEditor({ clip, onSaved }: { clip: Clip; onSaved: () => void }) {
         </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="label" htmlFor="start">Início na sessão (s)</label>
-            <input id="start" type="number" step="0.1" min={0} className="field" value={form.start}
-              onChange={(e) => set("start", Number(e.target.value))} />
+            <label className="label" htmlFor="start">Começa em (segundos da live)</label>
+            <div className="nudge">
+              <button type="button" className="icon-action" aria-label="Começar 0,5 s antes" onClick={() => set("start", Math.max(0, +(form.start - 0.5).toFixed(1)))}><Minus size={15} aria-hidden /></button>
+              <input id="start" type="number" step="0.1" min={0} className="field" value={form.start}
+                onChange={(e) => set("start", Number(e.target.value))} />
+              <button type="button" className="icon-action" aria-label="Começar 0,5 s depois" onClick={() => set("start", +(form.start + 0.5).toFixed(1))}><Plus size={15} aria-hidden /></button>
+            </div>
           </div>
           <div>
-            <label className="label" htmlFor="end">Fim na sessão (s)</label>
-            <input id="end" type="number" step="0.1" min={0} className="field" value={form.end}
-              onChange={(e) => set("end", Number(e.target.value))} />
+            <label className="label" htmlFor="end">Termina em (segundos da live)</label>
+            <div className="nudge">
+              <button type="button" className="icon-action" aria-label="Terminar 0,5 s antes" onClick={() => set("end", Math.max(0, +(form.end - 0.5).toFixed(1)))}><Minus size={15} aria-hidden /></button>
+              <input id="end" type="number" step="0.1" min={0} className="field" value={form.end}
+                onChange={(e) => set("end", Number(e.target.value))} />
+              <button type="button" className="icon-action" aria-label="Terminar 0,5 s depois" onClick={() => set("end", +(form.end + 0.5).toFixed(1))}><Plus size={15} aria-hidden /></button>
+            </div>
           </div>
           <div>
             <label className="label" htmlFor="style">Estilo da legenda</label>

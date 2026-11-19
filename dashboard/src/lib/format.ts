@@ -28,7 +28,7 @@ export function ago(iso: string | null | undefined): string {
   return `há ${Math.round(d / 86400)} d`;
 }
 
-export const platformName: Record<string, string> = { twitch: "Twitch", youtube: "YouTube", file: "Vídeo de teste" };
+export const platformName: Record<string, string> = { twitch: "Twitch", youtube: "YouTube", file: "Vídeo de teste", instagram: "Instagram", tiktok: "TikTok" };
 
 export const dimensionLabel: Record<string, string> = {
   intensity: "Intensidade",

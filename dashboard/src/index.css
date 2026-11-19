@@ -3,6 +3,7 @@
 @import "/site/tokens.css";
 @import "./workspace.css";
 @import "./studio.css";
+@import "./flows.css";
 
 @tailwind base;
 @tailwind components;
