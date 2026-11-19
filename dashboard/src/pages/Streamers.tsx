@@ -133,7 +133,7 @@ function StreamerRow({ s }: { s: Streamer }) {
       {s.last_error && s.status === "error" && <p className="mt-2 text-xs text-tally">{s.last_error}</p>}
       {s.monitor?.state === "stale" && (
         <p className="mt-2 text-xs text-[#F2B33D]">
-          Monitoramento atrasado: última verificação {ago(s.last_checked_at)}. Não foi possível confirmar se o canal está ao vivo
+          Monitoramento atrasado: {s.last_checked_at ? `última verificação ${ago(s.last_checked_at)}` : "este canal nunca foi verificado"}. Não foi possível confirmar se o canal está ao vivo
           {s.status === "live" || live ? " (o último resultado conhecido era ao vivo)" : ""}.
         </p>
       )}
