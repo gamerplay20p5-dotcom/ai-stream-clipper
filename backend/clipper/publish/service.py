@@ -35,7 +35,45 @@ PROVIDERS = {"youtube": youtube, "tiktok": tiktok, "instagram": instagram}
 PLATFORM_NAME = {"youtube": "YouTube Shorts", "tiktok": "TikTok", "instagram": "Instagram Reels"}
 MAX_DURATION = {"youtube": 180.0, "tiktok": 600.0, "instagram": 900.0}
 STATE_TTL = timedelta(minutes=15)
-ACTIVE = ("scheduled", "uploading", "processing")
+ACTIVE = ("scheduled", "uploading", "processing", "uncertain")
+# a failed publication may only be reused when it is CERTAIN nothing reached the platform
+SAFE_FAILURES = ("before_publish", "rejected_by_platform", "confirmed_not_published")
+
+
+def archive_attempt(pub: Publication, reason: str) -> None:
+    """Keep the previous attempt as evidence (remote_status.previous_attempts + log) and invalidate
+    its upload session, so the next run creates a new container. Never used on uncertain or
+    published publications."""
+    if pub.status in ("uncertain", "published"):
+        raise ValueError("tentativa com resultado incerto ou publicada não pode ser descartada")
+    prev = {"upload_state": dict(pub.upload_state or {}), "remote_id": pub.remote_id, "failure":
+            (pub.remote_status or {}).get("failure"), "last_error": (pub.last_error or "")[:500],
+            "archived_at": utcnow().isoformat(), "reason": reason}
+    rs = dict(pub.remote_status or {})
+    rs["previous_attempts"] = (list(rs.get("previous_attempts") or []) + [prev])[-10:]
+    rs.pop("failure", None)
+    pub.remote_status = rs
+    log_event(pub, "previous_attempt", f"contêiner {prev['upload_state'].get('container_id', '-')} arquivado: {reason}")
+    pub.upload_state, pub.remote_id = {}, ""
+
+
+def reuse_blockers(pub: Publication) -> list[str]:
+    """Why an existing publication of this clip on this account must NOT be restarted."""
+    if pub.status in ("cancelled", "expired"):
+        return []
+    if pub.status == "uncertain":
+        return ["a publicação anterior deste corte nesta conta tem resultado incerto (o vídeo pode já estar no "
+                "perfil): confira e registre o resultado antes de publicar de novo"]
+    if pub.status == "failed":
+        kind = (pub.remote_status or {}).get("failure")
+        st = pub.upload_state or {}
+        if kind in SAFE_FAILURES:
+            return []
+        if kind is None and not st.get("publish_called_at") and not st.get("media_id"):
+            return []  # older failure from before any publish attempt
+        return ["a publicação anterior falhou depois de uma tentativa de publicar: confira no perfil e registre o "
+                "resultado antes de publicar de novo"]
+    return [f"já existe uma publicação deste corte nesta conta ({pub.status})"]
 
 
 class PublishRefused(ValueError):
@@ -356,7 +394,13 @@ def create_publication(db: Session, clip: Clip, acct: PublishAccount, *, origin:
     """Idempotent: an existing publication of this clip on this account is returned, never duplicated."""
     existing = db.scalar(select(Publication).where(Publication.clip_id == clip.id, Publication.account_id == acct.id))
     if existing is not None and existing.status not in ("cancelled", "failed", "expired"):
+        if existing.status == "uncertain":
+            raise PublishRefused(reuse_blockers(existing))
         return existing
+    if existing is not None:
+        blockers = reuse_blockers(existing)
+        if blockers:
+            raise PublishRefused(blockers)
     problems = eligibility(db, clip, acct, auto=origin in ("auto", "semi"), rule=rule, privacy=privacy,
                            rights_confirmed=rights_confirmed, semi=origin == "semi")
     if problems:
@@ -365,6 +409,8 @@ def create_publication(db: Session, clip: Clip, acct: PublishAccount, *, origin:
     if origin == "manual" and scheduled_at is None and published_today(db, acct, "America/Sao_Paulo") >= max_day:
         raise PublishRefused([f"limite diário de {max_day} publicações atingido nesta conta"])
     meta = suggest_metadata(db, clip, acct.platform, rule)
+    if existing is not None and (existing.upload_state or existing.remote_id):
+        archive_attempt(existing, f"nova publicação criada por {user}")  # evidence kept, session invalidated
     pub = existing or Publication(clip_id=clip.id, account_id=acct.id, platform=acct.platform)
     pub.rule_id = rule.id if rule else None
     pub.origin, pub.created_by = origin, user

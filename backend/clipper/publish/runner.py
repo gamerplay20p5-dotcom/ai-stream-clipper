@@ -103,6 +103,7 @@ def _reschedule(pub: Publication, err: PublishError | str, retry_after: float | 
     pub.last_error = msg[:2000]
     if pub.attempts >= MAX_ATTEMPTS:
         pub.status = "failed"
+        pub.remote_status = {**(pub.remote_status or {}), "failure": "before_publish"}
         service.log_event(pub, "failed", f"desistiu após {pub.attempts} tentativas: {msg}")
         return
     wait = retry_after or min(6 * 3600, 60 * 2 ** max(0, pub.attempts - 1))
@@ -126,6 +127,7 @@ def run_publish(job_id: int, pub_id: int) -> None:
             semi=pub.origin == "semi")
         if problems:  # conditions changed since scheduling (rejected, reviewed as bad, account revoked...)
             pub.status, pub.last_error = "failed", "; ".join(problems)
+            pub.remote_status = {**(pub.remote_status or {}), "failure": "before_publish"}
             service.log_event(pub, "refused", pub.last_error)
             queue.complete(db, job_id, wid, {"refused": problems})
             return
@@ -197,25 +199,39 @@ def run_publish(job_id: int, pub_id: int) -> None:
         if err.auth:
             acct.status, acct.last_error = "expired", str(err)
             pub.status, pub.last_error = "failed", str(err)
+            pub.remote_status = {**(pub.remote_status or {}), "failure": "before_publish"}
             service.log_event(pub, "auth", str(err))
         elif err.retryable:
             _reschedule(pub, err, err.retry_after)
         else:
             pub.status, pub.last_error = "failed", str(err)[:2000]
+            pub.remote_status = {**(pub.remote_status or {}), "failure": "before_publish"}
             service.log_event(pub, "failed", str(err))
         queue.complete(db, job_id, wid, {"error": str(err)[:300]})
 
 
+def _state_saver(pid: int):
+    def save(st: dict) -> None:  # own transaction: committed immediately
+        with session_scope() as s2:
+            p = s2.get(Publication, pid)
+            p.upload_state = dict(st)
+    return save
+
+
 def poll_processing() -> None:
     with session_scope() as db:
-        ids = [p.id for p in db.scalars(select(Publication).where(Publication.status == "processing"))]
+        # uncertain ones too: a later poll may find the Reel and confirm it
+        ids = [p.id for p in db.scalars(select(Publication).where(Publication.status.in_(("processing", "uncertain"))))]
     for pid in ids:
         with session_scope() as db:
             pub = db.get(Publication, pid)
             acct = db.get(PublishAccount, pub.account_id)
             try:
                 tokens = service.tokens_for(db, acct)
-                st = service.provider(pub.platform).status(_snapshot(pub), tokens)
+                if pub.platform == "instagram":  # saves the publish attempt BEFORE calling media_publish
+                    st = service.provider(pub.platform).status(_snapshot(pub), tokens, _state_saver(pid))
+                else:
+                    st = service.provider(pub.platform).status(_snapshot(pub), tokens)
             except PublishError as exc:
                 pub.last_error = str(exc)[:2000]
                 continue
@@ -231,8 +247,18 @@ def poll_processing() -> None:
                     pub.remote_url = f"https://www.tiktok.com/@{acct.handle}/video/{st['post_id']}"
                 service.log_event(pub, "published", pub.remote_url)
             elif st["state"] == "failed":
+                if st.get("auth"):
+                    acct.status, acct.last_error = "expired", str(st.get("detail", ""))[:2000]
                 pub.status, pub.last_error = "failed", str(st.get("detail", ""))[:2000]
+                pub.remote_status = {**(pub.remote_status or {}), "failure": st.get("failure") or "rejected_by_platform"}
                 service.log_event(pub, "failed", pub.last_error)
+            elif st["state"] == "uncertain":
+                if pub.status != "uncertain":
+                    service.log_event(pub, "uncertain", str(st.get("detail", "")))
+                pub.status, pub.last_error = "uncertain", str(st.get("detail", ""))[:2000]
+            elif pub.status == "uncertain" and st.get("media_id"):
+                pub.status = "processing"  # reconciled: the Reel was found
+                service.log_event(pub, "reconciled", str(st.get("reconciled", "")))
 
 
 def refresh_metrics(force_ids: list[int] | None = None) -> None:
