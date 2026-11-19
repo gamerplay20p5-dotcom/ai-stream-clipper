@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Share2, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api, type AdminUser, type ClipShareRow } from "../api";
-import { ErrorNote, Notice, Status } from "./ui";
+import { ConfirmAction, ErrorNote, Notice, Status } from "./ui";
 
 const day = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeZone: "America/Sao_Paulo" });
 export const shareDate = (iso: string | null) => (iso ? day.format(new Date(iso)) : "");
@@ -18,6 +18,8 @@ export function ShareRow({ share, showClip, showEmail }: { share: ClipShareRow; 
   const reapprove = useMutation({ mutationFn: () => api.post(`/api/shares/${share.id}/reapprove`), onSuccess: done });
   const revoke = useMutation({ mutationFn: () => api.del(`/api/shares/${share.id}`), onSuccess: done });
   const active = share.state === "ativo";
+  const who = share.email ?? `conta #${share.user_id}`;
+  const what = share.clip_title || `Corte #${share.clip_id}`;
   return (
     <li className="share-row">
       <div className="min-w-0">
@@ -41,18 +43,24 @@ export function ShareRow({ share, showClip, showEmail }: { share: ClipShareRow; 
       {active && (
         <div className="flex flex-wrap items-center gap-2">
           {share.outdated && (
-            <button type="button" className="btn-quiet" disabled={reapprove.isPending} onClick={() => reapprove.mutate()}>
+            <ConfirmAction tone="quiet" title="Enviar a versão atual?" label={`Enviar a versão atual de ${what} para ${who}`}
+              description={<><p><strong className="text-ink">{who}</strong> passa a assistir à versão atual de <strong className="text-ink">{what}</strong>.</p>
+                <p>A versão aprovada antes deixa de aparecer para essa conta.</p></>}
+              confirmLabel="Enviar a versão atual" pending={reapprove.isPending} onConfirm={() => reapprove.mutate()}>
               <RefreshCw size={14} aria-hidden /> Enviar a versão atual
-            </button>
+            </ConfirmAction>
           )}
           <label className="inline-flex items-center gap-2 text-xs">
             <input type="checkbox" checked={share.can_download} disabled={patch.isPending}
               onChange={(e) => patch.mutate({ can_download: e.target.checked })} />
             Permitir download
           </label>
-          <button type="button" className="btn-danger" disabled={revoke.isPending} onClick={() => revoke.mutate()}>
+          <ConfirmAction title="Revogar o acesso?" label={`Revogar o acesso de ${who} a ${what}`}
+            description={<><p><strong className="text-ink">{who}</strong> deixa de ver <strong className="text-ink">{what}</strong> na próxima ação, inclusive com a página aberta.</p>
+              <p>O registro fica no histórico. Para liberar de novo, compartilhe outra vez.</p></>}
+            confirmLabel="Revogar acesso" pending={revoke.isPending} onConfirm={() => revoke.mutate()}>
             <X size={14} aria-hidden /> Revogar
-          </button>
+          </ConfirmAction>
         </div>
       )}
       <div className="basis-full"><ErrorNote error={patch.error || reapprove.error || revoke.error} /></div>

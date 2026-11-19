@@ -18,10 +18,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     let detail = res.statusText;
     try {
       const j = await res.json();
-      detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+      detail = typeof j.detail === "string" ? j.detail : j.detail !== undefined ? JSON.stringify(j.detail) : detail;
     } catch {
       /* ignore */
     }
+    if (!detail) detail = `o servidor respondeu ${res.status}`;
     if (res.status === 401 && !path.endsWith("/login")) window.dispatchEvent(new Event("asc:unauthorized"));
     throw new ApiError(res.status, detail);
   }

@@ -128,7 +128,7 @@ Nenhum branch existente foi reescrito. Se o #5 receber novos commits, este branc
 | `npm run check:privacy` | todas as verificações passaram |
 | `npm run build` | ok |
 | `pytest` (suíte completa) | 346 passaram e 3 foram pulados (testes de modelos reais de IA que não estão instalados no worktree novo) |
-| `dashboard/scripts/ux/scenarios.py` (Playwright, Chromium) | todos os cenários passaram |
+| `dashboard/scripts/ux/scenarios.py` (Playwright, Chromium) | 21 cenários passaram, incluindo as regressões da seção 5b |
 
 ### Cenários em navegador real
 
@@ -147,6 +147,36 @@ Nenhum branch existente foi reescrito. Se o #5 receber novos commits, este branc
 - agora: começa em 306 px numa tela de 740 px, a 320 e a 390 px.
 
 As capturas usam dados de demonstração locais. Os vídeos de teste são barras coloridas geradas a partir das fixtures do repositório.
+
+## 5b. Rodada de segurança e ergonomia (revisão do PR #7)
+
+| # | Pedido | O que mudou |
+|---|---|---|
+| 1 | Confirmação em massa (bloqueador) | Não existe mais "Confirmar todas". As sugestões são marcadas uma a uma, ou com o botão separado "Selecionar todas as sugestões". "Revisar e confirmar (N)" abre um diálogo que mostra quantidade, plataformas, contas, privacidade e cada item com o horário. Se houver publicação pública ou sugestão cujo horário já passou (o backend envia essas na hora), o diálogo avisa e exige marcar "Revisei a lista e entendo…". Só o botão final "Confirmar N publicações" chama a API. "Recusar selecionadas" também pede confirmação. Se existirem mais sugestões pendentes do que as das próximas 3 semanas, a página avisa. |
+| 2 | Compartilhamentos e conta de equipe | "Revogar" e "Enviar a versão atual" abrem um diálogo com o e-mail da conta e o título do vídeo. "Voltar" não altera nada. Uma conta de equipe só é criada depois de marcar que ela terá acesso completo à operação da HTS (o texto lista o que ela poderá fazer). |
+| 3 | Estados da página Hoje | Cada verificação (cortes, revisão humana, publicações, envios recentes, pausa e servidores) é tratada como verificada, ainda verificando ou com falha. "Tudo verificado e sem pendências" só aparece com todas verificadas, junto com a hora da verificação. Falhas aparecem com o nome da área e o botão "Tentar de novo". Ausência de resposta nunca vira zero. Sugestões pendentes e envios incertos vêm do total agregado de `/api/publish/overview`. Envios com falha mostram a janela analisada (agendados a partir de 2 dias atrás). |
+| 4 | Biblioteca | O player e o download consultam o backend. 401 volta para o login; 404 (revogado ou expirado) fecha o player, avisa e atualiza a lista; 403 no download explica que o download foi retirado. Ao começar a reprodução, a lista é conferida de novo, porque um vídeo já em buffer continuaria tocando sem consultar o servidor. A autorização continua só no backend. |
+
+Também foi corrigido um caso em que uma resposta de erro sem `detail` deixava a caixa de erro vazia.
+
+### Regressões em navegador real (Playwright)
+
+As confirmações de publicação são interceptadas no navegador e respondidas localmente: nenhuma sugestão foi confirmada, e a tabela `publications` do banco de demonstração ficou igual antes e depois.
+
+- Selecionar todas e abrir a revisão **não** chamam `/api/publish/proposals/confirm`. "Voltar sem confirmar" também não.
+- Com uma sugestão pública e atrasada, o diálogo mostra os dois avisos e o botão final fica desabilitado até a ciência. Só o clique final envia exatamente os ids revisados.
+- Revogar e reaprovar mostram destinatário e vídeo, e "Voltar" não faz requisição.
+- A conta de equipe só pode ser criada com a confirmação de acesso completo.
+- Hoje:
+  - com todas as respostas vazias, mostra "Tudo verificado";
+  - com servidores e publicações respondendo 500, mostra a falha e não diz que está tudo em dia;
+  - com a agenda sem responder, mostra "Ainda verificando".
+- Biblioteca:
+  - o download retirado mostra a explicação;
+  - um vídeo revogado durante a reprodução fecha o player e sai da lista;
+  - um vídeo revogado aberto a partir de uma lista antiga recebe 404 e sai da lista.
+
+Capturas: [confirmação em massa](design/ux/confirmacao-em-massa.webp) · [Hoje com falha de verificação](design/ux/hoje-falha-verificacao.webp)
 
 ## 6. Antes e depois
 
@@ -175,3 +205,12 @@ v0.7.1 reorganizes the dashboard by task and keeps the PR #5 Vice City identity.
 - "People and access" manages accounts and shares.
 
 Validated with typecheck, the privacy checks, the build and the full pytest suite (346 passed, 3 skipped: real AI models absent). Playwright scenarios against a local SQLite demo stack also passed. No existing branch was rewritten.
+
+**Safety round (PR #7 review):**
+- Bulk confirmation now needs explicit selection and a review dialog. The dialog shows the count, platforms, accounts and privacy, and warns about public posts and immediate sends (proposals whose slot already passed are sent at once). Only the final button calls the API.
+- Revoking a share and re-approving a version ask first, naming the account and the video.
+- Creating a staff account requires acknowledging full access.
+- "Today" distinguishes verified, still checking and failed checks. Missing answers are never read as zero, and pending counts come from the aggregate endpoint.
+- The guest library reacts to 401/403/404 from the backend and refreshes the list.
+
+Browser regressions cover all of this. Publication confirmations are intercepted locally, and no proposal was confirmed.

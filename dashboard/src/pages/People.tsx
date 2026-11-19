@@ -59,11 +59,13 @@ function CreateAccount({ onCreated }: { onCreated: (s: Secret) => void }) {
   const qc = useQueryClient();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"viewer" | "admin">("viewer");
+  const [fullAccess, setFullAccess] = useState(false);
   const create = useMutation({
     mutationFn: () => api.post<AdminUser & Secret>("/api/admin/users", { email, role }),
     onSuccess: (r) => {
       setEmail("");
       setRole("viewer");
+      setFullAccess(false);
       onCreated(r);
       qc.invalidateQueries({ queryKey: ["admin-users"] });
     },
@@ -81,13 +83,19 @@ function CreateAccount({ onCreated }: { onCreated: (s: Secret) => void }) {
       </div>
       <div>
         <label className="label" htmlFor="new-role">Tipo</label>
-        <select id="new-role" className="field" value={role} onChange={(e) => setRole(e.target.value as "viewer" | "admin")}>
+        <select id="new-role" className="field" value={role} onChange={(e) => { setRole(e.target.value as "viewer" | "admin"); setFullAccess(false); }}>
           <option value="viewer">Convidado (só a biblioteca)</option>
           <option value="admin">Equipe (painel completo)</option>
         </select>
       </div>
-      <button className="btn-take" disabled={create.isPending || !email}><UserPlus size={16} aria-hidden /> Criar conta</button>
-      {role === "admin" && <p className="text-xs text-warning sm:col-span-3">Uma conta de equipe acessa tudo: cortes, publicações, contas e servidores.</p>}
+      <button className="btn-take" disabled={create.isPending || !email || (role === "admin" && !fullAccess)}><UserPlus size={16} aria-hidden /> Criar conta</button>
+      {role === "admin" && (
+        <label className="admin-ack sm:col-span-3">
+          <input type="checkbox" checked={fullAccess} onChange={(e) => setFullAccess(e.target.checked)} />
+          <span><strong>Esta conta terá acesso completo à operação da HTS.</strong> Ela poderá aprovar e publicar cortes, mudar regras de
+            publicação, conectar contas, compartilhar vídeos, criar e desativar outras contas e ver os servidores. Confirmo que é uma pessoa da equipe.</span>
+        </label>
+      )}
       {create.error && <div className="sm:col-span-3"><ErrorNote error={create.error} /></div>}
     </form>
   );

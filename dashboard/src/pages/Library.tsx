@@ -3,11 +3,23 @@ import { Clock, Download, Film, LogOut, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, type LibraryItem } from "../api";
 import { Brand } from "../components/Brand";
-import { Empty, ErrorNote, Skeleton, Status } from "../components/ui";
+import { Empty, ErrorNote, Notice, Skeleton, Status } from "../components/ui";
 import { seconds } from "../lib/format";
 
 const day = new Intl.DateTimeFormat("pt-BR", { day: "numeric", month: "long", timeZone: "America/Sao_Paulo" });
 const fmt = (iso: string | null) => (iso ? day.format(new Date(iso)) : "");
+
+/** Status of a library media URL, asking for a single byte. The backend decides; the page only reacts. */
+async function mediaStatus(url: string): Promise<number> {
+  try {
+    const res = await fetch(url, { headers: { Range: "bytes=0-0" }, cache: "no-store", credentials: "same-origin" });
+    void res.body?.cancel();
+    return res.status;
+  } catch {
+    return 0; // network failure: not an authorization answer
+  }
+}
+const LOST = "Seu acesso a este vídeo terminou: a equipe revogou o compartilhamento ou o prazo acabou.";
 
 /** The whole product for an external (non-staff) account: only what was shared with it. */
 export default function LibraryApp({ email }: { email: string }) {
@@ -19,6 +31,16 @@ export default function LibraryApp({ email }: { email: string }) {
   const [openId, setOpenId] = useState<number | null>(null);
   const open = items.find((i) => i.clip_id === openId) ?? null;
   const [leaving, setLeaving] = useState(false);
+  const [notice, setNotice] = useState("");
+  const lose = (message = LOST) => {
+    setNotice(message);
+    setOpenId(null);
+    void qc.invalidateQueries({ queryKey: ["library"] });
+  };
+  // The list refreshed and the video on screen is no longer shared with this account.
+  useEffect(() => {
+    if (openId !== null && list.data && !list.data.items.some((i) => i.clip_id === openId)) lose();
+  }, [list.data, openId]);
 
   async function logout() {
     setLeaving(true);
@@ -65,14 +87,17 @@ export default function LibraryApp({ email }: { email: string }) {
           </Empty>
         )}
 
-        {open && <Viewer key={open.clip_id} item={open} onClose={() => setOpenId(null)} />}
+        {notice && <div className="flex flex-wrap items-center gap-2"><Notice tone="danger">{notice}</Notice>
+          <button type="button" className="btn-quiet" onClick={() => setNotice("")}>Ok</button></div>}
+        {open && <Viewer key={open.clip_id} item={open} onClose={() => setOpenId(null)} onLost={lose}
+          onRefresh={() => void qc.invalidateQueries({ queryKey: ["library"] })} />}
 
         {items.length > 0 && (
           <ul className="library-grid" aria-label="Vídeos compartilhados com você">
             {items.map((item) => (
               <li key={item.clip_id}>
                 <button type="button" className="library-card" aria-current={item.clip_id === openId || undefined}
-                  onClick={() => setOpenId(item.clip_id)}>
+                  onClick={() => { setNotice(""); setOpenId(item.clip_id); }}>
                   <span className="library-frame">
                     <img src={item.thumbnail_url} alt="" loading="lazy" onError={(e) => { e.currentTarget.hidden = true; }} />
                     <Film className="library-frame-fallback" aria-hidden />
@@ -100,8 +125,45 @@ export default function LibraryApp({ email }: { email: string }) {
   );
 }
 
-function Viewer({ item, onClose }: { item: LibraryItem; onClose: () => void }) {
+function Viewer({ item, onClose, onLost, onRefresh }: {
+  item: LibraryItem; onClose: () => void; onLost: (message?: string) => void; onRefresh: () => void;
+}) {
   const [source, setSource] = useState(item.video_url);
+  const [problem, setProblem] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  /** Map the backend's answer for this media to what the person can do next. */
+  async function react(url: string): Promise<boolean> {
+    const status = await mediaStatus(url);
+    if (status === 401) {
+      window.dispatchEvent(new Event("asc:unauthorized")); // session ended: back to sign-in
+      return false;
+    }
+    if (status === 404) {
+      onLost();
+      return false;
+    }
+    if (status === 403) {
+      setProblem("O download deste vídeo não está mais liberado. Você ainda pode assistir enquanto o acesso estiver ativo.");
+      onRefresh();
+      return false;
+    }
+    if (status < 200 || status >= 300) {
+      setProblem("Não foi possível carregar o vídeo agora. Verifique a conexão e tente de novo.");
+      return false;
+    }
+    return true;
+  }
+
+  async function download(url: string) {
+    setBusy(true);
+    setProblem("");
+    try {
+      if (await react(url)) window.location.assign(url);
+    } finally {
+      setBusy(false);
+    }
+  }
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     heading.current?.focus({ preventScroll: false });
@@ -109,7 +171,8 @@ function Viewer({ item, onClose }: { item: LibraryItem; onClose: () => void }) {
   return (
     <section className="library-viewer" aria-labelledby="viewer-title">
       <video key={source} src={source} controls playsInline preload="metadata" poster={item.thumbnail_url}
-        className="library-video" aria-label={`Vídeo: ${item.title}`} />
+        className="library-video" aria-label={`Vídeo: ${item.title}`} onError={() => void react(source)}
+        onPlay={onRefresh /* re-check access whenever playback starts: a buffered video would otherwise keep playing */} />
       <div className="min-w-0 space-y-4">
         <div>
           <h2 id="viewer-title" ref={heading} tabIndex={-1} className="display text-xl outline-none">{item.title}</h2>
@@ -132,9 +195,11 @@ function Viewer({ item, onClose }: { item: LibraryItem; onClose: () => void }) {
             </div>
           </fieldset>
         )}
+        {problem && <Notice tone="danger">{problem}</Notice>}
         <div className="flex flex-wrap gap-2">
           {item.download_url
-            ? <a className="btn-take" href={item.download_url} download><Download size={16} aria-hidden /> Baixar vídeo</a>
+            ? <button type="button" className="btn-take" disabled={busy} onClick={() => void download(item.download_url!)}>
+                <Download size={16} aria-hidden /> {busy ? "Verificando…" : "Baixar vídeo"}</button>
             : <p className="text-sm text-ink-muted">A equipe liberou este vídeo só para assistir.</p>}
           <button type="button" className="btn-quiet" onClick={onClose}>Fechar</button>
         </div>

@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, CircleAlert, CircleCheck } from "lucide-react";
+import { ChevronRight, CircleAlert, CircleCheck, Loader2, RefreshCw } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type Clip, type Infra, type Stats, type Streamer } from "../api";
 import type { CalendarData } from "../components/EditorialOps";
-import { ClipFrame, DecisionChip, ErrorNote, PageHeader, Skeleton, Tally } from "../components/ui";
+import { ClipFrame, DecisionChip, PageHeader, Skeleton, Tally } from "../components/ui";
 import { ago, jobLabel, platformName, timecode } from "../lib/format";
 import { decisionLabel, decisionOf } from "../lib/publishing";
 
@@ -48,6 +48,10 @@ export default function Overview() {
   const infra = useQuery({ queryKey: ["infra"], queryFn: () => api.get<Infra>("/api/infrastructure"), refetchInterval: 15_000 });
   const calendar = useQuery({ queryKey: ["calendar"], queryFn: () => api.get<CalendarData>("/api/publish/calendar?days=14"), refetchInterval: 20_000 });
   const control = useQuery({ queryKey: ["publish-control"], queryFn: () => api.get<Control>("/api/publish/control"), refetchInterval: 20_000 });
+  // All-time totals per publication status: the reliable source for states that wait for a person (proposed, uncertain).
+  const totals = useQuery({
+    queryKey: ["publish-overview"], queryFn: () => api.get<{ counts: Record<string, number> }>("/api/publish/overview"), refetchInterval: 20_000,
+  });
 
   const s = stats.data;
   const items = calendar.data?.items ?? [];
@@ -58,6 +62,18 @@ export default function Overview() {
   const upcoming = items.filter((i) => ["proposed", "scheduled"].includes(i.status) && (i.when ?? "") >= nowLocal).slice(0, 5);
   const silentHosts = (infra.data?.hosts ?? []).filter((h) => h.workers.length > 0 && !h.workers.some((w) => w.status === "online"));
 
+  // Every check that feeds "Precisa de você". Missing data is never read as zero: a check is either
+  // verified (data, no error), still loading, or failed; "nothing pending" needs ALL of them verified.
+  const checks = [
+    { name: "cortes", q: stats }, { name: "revisão humana", q: human }, { name: "publicações", q: totals },
+    { name: "envios recentes", q: calendar }, { name: "pausa dos envios", q: control }, { name: "servidores", q: infra },
+  ];
+  const verifying = checks.filter((c) => c.q.isLoading).map((c) => c.name);
+  const failed = checks.filter((c) => c.q.isError).map((c) => c.name);
+  const allVerified = !verifying.length && !failed.length;
+  const counts = totals.data?.counts;
+  const checkedAt = Math.max(...checks.map((c) => c.q.dataUpdatedAt));
+
   const attention: Attention[] = [];
   if (control.data?.paused) attention.push({ key: "paused", tone: "danger", text: "As publicações estão pausadas",
     detail: control.data.reason ? `Motivo: ${control.data.reason}` : undefined, to: "/publicacao", action: "Ver agenda" });
@@ -67,19 +83,19 @@ export default function Overview() {
   if (human.data?.total) attention.push({ key: "human", tone: "warning",
     text: plural(human.data.total, "corte pede revisão humana", "cortes pedem revisão humana"),
     detail: "A IA não teve evidência suficiente para decidir sozinha.", to: "/cortes?status=gate%3AHUMAN_REVIEW", action: "Decidir" });
-  if (count("proposed")) attention.push({ key: "proposed", tone: "take",
-    text: plural(count("proposed"), "sugestão de publicação aguarda você", "sugestões de publicação aguardam você"),
-    detail: "Nada é enviado sem a sua confirmação.", to: "/publicacao", action: "Confirmar ou recusar" });
-  if (count("uncertain")) attention.push({ key: "uncertain", tone: "warning",
-    text: plural(count("uncertain"), "envio com resultado incerto", "envios com resultado incerto"),
-    detail: "Confira no perfil se o vídeo foi publicado.", to: "/publicacao?aba=envios", action: "Conferir" });
+  if (counts?.proposed) attention.push({ key: "proposed", tone: "take",
+    text: plural(counts.proposed, "sugestão de publicação aguarda você", "sugestões de publicação aguardam você"),
+    detail: "Total pendente. Nada é enviado sem a sua confirmação.", to: "/publicacao", action: "Revisar sugestões" });
+  if (counts?.uncertain) attention.push({ key: "uncertain", tone: "warning",
+    text: plural(counts.uncertain, "envio com resultado incerto", "envios com resultado incerto"),
+    detail: "Total pendente. Confira no perfil se o vídeo foi publicado.", to: "/publicacao?aba=envios", action: "Conferir" });
   if (count("failed")) attention.push({ key: "failed", tone: "danger", text: plural(count("failed"), "envio falhou", "envios falharam"),
-    to: "/publicacao?aba=envios", action: "Ver motivo" });
+    detail: "Envios agendados a partir de 2 dias atrás (janela da agenda).", to: "/publicacao?aba=envios", action: "Ver motivo" });
   if (s?.dead_jobs) attention.push({ key: "dead", tone: "danger",
     text: plural(s.dead_jobs, "tarefa parou com falha", "tarefas pararam com falha"), to: "/infra#falhas", action: "Ver falhas" });
   if (silentHosts.length) attention.push({ key: "hosts", tone: "danger",
     text: `${silentHosts.map((h) => h.label).join(", ")} sem nenhum worker online`, to: "/infra", action: "Ver servidores" });
-  const loading = stats.isLoading || calendar.isLoading;
+  const retry = () => checks.forEach((c) => c.q.isError && c.q.refetch());
 
   return (
     <div>
@@ -93,13 +109,25 @@ export default function Overview() {
         <div className="min-w-0 space-y-[var(--space-section)]">
           <section aria-labelledby="attention-title">
             <h2 id="attention-title" className="display mb-3 text-xl">Precisa de você</h2>
-            <ErrorNote error={stats.error ?? calendar.error} />
-            {loading && <Skeleton label="Conferindo o que precisa de atenção" lines={2} />}
-            {!loading && attention.length === 0 && (
-              <div className="all-clear">
+            {verifying.length > 0 && (
+              <p className="check-state" role="status">
+                <Loader2 size={15} className="motion-safe:animate-spin" aria-hidden /> Ainda verificando: {verifying.join(", ")}.
+              </p>
+            )}
+            {failed.length > 0 && (
+              <div className="check-state check-failed" role="alert">
+                <CircleAlert size={16} aria-hidden />
+                <p className="min-w-0 flex-1">Não foi possível verificar: <strong>{failed.join(", ")}</strong>. Pendências dessas áreas podem não aparecer aqui.</p>
+                <button type="button" className="btn-quiet" onClick={retry}><RefreshCw size={14} aria-hidden /> Tentar de novo</button>
+              </div>
+            )}
+            {verifying.length === checks.length && <Skeleton label="Conferindo o que precisa de atenção" lines={2} />}
+            {allVerified && attention.length === 0 && (
+              <div className="all-clear" role="status">
                 <CircleCheck size={22} className="text-ok" aria-hidden />
-                <div><p className="font-semibold">Tudo em dia</p>
-                  <p className="text-sm text-ink-muted">Nenhum corte, sugestão ou falha esperando por alguém agora.</p></div>
+                <div><p className="font-semibold">Tudo verificado e sem pendências</p>
+                  <p className="text-sm text-ink-muted">Nenhum corte, sugestão ou falha esperando por alguém.
+                    {checkedAt > 0 && ` Verificado às ${new Date(checkedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" })}.`}</p></div>
               </div>
             )}
             {attention.length > 0 && (
@@ -135,7 +163,8 @@ export default function Overview() {
               <h2 id="next-title" className="display text-lg">Próximos envios</h2>
               <Link className="text-sm font-medium text-take hover:underline" to="/publicacao">Ver agenda</Link>
             </header>
-            {calendar.data && upcoming.length === 0 && <p className="py-2 text-sm text-ink-muted">Nada agendado para os próximos 14 dias.</p>}
+            {calendar.isError && <p className="py-2 text-sm text-warning">Não foi possível carregar a agenda agora.</p>}
+            {calendar.data && !calendar.isError && upcoming.length === 0 && <p className="py-2 text-sm text-ink-muted">Nada agendado para os próximos 14 dias.</p>}
             <ul className="divide-y divide-suite-line">
               {upcoming.map((i) => {
                 const kind = decisionOf(i);
@@ -161,8 +190,8 @@ export default function Overview() {
               <Link className="text-xs font-medium text-take hover:underline" to="/streamers">Canais</Link>
             </header>
             {streamers.isLoading && <Skeleton label="Carregando transmissões" lines={1} />}
-            <ErrorNote error={streamers.error} />
-            {streamers.data && !live.length && <p className="py-2 text-sm text-ink-muted">Nenhum canal monitorado está ao vivo.</p>}
+            {streamers.isError && <p className="py-2 text-sm text-warning">Não foi possível consultar as lives agora.</p>}
+            {streamers.data && !streamers.isError && !live.length && <p className="py-2 text-sm text-ink-muted">Nenhum canal monitorado está ao vivo.</p>}
             <ul className="divide-y divide-suite-line">
               {live.map((st) => {
                 const session = st.live_session!;
@@ -182,7 +211,7 @@ export default function Overview() {
 
           <section aria-labelledby="services-title" className="border-t border-suite-line pt-4">
             <h2 id="services-title" className="display mb-2 text-lg">Servidores</h2>
-            <ErrorNote error={infra.error} />
+            {infra.isError && <p className="py-2 text-sm text-warning">Não foi possível consultar os servidores agora.</p>}
             {infra.isLoading && <Skeleton label="Carregando status dos servidores" lines={1} />}
             <ul className="divide-y divide-suite-line">
               {infra.data?.hosts.map((host) => {

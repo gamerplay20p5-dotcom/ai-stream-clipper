@@ -6,7 +6,7 @@ import { api } from "../api";
 import { platformName } from "../lib/format";
 import { decisionHint, decisionLabel, decisionOf, type Decision } from "../lib/publishing";
 import type { CalendarData } from "./EditorialOps";
-import { DecisionChip, Empty, ErrorNote, Notice, Skeleton, Status } from "./ui";
+import { ConfirmAction, DecisionChip, Empty, ErrorNote, Notice, Skeleton, Status } from "./ui";
 
 type Item = CalendarData["items"][number];
 type Control = { paused: boolean; reason?: string; by?: string; at?: string };
@@ -23,6 +23,10 @@ const longDay = new Intl.DateTimeFormat("pt-BR", { weekday: "long", day: "numeri
 
 /** Local calendar day (YYYY-MM-DD) in Brasília for an instant. */
 const localDay = (d: Date) => new Intl.DateTimeFormat("sv-SE", { timeZone: TZ }).format(d);
+/** Local "YYYY-MM-DDTHH:MM" in Brasília, comparable with the calendar's `when`. */
+const localNow = () => new Intl.DateTimeFormat("sv-SE", { timeZone: TZ, dateStyle: "short", timeStyle: "short" }).format(new Date()).replace(" ", "T");
+/** The backend sends a confirmed proposal immediately when its slot already passed (or it has none). */
+const sendsNow = (i: Item) => !i.when || i.when.slice(0, 16) <= localNow();
 const addDays = (day: string, n: number) => {
   const d = new Date(`${day}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
@@ -40,6 +44,11 @@ export default function Agenda() {
   const [open, setOpen] = useState<Item | null>(null);
   const [filter, setFilter] = useState<Decision | "todas">("todas");
   const dialog = useRef<HTMLDialogElement>(null);
+  const review = useRef<HTMLDialogElement>(null);
+  const [round, setRound] = useState(0); // a fresh review (unchecked) every time the dialog opens
+  const totals = useQuery({
+    queryKey: ["publish-overview"], queryFn: () => api.get<{ counts: Record<string, number> }>("/api/publish/overview"), refetchInterval: 20_000,
+  });
   const done = () => {
     setSel([]);
     qc.invalidateQueries({ queryKey: ["calendar"] });
@@ -53,6 +62,9 @@ export default function Agenda() {
 
   const items = q.data?.items ?? [];
   const proposals = items.filter((i) => i.status === "proposed");
+  const picked = proposals.filter((p) => sel.includes(p.id));
+  const allPicked = proposals.length > 0 && picked.length === proposals.length;
+  const pendingTotal = totals.data?.counts?.proposed;
   const visible = items.filter((i) => filter === "todas" || decisionOf(i) === filter);
   const start = addDays(mondayOf(today), week * 7);
   const days = Array.from({ length: 7 }, (_, i) => addDays(start, i));
@@ -72,17 +84,32 @@ export default function Agenda() {
             <h2 id="proposal-title" className="font-semibold">
               {proposals.length === 1 ? "1 sugestão da IA aguarda você" : `${proposals.length} sugestões da IA aguardam você`}
             </h2>
-            <p className="text-xs text-ink-muted">Nada é enviado sem a sua confirmação. Sugestões não confirmadas expiram no horário.</p>
-            {proposals.some((p) => p.privacy === "public") && <p className="mt-1 text-xs font-semibold text-tally">Há sugestões públicas: confirmar publica para todos.</p>}
+            <p className="text-xs text-ink-muted">Marque as sugestões na agenda e revise antes de confirmar. Nada é enviado sem a sua confirmação.</p>
+            {pendingTotal !== undefined && pendingTotal > proposals.length && (
+              <p className="mt-1 text-xs text-warning">Há {pendingTotal} sugestões pendentes no total; {proposals.length} estão nas próximas 3 semanas desta agenda.</p>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="btn-take" disabled={confirm.isPending} onClick={() => confirm.mutate(sel.length ? sel : proposals.map((p) => p.id))}>
-              {sel.length ? `Confirmar ${sel.length} ${sel.length === 1 ? "selecionada" : "selecionadas"}` : "Confirmar todas"}
+            <button type="button" className="btn-quiet" onClick={() => setSel(allPicked ? [] : proposals.map((p) => p.id))}>
+              {allPicked ? "Limpar seleção" : "Selecionar todas as sugestões"}
             </button>
-            <button className="btn-quiet" disabled={!sel.length || dismiss.isPending} onClick={() => dismiss.mutate(sel)}>Recusar selecionadas</button>
+            <button type="button" className="btn-take" disabled={!picked.length || confirm.isPending} onClick={() => { setRound((r) => r + 1); review.current?.showModal(); }}>
+              Revisar e confirmar{picked.length ? ` (${picked.length})` : ""}
+            </button>
+            <ConfirmAction title={picked.length === 1 ? "Recusar 1 sugestão?" : `Recusar ${picked.length} sugestões?`}
+              description={<><p>As sugestões recusadas não serão publicadas e saem da agenda.</p>
+                <ul className="list-disc pl-5">{picked.map((p) => <li key={p.id}>{p.title || `Corte #${p.clip_id}`} · {platformName[p.platform] ?? p.platform}</li>)}</ul></>}
+              confirmLabel="Recusar" disabled={!picked.length} pending={dismiss.isPending} onConfirm={() => dismiss.mutate(picked.map((p) => p.id))}>
+              Recusar selecionadas
+            </ConfirmAction>
           </div>
         </section>
       )}
+      <dialog ref={review} className="confirmation-modal bulk-review" aria-labelledby="bulk-title">
+        <BulkReview key={round} items={picked} pending={confirm.isPending}
+          onCancel={() => review.current?.close()}
+          onConfirm={(ids) => { review.current?.close(); confirm.mutate(ids); }} />
+      </dialog>
       {refused.length > 0 && <Notice tone="danger"><ul>{refused.map(([k, v]) => <li key={k}>#{k}: {v.join("; ")}</li>)}</ul></Notice>}
       {confirm.isSuccess && confirm.data.confirmed.length > 0 && <Notice>{confirm.data.confirmed.length === 1 ? "Sugestão confirmada." : `${confirm.data.confirmed.length} sugestões confirmadas.`}</Notice>}
       {dismiss.isSuccess && <Notice>Sugestões recusadas.</Notice>}
@@ -158,6 +185,59 @@ export default function Agenda() {
       <dialog ref={dialog} className="confirmation-modal agenda-dialog" aria-labelledby="agenda-item-title" onClose={() => setOpen(null)}>
         {open && <EventDetail key={open.id} item={open} timezone={q.data?.timezone ?? TZ} onClose={() => dialog.current?.close()} onChanged={done} />}
       </dialog>
+    </div>
+  );
+}
+
+const count = (values: string[]) => Object.entries(values.reduce<Record<string, number>>((acc, v) => ({ ...acc, [v]: (acc[v] ?? 0) + 1 }), {}))
+  .map(([k, n]) => `${k} (${n})`).join(", ");
+
+/** What will happen if these proposals are confirmed, before anything is sent to the API. */
+function BulkReview({ items, pending, onCancel, onConfirm }: {
+  items: Item[]; pending: boolean; onCancel: () => void; onConfirm: (ids: number[]) => void;
+}) {
+  const [aware, setAware] = useState(false);
+  const publicOnes = items.filter((i) => i.privacy === "public");
+  const immediate = items.filter(sendsNow);
+  const risky = publicOnes.length > 0 || immediate.length > 0;
+  return (
+    <div className="space-y-4">
+      <h2 id="bulk-title" className="display text-xl">
+        {items.length === 1 ? "Confirmar 1 publicação?" : `Confirmar ${items.length} publicações?`}
+      </h2>
+      <dl className="bulk-summary">
+        <div><dt>Plataformas</dt><dd>{count(items.map((i) => platformName[i.platform] ?? i.platform))}</dd></div>
+        <div><dt>Contas</dt><dd>{count(items.map((i) => i.account || "sem nome"))}</dd></div>
+        <div><dt>Privacidade</dt><dd>{count(items.map((i) => PRIVACY[i.privacy] ?? i.privacy))}</dd></div>
+      </dl>
+      {immediate.length > 0 && <Notice tone="danger">
+        {immediate.length === 1 ? "1 sugestão já passou do horário e será enviada imediatamente" : `${immediate.length} sugestões já passaram do horário e serão enviadas imediatamente`} ao confirmar.
+      </Notice>}
+      {publicOnes.length > 0 && <Notice tone="danger">
+        {publicOnes.length === 1 ? "1 publicação é pública" : `${publicOnes.length} publicações são públicas`}: qualquer pessoa poderá ver assim que for ao ar.
+      </Notice>}
+      <ul className="bulk-list">
+        {items.map((i) => (
+          <li key={i.id}>
+            <span className="font-mono text-xs">{sendsNow(i) ? "agora" : `${i.when?.slice(8, 10)}/${i.when?.slice(5, 7)} ${i.when?.slice(11, 16)}`}</span>
+            <span className="min-w-0 flex-1"><strong className="block truncate text-sm">{i.title || `Corte #${i.clip_id}`}</strong>
+              <span className="text-xs text-ink-muted">{platformName[i.platform] ?? i.platform} · {i.account}</span></span>
+            <span className={i.privacy === "public" ? "text-xs font-semibold text-tally" : "text-xs text-ink-muted"}>{PRIVACY[i.privacy] ?? i.privacy}</span>
+          </li>
+        ))}
+      </ul>
+      {risky && (
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={aware} onChange={(e) => setAware(e.target.checked)} />
+          <span>Revisei a lista e entendo que {publicOnes.length ? "há publicações públicas" : ""}{publicOnes.length && immediate.length ? " e " : ""}{immediate.length ? "há envios imediatos" : ""}.</span>
+        </label>
+      )}
+      <div className="flex flex-wrap justify-end gap-2">
+        <button type="button" className="btn-quiet" onClick={onCancel}>Voltar sem confirmar</button>
+        <button type="button" className="btn-take" disabled={pending || !items.length || (risky && !aware)} onClick={() => onConfirm(items.map((i) => i.id))}>
+          {items.length === 1 ? "Confirmar 1 publicação" : `Confirmar ${items.length} publicações`}
+        </button>
+      </div>
     </div>
   );
 }

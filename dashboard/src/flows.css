@@ -185,3 +185,21 @@
   .guide-number { @apply grid size-8 shrink-0 place-items-center rounded-full border border-suite-outline font-mono text-sm; }
   .guide-steps > li[data-done] .guide-number { @apply border-ok text-ok; }
 }
+@layer components {
+  /* ---- bulk confirmation review ---- */
+  .bulk-review { width: min(36rem, calc(100% - 2rem)); }
+  .bulk-summary { @apply grid gap-1.5 text-sm; }
+  .bulk-summary div { @apply grid grid-cols-[6.5rem_1fr] gap-2; }
+  .bulk-summary dt { @apply text-ink-muted; }
+  .bulk-list { @apply max-h-64 divide-y divide-suite-line overflow-y-auto rounded-md border border-suite-line; }
+  .bulk-list li { @apply flex items-center gap-3 px-3 py-2; }
+}
+@layer components {
+  .admin-ack { @apply flex items-start gap-3 rounded-md border border-warning/60 bg-warning-dim p-3 text-sm text-ink; }
+  .admin-ack input { @apply mt-1; }
+}
+@layer components {
+  .check-state { @apply mb-3 flex items-center gap-2 text-sm text-ink-muted; }
+  .check-failed { @apply flex-wrap rounded-md border border-warning/60 bg-warning-dim px-3 py-2 text-warning; }
+  .check-failed strong { @apply text-ink; }
+}
