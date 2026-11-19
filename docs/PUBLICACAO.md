@@ -146,3 +146,35 @@ A tela mostrava uma privacidade diferente da que seria enviada.
   - se o contêiner já está `PUBLISHED` (o worker parou depois do `media_publish` e antes de gravar o ID), o sistema **nunca publica de novo**: recupera o ID pela legenda entre as mídias recentes ou falha pedindo conferência no perfil.
 
 **Ainda não validado com um Reel real:** nada foi publicado e nenhuma permissão OAuth foi alterada. A retomada do envio a partir do byte em que parou não está implementada: uma nova tentativa reenvia o arquivo inteiro para o **mesmo** contêiner.
+
+### Revisão do PR #3: resultado incerto e reconciliação
+
+**Quatro situações distintas:**
+
+| Situação | Como fica | Pode publicar de novo? |
+|---|---|---|
+| Falha antes da publicação (elegibilidade, autorização, envio, tentativas esgotadas) | `failed` com `failure=before_publish` | sim |
+| Recusa confirmada pela Meta (contêiner `ERROR`/`EXPIRED`) | `failed` com `failure=rejected_by_platform` | sim |
+| **Resultado incerto** (o Reel pode estar no perfil) | `uncertain` | **não**: só depois da reconciliação ou da sua conferência |
+| Publicação confirmada | `published` | não |
+
+**Proteções:**
+- **Uma chamada por tentativa:** o `media_publish` é registrado (`publish_called_at`) e gravado no banco **antes** de ser chamado, e nunca é repetido depois de uma resposta perdida.
+- **O que vira incerto:** timeout, erro de conexão ou erro 5xx no `media_publish`, e contêiner `PUBLISHED` sem identificação segura do Reel.
+- **Recusa clara 4xx da Meta** (sem permissão, mídia não pronta): conta como não publicado e permite nova tentativa.
+- **Contêiner ainda `FINISHED` 10 minutos depois de uma chamada sem resposta:** a Meta não publicou, e uma nova tentativa é segura.
+- **Reconciliação** (`_find_published`): só confirma quando há **exatamente um** Reel que cumpre ao mesmo tempo:
+  - tipo `REELS`;
+  - legenda **inteira** igual à enviada;
+  - publicado entre 2 min antes e 30 min depois da tentativa registrada.
+
+  São olhadas as últimas 50 mídias. Sem tentativa registrada, a legenda sozinha nunca basta. Zero ou mais de um candidato mantém o resultado incerto.
+- **Bloqueio de duplicação:** `create_publication` e o reenvio administrativo recusam reaproveitar uma publicação incerta, ou uma falha posterior a uma tentativa de publicar. Nada do estado anterior é apagado.
+- **Conferência manual:** na página Publicação, os botões "Está no perfil" (com link opcional, só de domínios das plataformas) e "Não foi publicado" registram o resultado. Só "Não foi publicado" libera um novo envio.
+- **Limpeza:** cortes com publicação incerta ou proposta pendente ficam protegidos.
+
+**Validação (simulada, sem publicar nada):**
+- fluxo manual completo pelo runner real: contêiner, envio em partes, `media_publish` e link;
+- a sequência pedida: a Meta publica, a resposta se perde, o Reel não é encontrado, a pessoa tenta de novo (recusado) e uma consulta posterior encontra o Reel e confirma, com **uma única** chamada ao `media_publish`;
+- candidatos ambíguos, legenda igual com horário ou tipo errado, e erro 5xx;
+- a publicação pública automática continua desligada (`auto_publish=false`, e regra automática pública sem a ativação explícita é recusada).

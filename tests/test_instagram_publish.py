@@ -145,14 +145,99 @@ def test_rejected_video_fails_with_the_platform_reason(meta):
     assert st["state"] == "failed" and "aspect ratio" in st["detail"] and meta.publish_count == 0
 
 
-def test_already_published_container_is_never_published_twice(meta):
+# ------------------------------------------------------------------ PR #3 review: uncertain outcomes
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S+0000")
+
+
+def _reel(mid, caption="A fuga\n\nCréditos: X", minutes=1, kind="REELS"):
+    from datetime import datetime, timedelta as td, timezone
+
+    return {"id": mid, "caption": caption, "media_product_type": kind,
+            "timestamp": _iso(datetime.now(timezone.utc) + td(minutes=minutes))}
+
+
+def _called(minutes_ago=0):
+    from datetime import datetime, timedelta as td, timezone
+
+    return (datetime.now(timezone.utc) - td(minutes=minutes_ago)).isoformat()
+
+
+def _timeout_on_publish(meta):
+    def handler(req):
+        if str(req.url).endswith("/media_publish"):
+            meta.publish_count += 1
+            raise httpx.ReadTimeout("no answer")
+        return meta.handler(req)
+    return lambda: httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_publish_attempt_is_saved_before_media_publish_and_a_timeout_is_uncertain(meta, monkeypatch):
+    saved = []
+    monkeypatch.setattr(instagram, "_client", _timeout_on_publish(meta))
+    st = instagram.status(_pub(upload_state={"container_id": "C123", "ig_user_id": "1789"}), TOK, saved.append)
+    assert saved and saved[0].get("publish_called_at")  # recorded BEFORE the call
+    assert st["state"] == "uncertain" and meta.publish_count == 1
+
+
+def test_lost_answer_then_published_container_without_a_match_stays_uncertain(meta):
     meta.container_status = "PUBLISHED"
-    meta.media_list = [{"id": "M999", "caption": "A fuga\n\nCréditos: X"}]
-    st = instagram.status(_pub(upload_state={"container_id": "C123", "ig_user_id": "1789"}), TOK)
-    assert st["media_id"] == "M999" and meta.publish_count == 0
     meta.media_list = []
+    state = {"container_id": "C123", "ig_user_id": "1789", "publish_called_at": _called()}
+    st = instagram.status(_pub(upload_state=state), TOK, lambda s: None)
+    assert st["state"] == "uncertain" and meta.publish_count == 0  # never publishes again
+
+
+def test_reconciliation_needs_full_caption_reel_type_and_attempt_window(meta):
+    meta.container_status = "PUBLISHED"
+    state = {"container_id": "C123", "ig_user_id": "1789", "publish_called_at": _called()}
+    cap = "A fuga\n\nCréditos: X"
+    meta.media_list = [_reel("WRONG1", cap + " (outro)"),     # same prefix, different caption
+                       _reel("WRONG2", cap, minutes=-90),     # too old: another post
+                       _reel("WRONG3", cap, kind="FEED"),     # not a Reel
+                       _reel("M999", cap)]
+    st = instagram.status(_pub(upload_state=state), TOK, lambda s: None)
+    assert st.get("media_id") == "M999" and meta.publish_count == 0
+    meta.media_list.append(_reel("M1000", cap, minutes=3))  # two plausible Reels
+    st = instagram.status(_pub(upload_state=state), TOK, lambda s: None)
+    assert st["state"] == "uncertain" and "ambígua" in st["detail"]
+
+
+def test_without_a_recorded_attempt_a_caption_match_is_not_enough(meta):
+    meta.container_status = "PUBLISHED"
+    meta.media_list = [_reel("M999")]
+    st = instagram.status(_pub(upload_state={"container_id": "C123", "ig_user_id": "1789"}), TOK, lambda s: None)
+    assert st["state"] == "uncertain" and meta.publish_count == 0
+
+
+def test_unanswered_call_on_a_still_unpublished_container_is_retried_only_after_a_while(meta):
+    saved = []
+    recent = {"container_id": "C123", "ig_user_id": "1789", "publish_called_at": _called(1)}
+    st = instagram.status(_pub(upload_state=recent), TOK, saved.append)
+    assert st["state"] == "processing" and meta.publish_count == 0  # Meta may still be publishing
+    old = {**recent, "publish_called_at": _called(15)}
+    st = instagram.status(_pub(upload_state=old), TOK, saved.append)
+    assert st["state"] == "processing" and "publish_called_at" not in saved[-1] and meta.publish_count == 0
+
+
+def test_clear_refusal_of_media_publish_is_not_uncertain(meta):
+    saved = []
+    meta.fail["/media_publish"] = httpx.Response(400, json={"error": {"message": "media not ready", "code": 9007}})
+    with pytest.raises(PublishError):
+        instagram.status(_pub(upload_state={"container_id": "C123", "ig_user_id": "1789"}), TOK, saved.append)
+    assert saved and "publish_called_at" not in saved[-1]  # Meta said no: nothing published
+
+
+def test_server_error_on_media_publish_is_uncertain(meta):
+    meta.fail["/media_publish"] = httpx.Response(502, text="bad gateway")
+    st = instagram.status(_pub(upload_state={"container_id": "C123", "ig_user_id": "1789"}), TOK, lambda s: None)
+    assert st["state"] == "uncertain"
+
+
+def test_rejected_video_is_a_safe_failure(meta):
+    meta.container_status = "ERROR"
     st = instagram.status(_pub(upload_state={"container_id": "C123", "ig_user_id": "1789"}), TOK)
-    assert st["state"] == "failed" and meta.publish_count == 0
+    assert st["state"] == "failed" and st["failure"] == "rejected_by_platform"
 
 
 # ------------------------------------------------------------------ API: privacy and reasons
@@ -220,3 +305,98 @@ def test_existing_invalid_rule_is_flagged_in_the_overview(admin):
         db.add(PublishRule(account_id=aid, mode="semi", privacy="private", min_score=0))  # as saved by the old UI
     rules = [r for r in admin.get("/api/publish/overview").json()["rules"] if r["account_id"] == aid]
     assert rules and "não existe nesta conta" in rules[0]["problems"][0]
+
+
+# ------------------------------------------------------------------ end to end through the runner
+def test_manual_instagram_flow_and_the_duplicate_after_an_uncertain_result(admin, meta, monkeypatch, tmp_path):
+    from clipper import queue, storage
+    from clipper.models import Publication
+    from clipper.publish import runner, service
+
+    cid, aid = _setup("e2e")
+    v = _video(tmp_path, 200_000)
+    monkeypatch.setattr(storage, "resolve", lambda rel: v)
+    monkeypatch.setattr(service, "tokens_for", lambda db, acct: TOK)
+    monkeypatch.setattr(runner, "MIN_GAP_BETWEEN_UPLOADS_S", 0)
+    with session_scope() as db:
+        db.get(Clip, cid).sha256 = ""
+    body = {"clip_id": cid, "account_id": aid, "title": "A fuga", "description": "Créditos: X", "privacy": "public",
+            "rights_confirmed": True}
+    r = admin.post("/api/publish/publications", json=body, headers=CSRF)
+    assert r.status_code == 200 and r.json()["privacy"] == "public"
+    pid = r.json()["id"]
+    with session_scope() as db:
+        jobs = queue.claim(db, runner.worker_id(), ["publish"], has_gpu=False, limit=20, lease_seconds=600)
+        jid = next(j.id for j in jobs if j.payload["publication_id"] == pid)
+        for j in jobs:
+            if j.id != jid:
+                queue.complete(db, j.id, runner.worker_id(), {})
+    runner.run_publish(jid, pid)  # container + streamed upload
+    with session_scope() as db:
+        assert db.get(Publication, pid).status == "processing"
+    # 1st poll: Meta publishes, but the answer is lost
+    monkeypatch.setattr(instagram, "_client", _timeout_on_publish(meta))
+    runner.poll_processing()
+    with session_scope() as db:
+        p = db.get(Publication, pid)
+        assert p.status == "uncertain" and p.upload_state.get("publish_called_at")
+    # 2nd poll: container PUBLISHED but the Reel is not found -> still uncertain, no second publish
+    meta.container_status, meta.media_list = "PUBLISHED", []
+    runner.poll_processing()
+    assert meta.publish_count == 1
+    # the person tries to publish the same clip again: refused, nothing erased
+    r = admin.post("/api/publish/publications", json=body, headers=CSRF)
+    assert r.status_code in (409, 422) and "incerto" in str(r.json())
+    assert admin.post(f"/api/publish/publications/{pid}/retry", headers=CSRF).status_code == 409
+    with session_scope() as db:
+        assert db.get(Publication, pid).upload_state.get("container_id") == "C123"
+    # a later poll finds exactly one matching Reel -> confirmed, still a single media_publish
+    meta.media_list = [_reel("M999")]
+    runner.poll_processing()
+    runner.poll_processing()
+    with session_scope() as db:
+        p = db.get(Publication, pid)
+        assert p.status == "published" and p.remote_url.startswith("https://www.instagram.com/reel/")
+    assert meta.publish_count == 1
+
+
+def test_person_resolves_an_uncertain_publication(admin):
+    from clipper.models import Publication
+
+    cid, aid = _setup("resolve")
+    with session_scope() as db:
+        p = Publication(clip_id=cid, account_id=aid, platform="instagram", status="uncertain", privacy="public",
+                        upload_state={"container_id": "C9", "publish_called_at": _called()})
+        db.add(p)
+        db.flush()
+        pid = p.id
+    body = {"clip_id": cid, "account_id": aid, "title": "x", "privacy": "public", "rights_confirmed": True,
+            "scheduled_at": (utcnow() + timedelta(days=3)).isoformat() + "Z"}
+    assert admin.post("/api/publish/publications", json=body, headers=CSRF).status_code in (409, 422)
+    bad = admin.post(f"/api/publish/publications/{pid}/resolve", json={"outcome": "published", "url": "javascript:x"},
+                     headers=CSRF)
+    assert bad.status_code == 422
+    r = admin.post(f"/api/publish/publications/{pid}/resolve", json={"outcome": "not_published"}, headers=CSRF)
+    assert r.status_code == 200 and r.json()["status"] == "failed"
+    r = admin.post("/api/publish/publications", json=body, headers=CSRF)
+    assert r.status_code == 200  # now safe: the person confirmed nothing was published
+
+
+def test_automatic_public_publishing_stays_disabled(admin):
+    s = admin.get("/api/settings").json()
+    assert s["auto_publish"] is False
+    cid, aid = _setup("auto")
+    r = admin.post("/api/publish/rules", json={"account_id": aid, "mode": "immediate", "privacy": "public"}, headers=CSRF)
+    assert r.status_code == 422  # fully automatic public needs the explicit opt-in (not given)
+
+
+def test_clip_with_an_uncertain_publication_is_protected_from_cleanup(admin):
+    from clipper import storage_lifecycle
+    from clipper.models import Publication
+
+    cid, aid = _setup("lc")
+    with session_scope() as db:
+        db.add(Publication(clip_id=cid, account_id=aid, platform="instagram", status="uncertain", privacy="public"))
+        db.flush()
+        why = storage_lifecycle.protection(db, db.get(Clip, cid))
+        assert "publicado ou agendado" in why

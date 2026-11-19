@@ -23,6 +23,7 @@ export const pubStatus: Record<string, [string, string]> = {
   draft: ["Rascunho", "text-ink-muted"], scheduled: ["Agendado", "text-take"], uploading: ["Enviando", "text-take"],
   processing: ["Processando na plataforma", "text-take"], published: ["Publicado", "text-ok"], failed: ["Falhou", "text-tally"],
   cancelled: ["Cancelado", "text-ink-faint"], proposed: ["Proposta", "text-take"], expired: ["Expirou", "text-ink-faint"],
+  uncertain: ["Resultado incerto: confira no perfil", "text-tally"],
 };
 const privacyLabel: Record<string, string> = {
   private: "Privado", unlisted: "Não listado", public: "Público", SELF_ONLY: "Só eu (TikTok)",
@@ -342,6 +343,7 @@ function Calendar({ accounts }: { accounts: PubAccount[] }) {
                         {p.remote_url && <a className="text-take" href={p.remote_url} target="_blank" rel="noreferrer" aria-label="Abrir publicação"><ExternalLink className="h-4 w-4" /></a>}
                         {["draft", "scheduled"].includes(p.status) && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => act.mutate({ id: p.id, a: "cancel" })}><X className="h-3 w-3" /> Cancelar</button>}
                         {p.status === "failed" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => act.mutate({ id: p.id, a: "retry" })}><RotateCcw className="h-3 w-3" /> Reenviar</button>}
+                        {p.status === "uncertain" && <ResolveButtons id={p.id} />}
                         {p.status === "published" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => act.mutate({ id: p.id, a: "metrics" })}>Atualizar métricas</button>}
                       </span>
                     </div>
@@ -361,5 +363,25 @@ function Calendar({ accounts }: { accounts: PubAccount[] }) {
         ))}
       </div>
     </Section>
+  );
+}
+
+/** An uncertain publication (the video may already be on the profile): the person checks and says. */
+function ResolveButtons({ id }: { id: number }) {
+  const qc = useQueryClient();
+  const res = useMutation({
+    mutationFn: (b: { outcome: "published" | "not_published"; url?: string }) => api.post(`/api/publish/publications/${id}/resolve`, b),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["publications"] }),
+  });
+  return (
+    <span className="inline-flex flex-wrap gap-1">
+      <button className="btn-quiet px-2 py-1 text-xs" disabled={res.isPending}
+        onClick={() => { const url = window.prompt("Está no perfil. Cole o link do vídeo (opcional):") ?? ""; res.mutate({ outcome: "published", url: url.trim() }); }}>
+        Está no perfil</button>
+      <button className="btn-quiet px-2 py-1 text-xs" disabled={res.isPending}
+        onClick={() => window.confirm("Conferiu no perfil e o vídeo NÃO foi publicado? Isso libera um novo envio.") && res.mutate({ outcome: "not_published" })}>
+        Não foi publicado</button>
+      <ErrorNote error={res.error} />
+    </span>
   );
 }

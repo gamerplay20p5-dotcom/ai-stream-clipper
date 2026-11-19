@@ -190,7 +190,7 @@ def upload(pub, tokens: Tokens, video: Path, save_state) -> UploadResult:
             return UploadResult(remote_id=st["media_id"], state="published")
         if not st.get("container_id"):  # created once: a restart never creates a second container
             _limit_ok(c, base, uid, tokens.access_token)
-            caption = (pub.title + "\n\n" + pub.description).strip()[:2200]
+            caption = _caption(pub)
             r = c.post(f"{base}/{uid}/media", data={"media_type": "REELS", "upload_type": "resumable",
                                                     "caption": caption, "share_to_feed": "true",
                                                     "access_token": tokens.access_token})
@@ -213,9 +213,27 @@ def upload(pub, tokens: Tokens, video: Path, save_state) -> UploadResult:
                         state="processing")
 
 
-def status(pub, tokens: Tokens) -> dict:
+UNCERTAIN = ("o resultado da publicação no Instagram é incerto: o Reel pode já estar no perfil. Nada será "
+             "enviado de novo até a conferência (automática ou sua)")
+RETRY_PUBLISH_AFTER_S = 600  # container still FINISHED this long after an unanswered media_publish -> not published
+
+
+def _caption(pub) -> str:
+    return (pub.title + "\n\n" + pub.description).strip()[:2200]
+
+
+def status(pub, tokens: Tokens, save_state=None) -> dict:
+    """Container status -> media_publish -> link. Outcomes: processing | published | failed (nothing
+    published: before publishing, or refused by Meta) | uncertain (the Reel may exist).
+
+    ``media_publish`` is called at most once per attempt and the attempt is SAVED BEFORE the call
+    (``publish_called_at``): if the answer is lost (timeout, 5xx, crash) the next poll reconciles
+    instead of publishing again."""
     st = dict(pub.upload_state or {})
     base = st.get("graph") or _base(tokens)
+    if not st.get("media_id") and not st.get("container_id"):
+        return {"state": "failed", "failure": "before_publish",
+                "detail": "publicação sem contêiner do Instagram: o envio não chegou a começar"}
     with _client() as c:
         if st.get("media_id"):
             r = c.get(f"{base}/{st['media_id']}", params={"fields": "permalink", "access_token": tokens.access_token})
@@ -225,36 +243,109 @@ def status(pub, tokens: Tokens) -> dict:
                                                           "access_token": tokens.access_token})
         d = check_response(r, "processamento (Instagram)")
         code = d.get("status_code")
-        if code in ("ERROR", "EXPIRED"):  # e.g. video rejected (format, duration, aspect ratio)
-            return {"state": "failed", "detail": f"o Instagram recusou o vídeo: {d.get('status') or code}"}
-        if code == "PUBLISHED":
-            # media_publish already went through (e.g. the worker stopped before saving the media id):
-            # NEVER publish again - recover the id from the account's latest media with this caption
-            mid = _find_published(c, base, st.get("ig_user_id"), pub, tokens)
+        called = st.get("publish_called_at")
+        if code in ("ERROR", "EXPIRED"):  # e.g. video rejected: Meta confirms nothing was published
+            return {"state": "failed", "failure": "rejected_by_platform",
+                    "detail": f"o Instagram recusou o vídeo: {d.get('status') or code}"}
+        if code == "PUBLISHED" or called:
+            if code == "FINISHED" and called and _age(called) >= RETRY_PUBLISH_AFTER_S:
+                # the container is still unpublished long after the unanswered call: Meta did NOT
+                # publish it -> a new attempt is safe (recorded again before calling)
+                st.pop("publish_called_at", None)
+                if save_state:
+                    save_state(st)
+                return {"state": "processing", "detail": "a publicação anterior não se concretizou; nova tentativa"}
+            if code == "FINISHED":
+                return {"state": "processing", "detail": "aguardando a confirmação da publicação"}
+            # PUBLISHED: never call media_publish again - reconcile with strong evidence only
+            mid, why = _find_published(c, base, st.get("ig_user_id"), pub, tokens, called)
             if mid:
-                return {"state": "processing", "detail": "publicado; recuperando o link", "media_id": mid}
-            return {"state": "failed", "detail": "o Instagram indica que o Reel já foi publicado, mas o ID não foi "
-                                                 "encontrado: confira no perfil (nada foi publicado de novo)"}
+                return {"state": "processing", "detail": "publicado; recuperando o link", "media_id": mid,
+                        "reconciled": why}
+            return {"state": "uncertain", "detail": f"{UNCERTAIN} ({why})"}
         if code != "FINISHED":
             return {"state": "processing", "detail": code}
-        r = c.post(f"{base}/{st['ig_user_id']}/media_publish",
-                   data={"creation_id": st["container_id"], "access_token": tokens.access_token})
-        d = check_response(r, "publicação (Instagram)")
+        st["publish_called_at"] = _now_iso()
+        if save_state:
+            save_state(st)  # committed BEFORE the call
+        try:
+            r = c.post(f"{base}/{st['ig_user_id']}/media_publish",
+                       data={"creation_id": st["container_id"], "access_token": tokens.access_token})
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            return {"state": "uncertain", "detail": f"{UNCERTAIN} (sem resposta da Meta: {type(exc).__name__})"}
+        if r.status_code >= 500:
+            return {"state": "uncertain", "detail": f"{UNCERTAIN} (erro {r.status_code} da Meta ao publicar)"}
+        try:
+            d = check_response(r, "publicação (Instagram)")
+        except PublishError:
+            # a clear 4xx refusal (permission, media not ready...): Meta did not publish it
+            st.pop("publish_called_at", None)
+            if save_state:
+                save_state(st)
+            raise
+        if not d.get("id"):
+            return {"state": "uncertain", "detail": f"{UNCERTAIN} (resposta sem ID)"}
         return {"state": "processing", "detail": "publicado; buscando o link", "media_id": d.get("id")}
 
 
-def _find_published(c: httpx.Client, base: str, uid: str | None, pub, tokens: Tokens) -> str | None:
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _age(iso: str) -> float:
+    from datetime import datetime, timezone
+
+    try:
+        t = datetime.fromisoformat(iso)
+    except ValueError:
+        return 0.0
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - t).total_seconds()
+
+
+def _find_published(c: httpx.Client, base: str, uid: str | None, pub, tokens: Tokens,
+                    called_at: str | None) -> tuple[str | None, str]:
+    """Identify OUR Reel among the account's recent media. Meta does not link a media to its
+    container, so ALL of these must hold, for exactly ONE media:
+      * product type REELS;
+      * the FULL caption equals the one we sent (not a prefix);
+      * published inside the window of our recorded publish attempt (-2 min .. +30 min).
+    Zero or several candidates -> (None, reason): the caller marks the result uncertain."""
+    from datetime import datetime, timedelta, timezone
+
     if not uid:
-        return None
-    r = c.get(f"{base}/{uid}/media", params={"fields": "id,caption,timestamp", "limit": 10,
+        return None, "conta sem ID"
+    if not called_at:
+        return None, "não há registro do horário da tentativa de publicação"
+    try:
+        t0 = datetime.fromisoformat(called_at)
+    except ValueError:
+        return None, "registro da tentativa inválido"
+    t0 = t0 if t0.tzinfo else t0.replace(tzinfo=timezone.utc)
+    lo, hi = t0 - timedelta(minutes=2), t0 + timedelta(minutes=30)
+    r = c.get(f"{base}/{uid}/media", params={"fields": "id,caption,timestamp,media_product_type", "limit": 50,
                                             "access_token": tokens.access_token})
     if r.status_code >= 400:
-        return None
-    want = (pub.title + "\n\n" + pub.description).strip()[:2200][:120]
+        return None, f"lista de mídias indisponível (HTTP {r.status_code})"
+    want = _caption(pub)
+    hits = []
     for m in (r.json() or {}).get("data") or []:
-        if (m.get("caption") or "")[:120] == want:
-            return str(m["id"])
-    return None
+        if m.get("media_product_type") not in (None, "REELS") or (m.get("caption") or "").strip() != want:
+            continue
+        try:
+            ts = datetime.strptime(m.get("timestamp", ""), "%Y-%m-%dT%H:%M:%S%z")
+        except ValueError:
+            continue
+        if lo <= ts <= hi and m.get("media_product_type") == "REELS":
+            hits.append(str(m["id"]))
+    if len(hits) == 1:
+        return hits[0], "legenda completa, tipo Reel e horário da tentativa conferem"
+    if not hits:
+        return None, "nenhum Reel com a mesma legenda no horário da tentativa"
+    return None, f"{len(hits)} Reels possíveis: identificação ambígua"
 
 
 def metrics(pub, tokens: Tokens) -> dict:

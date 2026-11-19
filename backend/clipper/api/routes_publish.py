@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -374,7 +375,10 @@ def retry(pid: int, request: Request, db: Session = Depends(get_db), user: Curre
         raise HTTPException(404, "publication not found")
     if p.status != "failed":
         raise HTTPException(409, "só publicações com falha podem ser reenviadas")
-    if p.remote_id and p.platform != "tiktok":
+    blockers = service.reuse_blockers(p)
+    if blockers:
+        raise HTTPException(409, blockers[0])
+    if p.remote_id and p.platform not in ("tiktok", "instagram"):
         raise HTTPException(409, "esta publicação já tem um vídeo na plataforma; verifique-o lá antes de reenviar")
     p.status, p.scheduled_at, p.attempts, p.last_error = "scheduled", None, 0, ""
     service.log_event(p, "retry_admin", f"por {user.email}")
@@ -499,3 +503,35 @@ def reschedule(pid: int, body: RescheduleIn, request: Request, db: Session = Dep
 @router.get("/report")
 def report(days: int = 30, db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
     return ed.report(db, days)
+
+
+class ResolveIn(BaseModel):
+    outcome: Literal["published", "not_published"]
+    url: str = Field("", max_length=1024)
+
+
+@router.post("/publications/{pid}/resolve")
+def resolve(pid: int, body: ResolveIn, request: Request, db: Session = Depends(get_db),
+            user: CurrentUser = Depends(require_admin)):
+    """The person checked the profile: register what really happened to an uncertain publication."""
+    p = db.get(Publication, pid)
+    if p is None:
+        raise HTTPException(404, "publication not found")
+    if p.status not in ("uncertain", "failed"):
+        raise HTTPException(409, "só publicações com resultado incerto ou falha podem ser conferidas")
+    if body.url and not re.match(r"^https://(www\.)?(instagram\.com|youtube\.com|youtu\.be|tiktok\.com)/", body.url):
+        raise HTTPException(422, "link inválido")
+    if body.outcome == "published":
+        p.status, p.published_at, p.last_error = "published", p.published_at or utcnow(), ""
+        if body.url:
+            p.remote_url = body.url
+    else:
+        p.status, p.last_error = "failed", "conferido: não foi publicado"
+        p.remote_status = {**(p.remote_status or {}), "failure": "confirmed_not_published"}
+        st = dict(p.upload_state or {})
+        st.pop("publish_called_at", None)
+        p.upload_state = st
+    service.log_event(p, "resolved", f"{body.outcome} por {user.email}")
+    audit(db, request, user, "publish.resolve", f"publication:{pid}", {"outcome": body.outcome})
+    db.commit()
+    return _pub(db, p)

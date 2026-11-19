@@ -35,7 +35,28 @@ PROVIDERS = {"youtube": youtube, "tiktok": tiktok, "instagram": instagram}
 PLATFORM_NAME = {"youtube": "YouTube Shorts", "tiktok": "TikTok", "instagram": "Instagram Reels"}
 MAX_DURATION = {"youtube": 180.0, "tiktok": 600.0, "instagram": 900.0}
 STATE_TTL = timedelta(minutes=15)
-ACTIVE = ("scheduled", "uploading", "processing")
+ACTIVE = ("scheduled", "uploading", "processing", "uncertain")
+# a failed publication may only be reused when it is CERTAIN nothing reached the platform
+SAFE_FAILURES = ("before_publish", "rejected_by_platform", "confirmed_not_published")
+
+
+def reuse_blockers(pub: Publication) -> list[str]:
+    """Why an existing publication of this clip on this account must NOT be restarted."""
+    if pub.status in ("cancelled", "expired"):
+        return []
+    if pub.status == "uncertain":
+        return ["a publicação anterior deste corte nesta conta tem resultado incerto (o vídeo pode já estar no "
+                "perfil): confira e registre o resultado antes de publicar de novo"]
+    if pub.status == "failed":
+        kind = (pub.remote_status or {}).get("failure")
+        st = pub.upload_state or {}
+        if kind in SAFE_FAILURES:
+            return []
+        if kind is None and not st.get("publish_called_at") and not st.get("media_id"):
+            return []  # older failure from before any publish attempt
+        return ["a publicação anterior falhou depois de uma tentativa de publicar: confira no perfil e registre o "
+                "resultado antes de publicar de novo"]
+    return [f"já existe uma publicação deste corte nesta conta ({pub.status})"]
 
 
 class PublishRefused(ValueError):
@@ -356,7 +377,13 @@ def create_publication(db: Session, clip: Clip, acct: PublishAccount, *, origin:
     """Idempotent: an existing publication of this clip on this account is returned, never duplicated."""
     existing = db.scalar(select(Publication).where(Publication.clip_id == clip.id, Publication.account_id == acct.id))
     if existing is not None and existing.status not in ("cancelled", "failed", "expired"):
+        if existing.status == "uncertain":
+            raise PublishRefused(reuse_blockers(existing))
         return existing
+    if existing is not None:
+        blockers = reuse_blockers(existing)
+        if blockers:
+            raise PublishRefused(blockers)
     problems = eligibility(db, clip, acct, auto=origin in ("auto", "semi"), rule=rule, privacy=privacy,
                            rights_confirmed=rights_confirmed, semi=origin == "semi")
     if problems:

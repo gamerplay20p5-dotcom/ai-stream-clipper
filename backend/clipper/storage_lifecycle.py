@@ -89,7 +89,7 @@ def protection(db: Session, clip: Clip) -> list[str]:
     if clip.status in BUSY:
         why.append(f"em processamento ({clip.status})")
     pubs = db.scalars(select(Publication.status).where(Publication.clip_id == clip.id)).all()
-    if any(s in ("scheduled", "uploading", "processing", "published", "draft") for s in pubs):
+    if any(s in ("scheduled", "uploading", "processing", "published", "draft", "proposed", "uncertain") for s in pubs):
         why.append("publicado ou agendado")
     running = any(int((j.payload or {}).get("clip_id", -1)) == clip.id for j in db.scalars(
         select(Job).where(Job.status.in_(("queued", "running")), Job.type.in_(("render", "vision_analyze")))))
