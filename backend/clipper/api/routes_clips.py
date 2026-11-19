@@ -159,6 +159,10 @@ def reject(cid: int, request: Request, db: Session = Depends(get_db), user: Curr
 @router.delete("/{cid}")
 def delete_clip(cid: int, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
     c = _get(db, cid)
+    from ..sharing import active_shares_of_clip
+
+    if active_shares_of_clip(db, cid):
+        raise HTTPException(409, "este corte está compartilhado com contas: revogue os compartilhamentos antes de excluir")
     db.delete(c)
     audit(db, request, user, "clip.delete", f"clip:{cid}", {"title": c.title})
     db.commit()
@@ -301,8 +305,8 @@ class StructureIn(BaseModel):
 
 
 class CompareIn(BaseModel):
-    left: Literal["main", "edit", "original"]
-    right: Literal["main", "edit", "original"]
+    left: Literal["main", "edit", "original", "format"]
+    right: Literal["main", "edit", "original", "format"]
     winner: Literal["left", "right", "equal"]
     blind: bool = True
     note: str = Field("", max_length=500)
@@ -348,7 +352,7 @@ def restructure(cid: int, body: StructureIn, request: Request, db: Session = Dep
 
 
 @router.get("/{cid}/variants/{name}/video")
-def variant_video(cid: int, name: Literal["edit", "original"], db: Session = Depends(get_db),
+def variant_video(cid: int, name: Literal["edit", "original", "format"], db: Session = Depends(get_db),
                   _: CurrentUser = Depends(current_user)):
     c = _get(db, cid)
     rec = ((c.provenance or {}).get("variants") or {}).get(name) or {}
@@ -357,7 +361,7 @@ def variant_video(cid: int, name: Literal["edit", "original"], db: Session = Dep
 
 
 @router.post("/{cid}/variants/{name}/promote")
-def promote_variant(cid: int, name: Literal["edit", "original"], request: Request, db: Session = Depends(get_db),
+def promote_variant(cid: int, name: Literal["edit", "original", "format"], request: Request, db: Session = Depends(get_db),
                     user: CurrentUser = Depends(require_admin)):
     from ..pipeline_structure import promote
 

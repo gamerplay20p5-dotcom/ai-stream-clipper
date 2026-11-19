@@ -91,6 +91,11 @@ def protection(db: Session, clip: Clip) -> list[str]:
     pubs = db.scalars(select(Publication.status).where(Publication.clip_id == clip.id)).all()
     if any(s in ("scheduled", "uploading", "processing", "published", "draft", "proposed", "uncertain") for s in pubs):
         why.append("publicado ou agendado")
+    from .sharing import active_shares_of_clip
+
+    shares = active_shares_of_clip(db, clip.id)
+    if shares:  # an account is entitled to watch it: the media stays while the authorisation is valid
+        why.append(f"compartilhado com {len(shares)} conta(s)")
     running = any(int((j.payload or {}).get("clip_id", -1)) == clip.id for j in db.scalars(
         select(Job).where(Job.status.in_(("queued", "running")), Job.type.in_(("render", "vision_analyze")))))
     if running:

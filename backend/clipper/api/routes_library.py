@@ -25,17 +25,21 @@ NO_STORE = {"Cache-Control": "private, no-store"}  # a revoked share must not ke
 NOT_FOUND = "não encontrado"
 
 
-def _shared(db: Session, user: CurrentUser, clip_id: int) -> tuple[ClipShare | None, Clip]:
-    """Admins see everything (share None); everyone else needs an ACTIVE share."""
+def _shared(db: Session, user: CurrentUser, clip_id: int) -> tuple[ClipShare | None, Clip, dict]:
+    """Admins see the clip's current media (share None); everyone else needs an ACTIVE share and
+    gets the media FROZEN in that share (the version the admin approved)."""
     clip = db.get(Clip, clip_id)
-    if clip is None or not clip.video_path:
+    if clip is None:
         raise HTTPException(404, NOT_FOUND)
     if user.is_admin:
-        return None, clip
+        if not clip.video_path:
+            raise HTTPException(404, NOT_FOUND)
+        live = ClipShare(clip_id=clip.id, follow_latest=True)
+        return None, clip, sharing.media(live, clip)
     s = sharing.active_share(db, user.id, clip_id)
     if s is None:
         raise HTTPException(404, NOT_FOUND)
-    return s, clip
+    return s, clip, sharing.media(s, clip)
 
 
 def _file(rel: str) -> storage.Path:
@@ -58,43 +62,42 @@ def library(db: Session = Depends(get_db), user: CurrentUser = Depends(authentic
 
 @router.get("/{clip_id}")
 def item(clip_id: int, db: Session = Depends(get_db), user: CurrentUser = Depends(authenticated_user)):
-    s, c = _shared(db, user, clip_id)
+    s, c, _m = _shared(db, user, clip_id)
     if s is None:  # admin preview of what an external account would see
-        s = ClipShare(clip_id=c.id, user_id=user.id, can_view=True, can_download=True, can_variants=True)
+        s = ClipShare(clip_id=c.id, user_id=user.id, can_view=True, can_download=True, can_variants=True,
+                      follow_latest=True)
     return sharing.public_clip(db, s, c)
 
 
 @router.get("/{clip_id}/video")
 def video(clip_id: int, db: Session = Depends(get_db), user: CurrentUser = Depends(authenticated_user)):
-    _s, c = _shared(db, user, clip_id)
-    return FileResponse(_file(c.video_path), media_type="video/mp4", headers=NO_STORE)
+    _s, _c, m = _shared(db, user, clip_id)
+    return FileResponse(_file(m["video"]), media_type="video/mp4", headers=NO_STORE)
 
 
 @router.get("/{clip_id}/thumbnail")
 def thumbnail(clip_id: int, db: Session = Depends(get_db), user: CurrentUser = Depends(authenticated_user)):
-    _s, c = _shared(db, user, clip_id)
-    return FileResponse(_file(c.thumb_path), media_type="image/jpeg", headers=NO_STORE)
+    _s, _c, m = _shared(db, user, clip_id)
+    return FileResponse(_file(m["thumb"]), media_type="image/jpeg", headers=NO_STORE)
 
 
 @router.get("/{clip_id}/download")
 def download(clip_id: int, request: Request, db: Session = Depends(get_db),
              user: CurrentUser = Depends(authenticated_user)):
-    s, c = _shared(db, user, clip_id)
+    s, c, m = _shared(db, user, clip_id)
     if s is not None and not s.can_download:
         raise HTTPException(403, "download não liberado para este vídeo")
     slug = re.sub(r"[^a-z0-9]+", "-", (c.title or f"corte-{c.id}").lower()).strip("-")[:60] or f"corte-{c.id}"
     audit(db, request, user, "library.download", f"clip:{c.id}")
     db.commit()
-    return FileResponse(_file(c.video_path), media_type="video/mp4", filename=f"{slug}-{c.id}.mp4", headers=NO_STORE)
+    return FileResponse(_file(m["video"]), media_type="video/mp4", filename=f"{slug}-{c.id}.mp4", headers=NO_STORE)
 
 
 @router.get("/{clip_id}/variants/{name}/video")
 def variant_video(clip_id: int, name: Literal["edit", "original", "format"], db: Session = Depends(get_db),
                   user: CurrentUser = Depends(authenticated_user)):
-    s, c = _shared(db, user, clip_id)
+    s, _c, m = _shared(db, user, clip_id)
     if s is not None and not s.can_variants:
         raise HTTPException(404, NOT_FOUND)
-    rec = ((c.provenance or {}).get("variants") or {}).get(name) or {}
-    if rec.get("state") != "done":
-        raise HTTPException(404, NOT_FOUND)
+    rec = m["variants"].get(name) or {}
     return FileResponse(_file(rec.get("video_path", "")), media_type="video/mp4", headers=NO_STORE)

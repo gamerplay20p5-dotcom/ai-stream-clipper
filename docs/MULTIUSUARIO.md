@@ -68,8 +68,22 @@ Se existir alguma conta `viewer` em uso interno, ela perde o acesso ao painel co
 - **Índices:** `uq_clip_shares_active` é único em `(clip_id, user_id)` **quando `revoked_at IS NULL`** (um único compartilhamento ativo, com histórico ilimitado); `ix_clip_shares_user_active` cobre `(user_id, revoked_at)`.
 - **Usuários:** `users.session_version` (int, padrão 0).
 - **Downgrade:** renomeia para `clip_shares_preserved` (o histórico de acesso nunca é apagado) e remove `session_version`. O upgrade seguinte restaura os dados.
-- **Revisão:** a 0012 revisa a **0010**, a head de produção. Se o PR #4 (0011) for mesclado antes, `down_revision` passa a ser `'0011'`; é uma linha.
+- **Revisão:** a 0012 revisa a **0011** (PR #4). A cadeia é linear, com head única: `0010 → 0011 → 0012` (testado). O branch deste PR já contém o PR #4.
 - **Compatibilidade:** tokens emitidos antes desta versão não têm `sv` e valem como versão 0. Ninguém é deslogado no deploy.
+
+### Versão exata e imutável do vídeo compartilhado
+
+- **Snapshot:** ao compartilhar, a conta recebe um **snapshot** da mídia aprovada naquele momento:
+  - `video_path`, `video_sha256`, `video_bytes`, `thumb_path` e `clip_version`;
+  - as variantes prontas naquela hora (`variants`).
+- **Re-edição não troca nada:** uma reedição, um novo render ou uma variante promovida **não mudam** o que a conta assiste. O painel da equipe mostra a versão nova, e o convidado continua com a aprovada. O compartilhamento aparece como `outdated: true` para a equipe.
+- **Trocar de versão é explícito:** `POST /api/shares/{id}/reapprove` (ou compartilhar de novo).
+- **Acompanhar a mais recente:** é uma escolha explícita, `follow_latest: true`, desligada por padrão.
+- **Arquivo preservado enquanto a autorização vale** (compartilhamento não revogado e não expirado):
+  - **re-render ou troca de variante:** o arquivo do snapshot entra na lista de arquivos referenciados, que **nunca** são apagados nem sobrescritos (a mesma lista dos snapshots de publicação);
+  - **limpeza por nota:** o corte fica **protegido** ("compartilhado com N conta(s)"). A quarentena não o seleciona e o purge, que reconfere a proteção, cancela;
+  - **exclusão do corte:** `DELETE /api/clips/{id}` é **recusado (409)** enquanto houver compartilhamento válido; é preciso revogar antes;
+  - um compartilhamento **expirado ou revogado** deixa de segurar a mídia.
 
 ## 3. Endpoints
 
@@ -83,9 +97,10 @@ Se existir alguma conta `viewer` em uso interno, ela perde o acesso ao painel co
 | `POST /api/admin/users/{id}/reset-password` | nova senha única e sessões encerradas |
 | `POST /api/admin/users/{id}/end-sessions` | encerra as sessões abertas |
 | `GET /api/admin/users/{id}/shares[?include_revoked]` | cortes compartilhados com a conta |
-| `POST /api/shares` `{email, clip_ids[], can_download=false, can_variants=false, expires_at?}` | compartilha um ou vários cortes **renderizados** com uma conta **existente e ativa**. O e-mail é normalizado; conta inexistente dá **404 "conta não encontrada"**, e nada é criado nem enviado. Repetir atualiza as permissões. Devolve `shared` e `refused` (por corte, com o motivo) |
+| `POST /api/shares` `{email, clip_ids[], can_download=false, can_variants=false, expires_at?, follow_latest=false}` | compartilha um ou vários cortes **renderizados** com uma conta **existente e ativa**. O e-mail é normalizado; conta inexistente dá **404 "conta não encontrada"**, e nada é criado nem enviado. Repetir atualiza as permissões. Devolve `shared` e `refused` (por corte, com o motivo) |
 | `GET /api/shares[?clip_id&user_id&include_revoked]` | lista os compartilhamentos, com estado ativo, expirado ou revogado |
 | `PATCH /api/shares/{id}` `{can_download?, can_variants?, expires_at?, clear_expiry?}` | ajusta as permissões |
+| `POST /api/shares/{id}/reapprove` | passa o compartilhamento para a versão **atual** do corte (decisão explícita) |
 | `DELETE /api/shares/{id}` | **revoga** (fica no histórico); vale na próxima requisição da conta |
 
 Todas as ações ficam em `audit_logs`.
@@ -146,7 +161,7 @@ A estrutura acomoda os planos sem misturá-los com o compartilhamento:
 
 **Decisão fixa:** contas externas **nunca** publicam automaticamente, em nenhum plano. O publicador continua exclusivo da equipe, e as rotas de publicação já são `current_user` (equipe).
 
-## 6. Testes (`tests/test_multiuser.py`, 18)
+## 6. Testes (`tests/test_multiuser.py`, 24, e `tests/test_e2e_sharing.py`, 1)
 
 Todos passam:
 - administrador vê tudo;
@@ -167,10 +182,37 @@ Todos passam:
 - contas criadas como `viewer`, com senha única que nunca vai para o log;
 - não é possível ficar sem administrador;
 - tentativas de IDOR e de escalada de privilégio são bloqueadas;
-- **varredura de todas as rotas da API** com uma conta externa: nenhuma responde 2xx fora da lista permitida;
+- **varredura de todas as rotas da API** com uma conta externa: toda rota da equipe responde **exatamente 403** ("acesso restrito à equipe"). Um 404, 405 ou 422 **não** conta como prova de bloqueio. Há também um **controle positivo**: o administrador não recebe 403 em nenhum GET, o que prova que o bloqueio vem da permissão;
+- rotas da biblioteca: o mesmo endereço responde 404 sem compartilhamento e 200 com ele (muda só a autorização);
+- a versão aprovada continua sendo servida depois de um **re-render real** pelo endpoint do worker; o arquivo antigo não é apagado; a troca só acontece com `reapprove`;
+- `follow_latest` é explícito; as variantes também ficam congeladas;
+- a mídia compartilhada fica protegida na limpeza e na exclusão enquanto é válida, e deixa de estar quando expira;
+- quarentena e purge pulam o corte compartilhado;
+- **ponta a ponta com duas contas** (`test_e2e_sharing.py`), contra a **API real** (processo uvicorn, HTTP, cookies):
+  1. o administrador cria a conta convidada e compartilha 3 de 5 vídeos;
+  2. o convidado vê **exatamente os 3**, assiste com Range (206) e recebe 403 no download;
+  3. os outros 2 dão 404 na biblioteca e 403 no painel;
+  4. revogar um corta o acesso **na mesma sessão aberta**;
+  5. desativar a conta encerra a sessão;
 - migração 0012 preserva o histórico.
 
-Suíte completa: 317 passando.
+Suíte completa da versão integrada (#4 + #6): **349 passando**. Typecheck, verificação de privacidade e build do painel OK.
+
+## 7. Ordem de integração (#4 → #5 → #6)
+
+| Passo | PR | Observação |
+|---|---|---|
+| 1 | **#4** (6C, v0.6.3, migração 0011) | backend e frontend da 6C |
+| 2 | **#5** (redesign HTS, Codex) | é baseado no branch do #4. Depois que o #4 entrar, o base do #5 passa a ser `main`. Só toca no frontend (`dashboard/`, `docs/design`) |
+| 3 | **#6** (multiusuário, v0.7.0, migração 0012) | já contém o #4 e a cadeia 0011 → 0012. Depois do #5, atualizo o branch com o `main` (merge, sem force push). O único conflito esperado é o número da versão em `dashboard/package.json` |
+
+Para o #5 (Codex), o contrato do backend está nas seções 3 e 4: `GET /api/auth/me` (`staff` e `areas`), `/api/admin/users*`, `/api/shares*` (incluindo `follow_latest` e `reapprove`) e `/api/library*`. A autorização vale sempre no backend: a interface só escolhe o que mostrar.
+
+**Deploy (depois da autorização):**
+1. backup validado;
+2. `alembic upgrade` aplica a 0011 e a 0012;
+3. conferir os três servidores;
+4. auditoria do banco com as consultas da seção 1. **Ainda pendente:** os servidores seguem inacessíveis desta máquina; nenhuma mudança foi feita na produção.
 
 ---
 
@@ -182,3 +224,5 @@ Suíte completa: 317 passando.
 - **Not included:** e-mail, public sign-up and billing.
 - **Tests:** 18 security tests, including a crawl of every API route with an external session; 317 passing overall.
 - **Pending:** the live database audit could not run because the servers were unreachable; the exact read-only queries are listed in section 1.
+
+**Update (review of PR #6):** each share freezes the approved media (path, sha256, size, thumbnail, version and variants). Re-edits never change what a guest watches unless the admin re-approves or chose `follow_latest`. Shared files are kept by the renderer and by storage cleanup and quarantine while the share is valid, and deleting a shared clip is refused. The crawl requires exactly 403, with an admin positive control. The two-account end-to-end test runs against a real API process. Migration 0012 follows 0011 with a single head. 349 tests pass.

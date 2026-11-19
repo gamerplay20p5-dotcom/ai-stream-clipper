@@ -45,7 +45,10 @@ def _user(db: Session, u: User) -> dict:
 def _share(db: Session, s: ClipShare) -> dict:
     c = db.get(Clip, s.clip_id)
     u = db.get(User, s.user_id)
+    current = bool(c and (s.follow_latest or s.video_path == c.video_path))
     return {"id": s.id, "clip_id": s.clip_id, "clip_title": c.title if c else None, "user_id": s.user_id,
+            "follow_latest": s.follow_latest, "shared_version": s.clip_version,
+            "outdated": not current,  # the clip was re-edited after this share: the old version is still served
             "email": u.email if u else None, "can_view": s.can_view, "can_download": s.can_download,
             "can_variants": s.can_variants, "expires_at": _iso(s.expires_at), "created_at": _iso(s.created_at),
             "revoked_at": _iso(s.revoked_at),
@@ -160,6 +163,7 @@ class ShareIn(BaseModel):
     can_download: bool = False
     can_variants: bool = False
     expires_at: datetime | None = None
+    follow_latest: bool = False  # default: the exact version approved now, never silently replaced
 
     @field_validator("email")
     @classmethod
@@ -180,7 +184,7 @@ def create_shares(body: ShareIn, request: Request, db: Session = Depends(get_db)
     try:
         out = sharing.share(db, admin_id=admin.id, email=body.email, clip_ids=body.clip_ids,
                             can_download=body.can_download, can_variants=body.can_variants,
-                            expires_at=_naive_utc(body.expires_at))
+                            expires_at=_naive_utc(body.expires_at), follow_latest=body.follow_latest)
     except sharing.ShareError as exc:
         db.rollback()
         raise HTTPException(404 if "não encontrada" in str(exc) else 422, str(exc)) from exc
@@ -220,6 +224,22 @@ def update_share(sid: int, body: SharePatch, request: Request, db: Session = Dep
     elif body.expires_at is not None:
         s.expires_at = _naive_utc(body.expires_at)
     audit(db, request, admin, "shares.update", f"share:{sid}", {k: str(v) for k, v in data.items()})
+    db.commit()
+    return _share(db, s)
+
+
+@router.post("/api/shares/{sid}/reapprove")
+def reapprove_share(sid: int, request: Request, db: Session = Depends(get_db),
+                    admin: CurrentUser = Depends(require_admin)):
+    """Explicitly switch an active share to the clip's CURRENT version (a re-edit never does it alone)."""
+    s = db.get(ClipShare, sid)
+    if s is None or s.revoked_at is not None:
+        raise HTTPException(404, "compartilhamento ativo não encontrado")
+    c = db.get(Clip, s.clip_id)
+    if c is None or not c.video_path:
+        raise HTTPException(409, "o corte não tem vídeo renderizado")
+    sharing.snapshot(s, c)
+    audit(db, request, admin, "shares.reapprove", f"share:{sid}", {"version": c.version})
     db.commit()
     return _share(db, s)
 

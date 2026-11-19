@@ -269,13 +269,15 @@ def test_external_account_cannot_change_permissions_or_reach_admin_apis(app, adm
     assert at.get(f"/api/library/{cid}/video?user_id={victim}").status_code == 404
 
 
-def test_every_api_route_is_closed_to_an_external_account(app, store):
-    """Crawl the whole API with a viewer session: nothing outside the allow-list may answer 2xx."""
+def test_every_api_route_is_closed_to_an_external_account(app, admin, store):
+    """Crawl the whole API with a viewer session. Every staff route must answer EXACTLY 403 - a 404,
+    405 or 422 would NOT prove that the permission blocked it (it could be a bad payload or path).
+    Positive control: the same requests as admin never get 403, so the 403 comes from the role."""
     _account("crawler@externo.com")
     u = _login(app, "crawler@externo.com")
     allow = re.compile(r"^/api/(auth/(login|logout|me|config)|library(/.*)?|publish/oauth/\{platform\}/callback)$")
     spec = app.openapi()
-    checked = 0
+    checked, admin_403 = 0, []
     for path, ops in spec["paths"].items():
         if not path.startswith("/api/") or allow.match(path):
             continue
@@ -285,9 +287,28 @@ def test_every_api_route_is_closed_to_an_external_account(app, store):
                 continue
             r = u.request(method.upper(), url, json={}, headers=CSRF)
             checked += 1
-            assert r.status_code in (401, 403, 404, 405, 422), (method, path, r.status_code)
-            assert not (200 <= r.status_code < 300), (method, path)
+            assert r.status_code == 403, (method, path, r.status_code, r.text[:120])
+            assert r.json().get("detail") == "acesso restrito à equipe", (method, path)
+            if method.upper() == "GET":  # positive control (read-only, no side effects)
+                ra = admin.get(url)
+                if ra.status_code == 403:
+                    admin_403.append(path)
     assert checked > 100  # the whole panel was exercised
+    assert admin_403 == [], admin_403
+
+
+def test_library_routes_answer_by_share_not_by_payload(app, admin, store):
+    """The allow-listed library: a viewer gets 404 for a clip that is not shared (no existence hint)
+    and 200 once shared - the same URL, only the authorisation changed."""
+    cid = _clip(store, "ctl")
+    _account("ctl@externo.com")
+    u = _login(app, "ctl@externo.com")
+    for suffix in ("", "/video", "/thumbnail", "/download", "/variants/edit/video"):
+        assert u.get(f"/api/library/{cid}{suffix}").status_code == 404, suffix
+    _share(admin, "ctl@externo.com", [cid])
+    for suffix in ("", "/video", "/thumbnail"):
+        assert u.get(f"/api/library/{cid}{suffix}").status_code == 200, suffix
+    assert u.get(f"/api/library/{cid}/download").status_code == 403  # shared, but download not allowed
 
 
 # ------------------------------------------------------------------ migration
@@ -315,3 +336,108 @@ def test_0012_keeps_share_history_on_downgrade(tmp_path):
     upgrade_db(url, "head")
     with eng.begin() as c:
         assert c.execute(sa.text("SELECT count(*) FROM clip_shares")).scalar() == 2
+
+
+# ------------------------------------------------------------------ immutable shared version (PR #6 review)
+def _render(client, cid: int, data: bytes, version: int, **params):
+    """A real re-render delivery through the worker endpoint (server-named file, old-file cleanup)."""
+    import hashlib
+    from urllib.parse import urlencode
+
+    from conftest import sign_headers
+
+    path = f"/internal/clips/{cid}/video?" + urlencode({"version": version, **params})
+    h = sign_headers("PUT", path, data, worker="206-render")
+    h["x-asc-content-sha256"] = hashlib.sha256(data).hexdigest()
+    r = client.put(path, content=data, headers={**h, "Content-Type": "application/octet-stream"})
+    assert r.status_code == 200 and r.json()["ok"], r.text
+
+
+def test_share_keeps_serving_the_approved_version_after_a_re_render(app, admin, client, store):
+    cid = _clip(store, "snap")
+    _account("snap@externo.com")
+    sid = _share(admin, "snap@externo.com", [cid])["shared"][0]
+    u = _login(app, "snap@externo.com")
+    approved = u.get(f"/api/library/{cid}/video").content
+    with session_scope() as db:
+        c = db.get(Clip, cid)
+        c.version, c.status = 2, "rendering"
+        old_path = c.video_path
+    _render(client, cid, b"NOVA-EDICAO" * 300, 2)  # the admin re-edits/re-renders the clip
+    with session_scope() as db:
+        assert db.get(Clip, cid).video_path != old_path  # the panel now shows the new version
+    assert (store / old_path).exists()  # the approved file was NOT deleted (still referenced by the share)
+    assert u.get(f"/api/library/{cid}/video").content == approved  # the guest still gets the approved one
+    assert admin.get(f"/api/library/{cid}/video").content == b"NOVA-EDICAO" * 300
+    row = admin.get(f"/api/shares?clip_id={cid}").json()[0]
+    assert row["outdated"] is True and row["follow_latest"] is False
+    assert admin.post(f"/api/shares/{sid}/reapprove", headers=CSRF).json()["outdated"] is False
+    assert u.get(f"/api/library/{cid}/video").content == b"NOVA-EDICAO" * 300  # only after explicit re-approval
+
+
+def test_follow_latest_is_an_explicit_choice(app, admin, client, store):
+    cid = _clip(store, "live")
+    _account("live@externo.com")
+    _share(admin, "live@externo.com", [cid], follow_latest=True)
+    u = _login(app, "live@externo.com")
+    with session_scope() as db:
+        c = db.get(Clip, cid)
+        c.version, c.status = 2, "rendering"
+    _render(client, cid, b"ATUAL" * 300, 2)
+    assert u.get(f"/api/library/{cid}/video").content == b"ATUAL" * 300
+    assert u.get(f"/api/library/{cid}").json()["version"] == "atual"
+
+
+def test_shared_variants_are_frozen_too(app, admin, store):
+    cid = _clip(store, "vfrz", variants=True)
+    _account("vfrz@externo.com")
+    _share(admin, "vfrz@externo.com", [cid], can_variants=True)
+    u = _login(app, "vfrz@externo.com")
+    before = u.get(f"/api/library/{cid}/variants/edit/video").content
+    with session_scope() as db:  # a new variant render replaces the panel's variant
+        c = db.get(Clip, cid)
+        (store / "clips" / str(cid) / "clip_v1_edit_z.mp4").write_bytes(b"\x07" * 999)
+        prov = dict(c.provenance)
+        prov["variants"] = {"edit": {**prov["variants"]["edit"], "video_path": f"clips/{cid}/clip_v1_edit_z.mp4"}}
+        c.provenance = prov
+    assert u.get(f"/api/library/{cid}/variants/edit/video").content == before
+
+
+def test_shared_media_is_protected_from_cleanup_and_deletion_while_valid(app, admin, store):
+    from clipper import storage_lifecycle as lc
+
+    cid = _clip(store, "keep")
+    _account("keep@externo.com")
+    sid = _share(admin, "keep@externo.com", [cid])["shared"][0]
+    with session_scope() as db:
+        assert any("compartilhado" in w for w in lc.protection(db, db.get(Clip, cid)))
+    assert admin.delete(f"/api/clips/{cid}", headers=CSRF).status_code == 409
+    assert (store / "clips" / str(cid) / "clip_v1_x.mp4").exists()
+    with session_scope() as db:  # an EXPIRED share no longer holds the media
+        db.get(ClipShare, sid).expires_at = utcnow() - timedelta(seconds=1)
+    with session_scope() as db:
+        assert not any("compartilhado" in w for w in lc.protection(db, db.get(Clip, cid)))
+    with session_scope() as db:
+        db.get(ClipShare, sid).expires_at = None
+    admin.delete(f"/api/shares/{sid}", headers=CSRF)  # revoked: the admin may now delete the clip
+    assert admin.delete(f"/api/clips/{cid}", headers=CSRF).status_code == 200
+
+
+def test_quarantine_and_purge_skip_shared_clips(admin, store):
+    from clipper import storage_lifecycle as lc
+    from clipper.settings_store import AISettings
+
+    cid = _clip(store, "purge")
+    _account("purge@externo.com")
+    _share(admin, "purge@externo.com", [cid])
+    with session_scope() as db:
+        c = db.get(Clip, cid)
+        c.score, c.created_at = 5.0, utcnow() - timedelta(days=60)
+        lc.save_state(db, {"enabled_at": (utcnow() - timedelta(days=90)).isoformat(), "retro_authorized": True})
+        s = AISettings(cleanup_enabled=True, cleanup_dry_run=False, cleanup_keep_min_score=50, cleanup_below_min_days=0)
+        lc.run(db, s)
+        assert db.get(Clip, cid).lifecycle == "active"
+        c.lifecycle, c.purge_after = "quarantined", utcnow() - timedelta(seconds=1)  # quarantined before the share
+        db.flush()
+        assert lc.purge(db, cid, s) == 0 and db.get(Clip, cid).lifecycle == "active"
+    assert (store / "clips" / str(cid) / "clip_v1_x.mp4").exists()

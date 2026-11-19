@@ -610,3 +610,81 @@ class ClipShare(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     revoked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # immutable media snapshot: the exact file the admin approved for this account. A later re-edit,
+    # re-render or promoted variant never changes what is shared (unless follow_latest is chosen).
+    video_path: Mapped[str] = mapped_column(String(512), default="")
+    video_sha256: Mapped[str] = mapped_column(String(64), default="")
+    video_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    thumb_path: Mapped[str] = mapped_column(String(512), default="")
+    clip_version: Mapped[int] = mapped_column(Integer, default=0)
+    variants: Mapped[dict] = mapped_column(JSON, default=dict)  # {name: {video_path, sha256, label}}
+    follow_latest: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6C - references lab and visual format profiles
+# ---------------------------------------------------------------------------
+
+
+class RefItem(Base):
+    """A reference channel/profile/video registered by the owner. API data (``api_data``) is kept
+    apart from the owner's own notes and expires (YouTube API policy: refresh or delete <= 30 days)."""
+
+    __tablename__ = "ref_items"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    platform: Mapped[str] = mapped_column(String(16))  # youtube | instagram | other
+    kind: Mapped[str] = mapped_column(String(16))  # channel | video | short | profile | reel | post | image
+    url: Mapped[str] = mapped_column(String(1024), default="")
+    external_id: Mapped[str] = mapped_column(String(128), default="", index=True)
+    handle: Mapped[str] = mapped_column(String(128), default="")
+    title: Mapped[str] = mapped_column(String(300), default="")
+    category: Mapped[str] = mapped_column(String(64), default="")
+    games: Mapped[list] = mapped_column(JSON, default=list)
+    humor: Mapped[list] = mapped_column(JSON, default=list)
+    formats: Mapped[list] = mapped_column(JSON, default=list)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    why: Mapped[str] = mapped_column(Text, default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    image_path: Mapped[str] = mapped_column(String(512), default="")
+    api_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    api_source: Mapped[str] = mapped_column(String(64), default="")  # e.g. youtube-data-api-v3
+    api_fetched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    api_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    created_by: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class RefCollection(Base):
+    __tablename__ = "ref_collections"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class RefCollectionItem(Base):
+    __tablename__ = "ref_collection_items"
+    collection_id: Mapped[int] = mapped_column(ForeignKey("ref_collections.id", ondelete="CASCADE"), primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("ref_items.id", ondelete="CASCADE"), primary_key=True)
+
+
+class FormatProfile(Base):
+    """Abstract visual format (layout, webcam, captions, badge...) extracted from a screenshot or
+    written by hand. Never stores third-party logos/graphics: only parameters."""
+
+    __tablename__ = "format_profiles"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    item_id: Mapped[int | None] = mapped_column(ForeignKey("ref_items.id", ondelete="SET NULL"), nullable=True)
+    image_path: Mapped[str] = mapped_column(String(512), default="")  # the uploaded print (owner's upload)
+    avatar_path: Mapped[str] = mapped_column(String(512), default="")  # OUR avatar for the badge (owner's upload)
+    status: Mapped[str] = mapped_column(String(16), default="draft")  # draft | queued | ready | failed
+    analysis: Mapped[dict] = mapped_column(JSON, default=dict)
+    params: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str] = mapped_column(Text, default="")
+    favorite: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

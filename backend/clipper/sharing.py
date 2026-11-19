@@ -40,13 +40,51 @@ def shared_clips(db: Session, user_id: int) -> list[tuple[ClipShare, Clip]]:
     now = utcnow()
     rows = db.execute(select(ClipShare, Clip).join(Clip, Clip.id == ClipShare.clip_id).where(
         ClipShare.user_id == user_id, ClipShare.revoked_at.is_(None), ClipShare.can_view.is_(True),
-        or_(ClipShare.expires_at.is_(None), ClipShare.expires_at > now), Clip.video_path != "")
+        or_(ClipShare.expires_at.is_(None), ClipShare.expires_at > now),
+        or_(ClipShare.video_path != "", Clip.video_path != ""))
         .order_by(ClipShare.created_at.desc())).all()
     return [(s, c) for s, c in rows]
 
 
+def snapshot(s: ClipShare, clip: Clip) -> None:
+    """Freeze the exact media approved now (main video, thumbnail and the variants ready now)."""
+    s.video_path, s.video_sha256, s.video_bytes = clip.video_path, clip.sha256 or "", clip.file_size or 0
+    s.thumb_path, s.clip_version = clip.thumb_path or "", clip.version or 0
+    s.variants = {name: {"video_path": rec["video_path"], "sha256": rec.get("sha256", ""),
+                         "label": rec.get("label") or name}
+                  for name, rec in ((clip.provenance or {}).get("variants") or {}).items()
+                  if rec.get("state") == "done" and rec.get("video_path")}
+
+
+def media(s: ClipShare, clip: Clip) -> dict:
+    """What this share serves: the frozen snapshot, or the clip's current media with follow_latest."""
+    if s.follow_latest or not s.video_path:
+        live = {name: {"video_path": rec["video_path"], "label": rec.get("label") or name}
+                for name, rec in ((clip.provenance or {}).get("variants") or {}).items()
+                if rec.get("state") == "done" and rec.get("video_path")}
+        return {"video": clip.video_path, "thumb": clip.thumb_path, "variants": live}
+    return {"video": s.video_path, "thumb": s.thumb_path, "variants": s.variants or {}}
+
+
+def active_shares_of_clip(db: Session, clip_id: int) -> list[ClipShare]:
+    now = utcnow()
+    return list(db.scalars(select(ClipShare).where(
+        ClipShare.clip_id == clip_id, ClipShare.revoked_at.is_(None),
+        or_(ClipShare.expires_at.is_(None), ClipShare.expires_at > now))))
+
+
+def protected_files(db: Session, clip: Clip) -> set[str]:
+    """Files that must stay on disk while an authorisation is valid (snapshot or live media)."""
+    out: set[str] = set()
+    for s in active_shares_of_clip(db, clip.id):
+        m = media(s, clip)
+        out.update(p for p in (m["video"], m["thumb"]) if p)
+        out.update(v["video_path"] for v in m["variants"].values() if v.get("video_path"))
+    return out
+
+
 def share(db: Session, *, admin_id: int, email: str, clip_ids: list[int], can_download: bool = False,
-          can_variants: bool = False, expires_at: datetime | None = None) -> dict:
+          can_variants: bool = False, expires_at: datetime | None = None, follow_latest: bool = False) -> dict:
     """Share clips with an EXISTING active account. Re-sharing an already shared clip updates its
     permissions (one active share per clip+user). Returns what was shared and what was refused."""
     user = db.scalar(select(User).where(User.email == normalize_email(email)))
@@ -71,6 +109,8 @@ def share(db: Session, *, admin_id: int, email: str, clip_ids: list[int], can_do
             s = ClipShare(clip_id=cid, user_id=user.id, created_by=admin_id)
             db.add(s)
         s.can_view, s.can_download, s.can_variants, s.expires_at = True, can_download, can_variants, expires_at
+        s.follow_latest = follow_latest
+        snapshot(s, clip)  # re-sharing re-approves the CURRENT version explicitly
         db.flush()
         done.append(s.id)
     return {"user_id": user.id, "email": user.email, "shared": done, "refused": refused}
@@ -90,10 +130,9 @@ def public_clip(db: Session, s: ClipShare, c: Clip) -> dict:
     st = db.get(Streamer, c.streamer_id)
     variants = []
     if s.can_variants:
-        for name, rec in ((c.provenance or {}).get("variants") or {}).items():
-            if rec.get("state") == "done" and rec.get("video_path"):
-                variants.append({"name": name, "label": rec.get("label") or name,
-                                 "video_url": f"/api/library/{c.id}/variants/{name}/video"})
+        for name, rec in media(s, c)["variants"].items():
+            variants.append({"name": name, "label": rec.get("label") or name,
+                             "video_url": f"/api/library/{c.id}/variants/{name}/video"})
     return {
         "clip_id": c.id, "title": c.title or f"Corte #{c.id}",
         "streamer": (st.display_name or st.channel) if st else "",
@@ -101,6 +140,7 @@ def public_clip(db: Session, s: ClipShare, c: Clip) -> dict:
         "shared_at": s.created_at.isoformat() + "Z" if s.created_at else None,
         "expires_at": s.expires_at.isoformat() + "Z" if s.expires_at else None,
         "permissions": {"view": True, "download": s.can_download, "variants": s.can_variants},
+        "version": "atual" if s.follow_latest else "aprovada no compartilhamento",
         "video_url": f"/api/library/{c.id}/video", "thumbnail_url": f"/api/library/{c.id}/thumbnail",
         "download_url": f"/api/library/{c.id}/download" if s.can_download else None,
         "variants": variants,

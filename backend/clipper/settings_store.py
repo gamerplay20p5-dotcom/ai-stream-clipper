@@ -94,6 +94,8 @@ class AISettings(BaseModel):
     gate_narrative_min: float = Field(5.0, ge=0, le=10, description="cut quality to be READY (0-10)")
     gate_recovery_min: float = Field(4.0, ge=0, le=10, description="editing potential to try a REWORK")
     gate_max_rework: int = Field(2, ge=0, le=5, description="automatic re-edits per clip")
+    # Phase 6C - references lab
+    refs_analyses_per_hour: int = Field(10, ge=0, le=60, description="format analyses (vision) per hour")
     # Phase 6B - structural editor (variants are compared before any becomes the main video)
     editor_mode: Literal["off", "shadow", "on"] = "shadow"
     editor_min_gap: float = Field(0.9, ge=0.4, le=3.0, description="silence (s) that can be cut")

@@ -1,11 +1,10 @@
-"""multi-user stage 1: session versions on users + clip shares
+"""multi-user stage 1: session versions on users + clip shares with immutable media snapshots
 
 Revision ID: 0012
-Revises: 0010
+Revises: 0011
 Create Date: 2026-11-19
 
-NOTE: revises 0010 (current production head). If PR #4 (0011, references lab) is merged first,
-this file's ``down_revision`` becomes '0011' (one line) so the chain stays linear.
+Chain: ... 0010 (6B) -> 0011 (6C references lab) -> 0012 (this). Single head.
 
 Rollback safety: shares are an access history: the downgrade renames ``clip_shares`` to
 ``clip_shares_preserved`` and a later upgrade renames it back. ``users.session_version`` is dropped
@@ -15,7 +14,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = '0012'
-down_revision = '0010'
+down_revision = '0011'
 branch_labels = None
 depends_on = None
 
@@ -39,6 +38,13 @@ def upgrade() -> None:
         sa.Column('created_at', sa.DateTime(), nullable=False),
         sa.Column('revoked_at', sa.DateTime(), nullable=True),
         sa.Column('revoked_by', sa.Integer(), sa.ForeignKey('users.id', ondelete='SET NULL'), nullable=True),
+        sa.Column('video_path', sa.String(512), nullable=False, server_default=''),
+        sa.Column('video_sha256', sa.String(64), nullable=False, server_default=''),
+        sa.Column('video_bytes', sa.Integer(), nullable=False, server_default='0'),
+        sa.Column('thumb_path', sa.String(512), nullable=False, server_default=''),
+        sa.Column('clip_version', sa.Integer(), nullable=False, server_default='0'),
+        sa.Column('variants', sa.JSON(), nullable=False, server_default='{}'),
+        sa.Column('follow_latest', sa.Boolean(), nullable=False, server_default=sa.false()),
     )
     op.create_index('ix_clip_shares_clip_id', 'clip_shares', ['clip_id'])
     op.create_index('ix_clip_shares_user_active', 'clip_shares', ['user_id', 'revoked_at'])
