@@ -194,14 +194,23 @@ def referenced_files(db: Session, clip: Clip) -> set[str]:
     return refs
 
 
-def variant_failed(db: Session, clip_id: int, name: str, error: str) -> None:
+def variant_failed(db: Session, clip_id: int, name: str, error: str, render_id: str = "") -> bool:
+    """Mark the variant failed ONLY if the failed job is the render currently expected for it:
+    a late failure of an older revision never touches a newer one. Returns True when applied."""
     clip = db.get(Clip, clip_id)
     if clip is None:
-        return
+        return False
     v = _variants(clip)
-    if name in v:
-        v[name] = {**v[name], "state": "failed", "error": error[:500]}
-        _save_variants(clip, v)
+    rec = v.get(name)
+    if not rec or rec.get("state") == "done":
+        return False
+    if rec.get("render_id") and render_id != rec["render_id"]:
+        log.info("stale variant failure ignored", extra={"clip_id": clip_id, "variant": name,
+                                                        "failed": render_id, "expected": rec.get("render_id")})
+        return False
+    v[name] = {**rec, "state": "failed", "error": error[:500]}
+    _save_variants(clip, v)
+    return True
 
 
 def promote(db: Session, clip: Clip, name: str, user: str) -> dict:

@@ -799,9 +799,11 @@ def on_job_dead(db: Session, job: Job) -> None:
     if job.type == "render" and p.get("variant"):  # a failed alternative never fails the clip
         from .pipeline_structure import variant_failed
 
-        variant_failed(db, int(p.get("clip_id", 0)), str(p["variant"]), job.last_error or "render failed")
+        variant_failed(db, int(p.get("clip_id", 0)), str(p["variant"]), job.last_error or "render failed",
+                       str(p.get("render_id") or ""))
     elif job.type == "render":
-        mark_render_failed(db, int(p.get("clip_id", 0)), job.last_error or "render failed")
+        mark_render_failed(db, int(p.get("clip_id", 0)), job.last_error or "render failed",
+                           version=p.get("version"), render_id=str(p.get("render_id") or ""))
     elif job.type == "audio_analyze":
         seg = db.scalar(select(Segment).where(Segment.session_id == p.get("session_id"),
                                               Segment.idx == p.get("segment_idx")))
@@ -825,11 +827,20 @@ def on_job_dead(db: Session, job: Job) -> None:
             post_vision(db, clip.id, None, job.last_error[:80])
 
 
-def mark_render_failed(db: Session, clip_id: int, error: str) -> None:
+def mark_render_failed(db: Session, clip_id: int, error: str, *, version=None, render_id: str = "") -> bool:
+    """Fail the clip only for the render it is waiting for: a dead job of an older version or of
+    another render id (late failure after a newer render was queued) changes nothing."""
     clip = db.get(Clip, clip_id)
-    if clip is not None and clip.status == "rendering":
-        clip.status = "failed"
-        clip.error = error[:2000]
+    if clip is None or clip.status != "rendering":
+        return False
+    if version is not None and int(version) != clip.version:
+        return False
+    expected = ((clip.provenance or {}).get("render") or {}).get("expected")
+    if render_id and expected and render_id != expected:
+        return False
+    clip.status = "failed"
+    clip.error = error[:2000]
+    return True
 
 
 # ---------------------------------------------------------------------------

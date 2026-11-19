@@ -179,8 +179,35 @@ O downgrade apaga apenas a coluna `gate`, que é recalculada na próxima anális
    - nenhum limite de trecho corta uma palavra (0 nos cortes reais);
    - uma legenda nunca continua depois de uma transição;
    - a comparação mostra o contexto perdido (segundos antes e depois, e o começo do texto que saiu).
-7. **Rollback da 0010 sem perder votos** (ordem: com a imagem nova, `asc-ctl exec asc-api -- clipper migrate --downgrade 0009` e depois a tag 0.6.0): o downgrade **não apaga** os votos humanos. A tabela vira `edit_comparisons_preserved` e o upgrade seguinte a traz de volta (testado). A coluna `publications.video_path` é só um ponteiro e é removida no downgrade.
-8. **Achado extra:** uma publicação malformada derrubava a consulta de status de **todas** as outras. Agora cada uma é isolada.
+7. **Rollback da 0010 sem perder votos nem snapshots:** o downgrade **não apaga** os votos humanos (a tabela vira `edit_comparisons_preserved`) nem os snapshots das publicações (copiados para `publication_snapshots_preserved` antes de remover a coluna). O upgrade seguinte restaura os dois (testado).
+8. **Falha tardia de render antigo:** a falha de um job só marca a variante ou o corte se for o render **esperado** (mesmo `render_id` e mesma versão). Uma falha antiga que chega depois de um novo pedido não muda nada (testado com dois renders concorrentes, de variante e principal).
+9. **Achado extra:** uma publicação malformada derrubava a consulta de status de **todas** as outras. Agora cada uma é isolada.
+
+### Procedimento de rollback da v0.6.2 para a v0.6.0 (atravessa a 0010)
+
+A v0.6.0 não conhece o snapshot de mídia das publicações e enviaria o vídeo **atual** do corte. Por isso a ordem abaixo é obrigatória. Todos os comandos rodam no 210, **com a imagem v0.6.2 ainda no ar**:
+
+```
+# 1. pausar os envios (a v0.6.0 também respeita a pausa)
+sudo -n asc-ctl exec asc-api -- clipper publish-pause on --reason "rollback 0010"
+
+# 2. conferir publicações pendentes cuja mídia aprovada difere da atual do corte
+sudo -n asc-ctl exec asc-api -- clipper rollback-check
+#    saída 1 = ainda não é seguro (sem pausa, ou uma divergente já está enviando: espere terminar)
+#    para cancelar (nunca apagar) as divergentes ainda não enviadas:
+sudo -n asc-ctl exec asc-api -- clipper rollback-check --cancel-mismatched
+
+# 3. backup e downgrade (votos e snapshots preservados em tabelas *_preserved)
+sudo -n asc-ctl backup-db
+sudo -n asc-ctl exec asc-api -- clipper migrate --downgrade 0009      # ou 0008 para voltar antes da 6A
+
+# 4. trocar a tag nos três servidores (ASC_IMAGE_TAG=0.6.0; env-install + compose up no 210; set-tag + compose up no 206 e 201)
+
+# 5. manter a pausa até decidir: retomar na v0.6.0 só se o passo 2 ficou limpo
+#    (pelo painel, Publicação, "Retomar publicações")
+```
+
+Ao voltar para a v0.6.2, o `alembic upgrade` restaura os votos e os snapshots.
 
 **Reaproveitado:** palavras do Whisper, categorias do YAMNet (reações), memória da história (início e clímax), Quality Gate (segmentos gravados e `dead_time`), legendas inteligentes e o renderer existente (passo 2 sem mudança).
 

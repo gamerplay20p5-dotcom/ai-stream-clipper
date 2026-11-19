@@ -16,6 +16,7 @@ import asyncio
 import getpass
 import logging
 import os
+import json
 import signal
 import sys
 
@@ -154,6 +155,34 @@ def cmd_migrate(args) -> None:
     print("ok")
 
 
+def cmd_publish_pause(args) -> None:
+    """Emergency pause from the shell (e.g. before a rollback): nothing new is queued or sent."""
+    from .db import init_engine, session_scope
+    from .publish.editorial import set_paused
+
+    init_engine(get_settings().database_url)
+    with session_scope() as db:
+        out = set_paused(db, args.state == "on", args.reason, "cli")
+    print(json.dumps(out, ensure_ascii=False))
+
+
+def cmd_rollback_check(args) -> None:
+    """Lists pending publications whose approved media differs from the clip's current media.
+    Exit code 1 while a rollback across migration 0010 is not safe (not paused, or a mismatched
+    publication is already uploading/processing)."""
+    from .db import init_engine, session_scope
+    from .publish import rollback
+
+    init_engine(get_settings().database_url)
+    with session_scope() as db:
+        if args.cancel_mismatched:
+            print(json.dumps({"cancelled": rollback.cancel_mismatched(db, "cli")}))
+        out = rollback.check(db)
+    print(json.dumps(out, ensure_ascii=False, indent=1))
+    if not out["safe_to_rollback"]:
+        sys.exit(1)
+
+
 def cmd_create_admin(args) -> None:
     from sqlalchemy import select
 
@@ -240,6 +269,13 @@ def main(argv: list[str] | None = None) -> None:
     h.add_argument("target", choices=["api", "worker"])
     h.add_argument("--max-age", type=float, default=90.0)
     h.set_defaults(fn=cmd_healthcheck)
+    pp = sub.add_parser("publish-pause")
+    pp.add_argument("state", choices=["on", "off"])
+    pp.add_argument("--reason", default="")
+    pp.set_defaults(fn=cmd_publish_pause)
+    rc = sub.add_parser("rollback-check")
+    rc.add_argument("--cancel-mismatched", action="store_true")
+    rc.set_defaults(fn=cmd_rollback_check)
     pb = sub.add_parser("publisher")
     pb.set_defaults(fn=cmd_publisher)
     g = sub.add_parser("probe-gpu")
