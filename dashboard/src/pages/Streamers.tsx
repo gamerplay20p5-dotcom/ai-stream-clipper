@@ -5,7 +5,7 @@ import VoicePanel from "../components/VoicePanel";
 import { Link } from "react-router-dom";
 import { api, type Streamer } from "../api";
 import TestClipPanel from "../components/TestClipPanel";
-import { Empty, ErrorNote, PageHeader, Tally } from "../components/ui";
+import { Disclosure, Empty, ErrorNote, Notice, PageHeader, Skeleton, Tally } from "../components/ui";
 import { ago, platformName, timecode } from "../lib/format";
 
 export default function Streamers() {
@@ -30,9 +30,10 @@ export default function Streamers() {
   }
 
   return (
-    <div className="max-w-5xl">
-      <PageHeader title="Streamers" />
-      <form onSubmit={submit} className="mb-8 grid gap-3 rounded-lg bg-suite-panel p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+    <div className="space-y-5">
+      <PageHeader title="Lives e streamers" description="Gerencie os canais monitorados, o estado da captura e as preferências de corte." />
+      <Disclosure title="Adicionar canal">
+      <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
         <div>
           <label className="label" htmlFor="url">Link do canal</label>
           <input id="url" className="field" required placeholder="https://www.twitch.tv/canal ou youtube.com/@canal" value={url}
@@ -50,7 +51,7 @@ export default function Streamers() {
           <input id="game" className="field" value={game} onChange={(e) => setGame(e.target.value)} />
         </div>
         <button className="btn-take" disabled={add.isPending}>{add.isPending ? "Adicionando…" : "Começar a monitorar"}</button>
-        <div className="sm:col-span-4">
+        <div className="space-y-2 sm:col-span-2 xl:col-span-4">
           <ErrorNote error={add.error} />
           <p className="text-xs text-ink-muted">
             Aceita canais públicos da Twitch e do YouTube. O sistema só analisa transmissões abertas; publicar os cortes exige autorização do criador.
@@ -58,12 +59,22 @@ export default function Streamers() {
           </p>
         </div>
       </form>
+      </Disclosure>
 
+      {add.isSuccess && <Notice>Canal adicionado ao monitoramento.</Notice>}
       <ErrorNote error={list.error} />
-      {list.data?.length === 0 && <Empty title="Nenhum canal cadastrado">Cole o link de um canal acima para começar.</Empty>}
-      <ul className="divide-y divide-suite-line border-y border-suite-line">
-        {(list.data ?? []).map((s) => <StreamerRow key={s.id} s={s} />)}
+      {list.isLoading && <Skeleton label="Carregando canais monitorados" />}
+      {list.data && list.data.length > 0 && <section className="panel">
+      <header className="panel-heading">
+        <h2 className="display text-lg">Canais cadastrados</h2>
+        <span className="text-sm text-ink-muted">{list.data.filter((channel) => channel.live_session).length} ao vivo / {list.data.length} cadastrados</span>
+      </header>
+      <ul className="divide-y divide-suite-line">
+        {list.data.map((channel) => <StreamerRow key={channel.id} s={channel} />)}
       </ul>
+      </section>}
+      {list.data?.length === 0 && <Empty title="Nenhum canal cadastrado">Cole o link de um canal acima para começar.</Empty>}
+
     </div>
   );
 }
@@ -82,16 +93,16 @@ function StreamerRow({ s }: { s: Streamer }) {
   const prefs = s.preferences as { game?: string; min_score?: number; layout?: string };
 
   return (
-    <li className="py-4">
+    <li className="px-4 py-4 sm:px-5">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 basis-full sm:flex-1">
           <div className="flex items-center gap-3">
             <span className="truncate font-medium">{s.display_name}</span>
             <span className="text-xs text-ink-muted">{platformName[s.platform]}</span>
           </div>
-          <a href={s.platform === "file" ? undefined : s.url} target="_blank" rel="noreferrer noopener" className="truncate text-xs text-ink-faint hover:text-ink-muted">{s.url}</a>
+          <a href={s.platform === "file" ? undefined : s.url} target="_blank" rel="noreferrer noopener" className="block truncate text-xs text-ink-muted hover:text-take">{s.url}</a>
         </div>
-        <div className="w-40 text-sm">
+        <div className="text-sm sm:w-40">
           {s.status === "error" ? (
             <span className="text-xs text-tally" title={s.last_error}>Erro na verificação</span>
           ) : (
@@ -101,13 +112,13 @@ function StreamerRow({ s }: { s: Streamer }) {
         </div>
         <Link to={`/cortes?status=&streamer=${s.id}`} className="w-20 text-sm text-ink-muted hover:text-ink">{s.clip_count} {s.clip_count === 1 ? "corte" : "cortes"}</Link>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
-          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.enabled}
+          <input type="checkbox" className="h-4 w-4 " checked={s.enabled}
             onChange={(e) => patch.mutate({ enabled: e.target.checked })} />
           Monitorar
         </label>
         <div className="flex gap-1">
           <button className="btn-quiet p-2" title="Gerar corte de teste" aria-label="Gerar corte de teste" onClick={() => setTesting(!testing)}><FlaskConical className="h-4 w-4" /></button>
-          <button className="btn-quiet p-2" title="Verificar agora" aria-label="Verificar agora" onClick={() => check.mutate()}><RefreshCw className="h-4 w-4" /></button>
+          <button className="btn-quiet p-2" title="Verificar agora" aria-label="Verificar agora" disabled={check.isPending} onClick={() => check.mutate()}><RefreshCw className="h-4 w-4" /></button>
           {live && (
             <button className="btn-quiet p-2" title="Parar a captura desta transmissão" aria-label="Parar captura"
               onClick={() => stop.mutate(s.live_session!.id)}><Square className="h-4 w-4" /></button>
@@ -120,7 +131,7 @@ function StreamerRow({ s }: { s: Streamer }) {
       {s.last_error && s.status === "error" && <p className="mt-2 text-xs text-tally">{s.last_error}</p>}
       {testing && <TestClipPanel streamerId={s.id} onClose={() => setTesting(false)} />}
       {open && (
-        <div className="mt-4 grid gap-6 rounded-lg bg-suite-panel p-4 md:grid-cols-2">
+        <div className="mt-4 grid min-w-0 gap-6 rounded-lg border border-suite-line bg-suite p-4 md:grid-cols-2">
           <form className="space-y-3" onSubmit={(e) => {
             e.preventDefault();
             const f = new FormData(e.currentTarget);

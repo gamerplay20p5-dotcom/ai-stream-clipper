@@ -1,0 +1,28 @@
+:root {
+  --suite: 17 19 27;
+  --panel: 24 27 38;
+  --raised: 33 38 55;
+  --line: 53 59 79;
+  --outline: 106 115 143;
+  --ink: 241 243 251;
+  --muted: 181 189 210;
+  --faint: 155 165 191;
+  --take: 178 187 255;
+  --take-hover: 205 211 255;
+  --take-dim: 41 47 82;
+  --take-ink: 23 28 55;
+  --tally: 255 156 161;
+  --tally-dim: 61 34 45;
+  --ok: 122 222 185;
+  --warning: 245 198 125;
+  --warning-dim: 53 43 32;
+  --processing: 148 208 245;
+  --processing-dim: 30 47 64;
+  --media: 10 12 18;
+  --space-section: clamp(1.25rem, 2.6vw, 2.25rem);
+  --radius-control: 0.375rem;
+  --radius-panel: 0.625rem;
+  --duration-fast: 150ms;
+  --duration-panel: 200ms;
+  --shadow-overlay: 0 16px 48px rgb(0 0 0 / 35%);
+}

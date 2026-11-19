@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, Loader2, RotateCcw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { api, type DiagStreamer, type Diagnostics as DiagT } from "../api";
-import { ErrorNote, PageHeader } from "../components/ui";
+import { Disclosure, Empty, ErrorNote, Notice, PageHeader, Skeleton, Status } from "../components/ui";
 import { ago, jobLabel, timecode } from "../lib/format";
 
 const roleLabel: Record<string, string> = {
@@ -39,8 +39,8 @@ function StreamerDiag({ d }: { d: DiagStreamer }) {
   });
   const sc = d.scoring;
   return (
-    <section className="rounded-lg bg-suite-panel p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <section className="panel">
+      <div className="panel-heading">
         <div>
           <h2 className="display text-lg">{d.streamer.name}</h2>
           <p className="text-xs text-ink-muted">{d.streamer.platform}, canal {d.streamer.status}, verificado {ago(d.streamer.last_checked_at)}</p>
@@ -50,12 +50,14 @@ function StreamerDiag({ d }: { d: DiagStreamer }) {
           <span className="font-semibold">{d.stage}</span>
         </div>
       </div>
-      <p className={`mt-3 rounded-md px-3 py-2 text-sm ${d.state === "error" ? "bg-tally-dim text-[#ffb4b6]" : "bg-suite text-ink"}`}>
+      <div className="panel-body">
+      <p className={`mt-3 mb-3 rounded-md px-3 py-2 text-sm ${d.state === "error" ? "bg-tally-dim text-tally" : "bg-suite text-ink"}`}>
         {d.explanation}
       </p>
 
       {d.session && (
-        <div className="mt-4 grid gap-6 lg:grid-cols-2">
+        <Disclosure title="Detalhes da sessão">
+        <div className="grid gap-6 lg:grid-cols-2">
           <dl>
             <Fact label="Sessão">#{d.session.id}, {d.session.status}, desde {ago(d.session.started_at)}</Fact>
             <Fact label="Último segmento">{d.last_segment ? `#${d.last_segment.idx}, há ${Math.round(d.last_segment.age_s)} s` : "nenhum"}</Fact>
@@ -88,7 +90,7 @@ function StreamerDiag({ d }: { d: DiagStreamer }) {
             )}
             <div>
               <h3 className="mb-1 text-xs text-ink-muted">Tarefas desta sessão</h3>
-              <table className="w-full text-xs">
+              <div className="table-scroll"><table className="w-full text-xs">
                 <tbody>
                   {Object.entries(d.jobs).map(([t, st]) => (
                     <tr key={t} className="border-b border-suite-line/60">
@@ -98,7 +100,7 @@ function StreamerDiag({ d }: { d: DiagStreamer }) {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
             </div>
             {d.failures.length > 0 && (
               <div>
@@ -107,6 +109,7 @@ function StreamerDiag({ d }: { d: DiagStreamer }) {
                   {d.failures.map((f) => <li key={f.id}><b>{jobLabel[f.type] ?? f.type} #{f.id}</b>: {f.error.slice(-160)}</li>)}
                 </ul>
                 <ErrorNote error={retry.error} />
+                {retry.isSuccess && <Notice>{retry.data.retried.length} tarefa(s) devolvida(s) à fila.</Notice>}
                 <button className="btn-quiet mt-2" disabled={retry.isPending} onClick={() => retry.mutate()}>
                   <RotateCcw className="h-4 w-4" /> Reprocessar falhas
                 </button>
@@ -114,7 +117,9 @@ function StreamerDiag({ d }: { d: DiagStreamer }) {
             )}
           </div>
         </div>
+        </Disclosure>
       )}
+      </div>
     </section>
   );
 }
@@ -123,19 +128,30 @@ export default function Diagnostics() {
   const q = useQuery({ queryKey: ["diagnostics"], queryFn: () => api.get<DiagT>("/api/diagnostics"), refetchInterval: 5_000 });
   const roles = q.data?.workers_online_by_role ?? {};
   return (
-    <div className="max-w-6xl space-y-6">
-      <PageHeader title="Diagnóstico do pipeline" />
-      <ErrorNote error={q.error} />
-      <div className="flex flex-wrap gap-2 text-xs">
-        {["capture", "audio", "scoring", "vision", "render"].map((r) => (
-          <span key={r} className={`rounded-full border px-2.5 py-1 ${roles[r]?.length ? "border-ok/50 text-ok" : "border-tally/50 text-tally"}`}
-            title={(roles[r] ?? []).join(", ")}>
-            {roleLabel[r]}: {roles[r]?.length ?? 0} online
-          </span>
-        ))}
+    <div>
+      <PageHeader title="Diagnóstico do pipeline" description="Investigue a etapa atual e os gargalos de cada transmissão monitorada." />
+      <div className="section-flow">
+        <ErrorNote error={q.error} />
+        {q.isLoading && <Skeleton label="Carregando diagnóstico" />}
+        {q.data && (
+          <section className="panel">
+            <div className="panel-heading"><h2 className="display text-lg">Workers por função</h2></div>
+            <dl className="panel-body grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
+              {["capture", "audio", "scoring", "vision", "render"].map((role) => (
+                <div key={role}>
+                  <dt className="mb-1 text-sm font-medium capitalize">{roleLabel[role]}</dt>
+                  <dd>
+                    <Status tone={roles[role]?.length ? "success" : "warning"}>{roles[role]?.length ?? 0} online</Status>
+                    {!!roles[role]?.length && <p className="mt-1 break-words text-xs text-ink-muted">{roles[role].join(", ")}</p>}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        )}
+        {(q.data?.streamers ?? []).map((d) => <StreamerDiag key={d.streamer.id} d={d} />)}
+        {q.data?.streamers.length === 0 && <Empty title="Nenhum canal monitorado"><Link to="/streamers" className="text-take hover:underline">Cadastro de transmissões</Link></Empty>}
       </div>
-      {(q.data?.streamers ?? []).map((d) => <StreamerDiag key={d.streamer.id} d={d} />)}
-      {q.data && q.data.streamers.length === 0 && <p className="text-sm text-ink-muted">Nenhum streamer cadastrado.</p>}
     </div>
   );
 }

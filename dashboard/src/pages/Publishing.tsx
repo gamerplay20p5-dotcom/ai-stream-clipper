@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Link2, RotateCcw, Trash2, X } from "lucide-react";
+import { AlertTriangle, ChevronDown, ExternalLink, Link2, RotateCcw, Trash2, X } from "lucide-react";
 import { useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, type Streamer } from "../api";
-import { Empty, ErrorNote, PageHeader } from "../components/ui";
+import { Disclosure, Empty, ErrorNote, Notice, PageHeader, Skeleton } from "../components/ui";
+import { distributionView, distributionViews } from "../lib/publishing";
 import PrivacyPicker, { initialPrivacy } from "../components/PrivacyPicker";
 import { EditorialCalendar, PauseBanner, Reports } from "../components/EditorialOps";
 
@@ -20,10 +22,10 @@ export type Pub = { id: number; clip_id: number | null; clip_title: string | nul
 type Overview = { apps: Record<string, PubApp>; accounts: PubAccount[]; rules: Rule[]; counts: Record<string, number> };
 
 export const pubStatus: Record<string, [string, string]> = {
-  draft: ["Rascunho", "text-ink-muted"], scheduled: ["Agendado", "text-take"], uploading: ["Enviando", "text-take"],
-  processing: ["Processando na plataforma", "text-take"], published: ["Publicado", "text-ok"], failed: ["Falhou", "text-tally"],
+  draft: ["Rascunho", "text-ink-muted"], scheduled: ["Agendado", "text-take"], uploading: ["Enviando", "text-processing"],
+  processing: ["Processando na plataforma", "text-processing"], published: ["Publicado", "text-ok"], failed: ["Falhou", "text-tally"],
   cancelled: ["Cancelado", "text-ink-faint"], proposed: ["Proposta", "text-take"], expired: ["Expirou", "text-ink-faint"],
-  uncertain: ["Resultado incerto: confira no perfil", "text-tally"],
+  uncertain: ["Resultado incerto: confira no perfil", "text-warning"],
 };
 const privacyLabel: Record<string, string> = {
   private: "Privado", unlisted: "Não listado", public: "Público", SELF_ONLY: "Só eu (TikTok)",
@@ -35,34 +37,51 @@ const redirectHelp: Record<string, string> = {
   instagram: "Meta for Developers → seu app → API do Instagram (login unificado): cadastre como URL de redirecionamento exatamente o endereço do campo abaixo e copie o config_id da configuração (Login do Facebook para Empresas → Configurações). App ID e chave secreta: Configurações do app → Básico.",
 };
 
-const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "assim que possível");
+const publicationTime = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" });
+const publicationDay = new Intl.DateTimeFormat("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", timeZone: "America/Sao_Paulo" });
+const when = (iso: string | null) => iso ? publicationTime.format(new Date(iso)) : "assim que possível";
 
 export default function Publishing() {
-  const qs = new URLSearchParams(window.location.search);
+  const [qs] = useSearchParams();
+  const view = distributionView(qs);
   const ov = useQuery({ queryKey: ["publish-overview"], queryFn: () => api.get<Overview>("/api/publish/overview"), refetchInterval: 20_000 });
+  const descriptions = {
+    publicacoes: "Acompanhe envios, falhas e resultados incertos. Horários de Brasília.",
+    calendario: "Revise propostas e horários dos próximos 14 dias no horário de Brasília.",
+    contas: "Gerencie as contas que recebem os cortes e as integrações OAuth.",
+    regras: "Defina permissões de republicação, horários e critérios editoriais.",
+    relatorios: "Consulte métricas oficiais de desempenho por plataforma.",
+  };
   return (
-    <div className="space-y-8">
-      <PageHeader title="Publicação automática" />
-      <PauseBanner />
-      <p className="max-w-3xl text-sm text-ink-muted">
-        Envio pelas APIs oficiais. Por padrão as regras automáticas exigem aprovação humana e usam <b>privado</b> (público
-        automático só com ativação explícita); na publicação manual você escolhe Privado, Não listado ou Público. Cortes de teste manual e
-        cortes rejeitados nunca são publicados automaticamente, e só streamers marcados com direito de republicação entram nas regras automáticas.
-      </p>
-      {qs.get("conectado") && <p className="rounded-md border border-ok/40 bg-ok/10 px-3 py-2 text-sm text-ok">Conta conectada.</p>}
-      {qs.get("erro") && <ErrorNote error={`Conexão não concluída: ${qs.get("erro")}`} />}
-      <ErrorNote error={ov.error} />
-      {ov.data && <Apps apps={ov.data.apps} />}
-      {ov.data && <Accounts ov={ov.data} />}
-      <Rights />
-      {ov.data && <Rules ov={ov.data} />}
-      <Section title="5. Calendário editorial" hint="Próximos 14 dias no horário de Brasília. Propostas do modo semiautomático só são enviadas depois que você confirma; você pode mudar o horário de qualquer item ainda não enviado.">
-        <EditorialCalendar />
-      </Section>
-      {ov.data && <Calendar accounts={ov.data.accounts} />}
-      <Section title="7. Relatórios" hint="Métricas oficiais das plataformas, agrupadas por categoria da história, horário e título.">
-        <Reports />
-      </Section>
+    <div>
+      <PageHeader title={view.label} description={descriptions[view.key]} />
+      <nav className="view-switch mb-5" aria-label="Áreas da distribuição">
+        {distributionViews.map((item) => (
+          <Link key={item.key} to={item.to} className="view-switch-item" aria-current={view.key === item.key ? "page" : undefined}>{item.label}</Link>
+        ))}
+      </nav>
+      <div className="section-flow">
+        {(view.key === "publicacoes" || view.key === "calendario") && <PauseBanner />}
+        {qs.get("conectado") && <Notice>Conta conectada.</Notice>}
+        {qs.get("erro") && <ErrorNote error={`Conexão não concluída: ${qs.get("erro")}`} />}
+        <ErrorNote error={ov.error} />
+        {view.key === "publicacoes" && <Calendar accounts={ov.data?.accounts ?? []} />}
+        {view.key === "calendario" && <EditorialCalendar />}
+        {view.key === "contas" && (ov.data ? (
+          <>
+            <Accounts ov={ov.data} />
+            <Disclosure title="Configuração dos aplicativos OAuth"><Apps apps={ov.data.apps} /></Disclosure>
+          </>
+        ) : ov.isLoading && <Skeleton label="Carregando contas" />)}
+        {view.key === "regras" && (
+          <>
+            <Rights />
+            {ov.data && <Rules ov={ov.data} />}
+            {ov.isLoading && <Skeleton label="Carregando regras" />}
+          </>
+        )}
+        {view.key === "relatorios" && <Reports />}
+      </div>
     </div>
   );
 }
@@ -70,7 +89,7 @@ export default function Publishing() {
 function Section({ title, children, hint }: { title: string; children: React.ReactNode; hint?: string }) {
   return (
     <section>
-      <h2 className="display mb-1 text-lg">{title}</h2>
+      <h2 className="display mb-2 text-xl">{title}</h2>
       {hint && <p className="mb-3 text-xs text-ink-muted">{hint}</p>}
       {children}
     </section>
@@ -79,7 +98,7 @@ function Section({ title, children, hint }: { title: string; children: React.Rea
 
 function Apps({ apps }: { apps: Record<string, PubApp> }) {
   return (
-    <Section title="1. Apps OAuth das plataformas" hint="Credenciais do app que você cria no console de cada plataforma. O segredo é cifrado e nunca volta para o navegador.">
+    <Section title="Aplicativos das plataformas" hint="Credenciais do app que você cria no console de cada plataforma. O segredo é cifrado e nunca volta para o navegador.">
       <div className="grid gap-4 lg:grid-cols-3">{Object.values(apps).map((a) => <AppCard key={a.platform} app={a} />)}</div>
     </Section>
   );
@@ -118,7 +137,7 @@ function AppCard({ app }: { app: PubApp }) {
           <input className="field" value={configId} inputMode="numeric" onChange={(e) => setConfigId(e.target.value.trim())} /></label>
       )}
       {app.platform === "instagram" && app.configured && app.flow !== "unified" && (
-        <p className="mb-2 text-xs text-[#ffb4b6]">Falta o config_id: sem ele a Meta recusa a conexão (“Invalid platform app”).</p>
+        <p className="mb-2 text-xs text-tally">Falta o config_id: sem ele a Meta recusa a conexão (“Invalid platform app”).</p>
       )}
       <ErrorNote error={save.error ?? remove.error} />
       <div className="flex gap-2">
@@ -147,7 +166,7 @@ function Accounts({ ov }: { ov: Overview }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["publish-overview"] }),
   });
   return (
-    <Section title="2. Contas conectadas">
+    <Section title="Contas por plataforma">
       <div className="mb-3 flex flex-wrap gap-2">
         {Object.values(ov.apps).map((a) => (
           <button key={a.platform} className="btn-quiet" disabled={!a.configured || start.isPending} onClick={() => start.mutate(a.platform)}>
@@ -159,7 +178,7 @@ function Accounts({ ov }: { ov: Overview }) {
         <div className="mb-4 rounded-lg border border-take/50 bg-take-dim/30 p-3 text-sm">
           <p className="mb-2">1. Autorize na aba que abriu (<a className="text-take underline" href={pending.url} target="_blank" rel="noreferrer">abrir de novo</a>).
             2. A página final pode dar erro de conexão — é esperado. Copie o endereço completo da barra (com <code>?code=</code>) e cole aqui:</p>
-          <input className="field" value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="http://127.0.0.1:8765/?state=...&code=..." />
+          <input className="field" aria-label="Endereço de retorno OAuth" value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="http://127.0.0.1:8765/?state=...&code=..." />
           <ErrorNote error={finish.error} />
           <div className="mt-2 flex gap-2">
             <button className="btn-take" disabled={!pasted || finish.isPending} onClick={() => finish.mutate()}>Concluir conexão</button>
@@ -169,7 +188,7 @@ function Accounts({ ov }: { ov: Overview }) {
       )}
       <ErrorNote error={start.error ?? disconnect.error} />
       {ov.accounts.length === 0 ? <Empty title="Nenhuma conta conectada">Configure o app OAuth e clique em Conectar.</Empty> : (
-        <table className="w-full text-sm">
+        <div className="table-scroll" tabIndex={0} role="region" aria-label="Contas por plataforma"><table className="w-full min-w-[36rem] text-sm">
           <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Conta</th><th>Plataforma</th><th>Estado</th><th>Cota hoje</th><th /></tr></thead>
           <tbody>{ov.accounts.map((a) => (
             <tr key={a.id} className="border-t border-suite-line/50">
@@ -180,7 +199,7 @@ function Accounts({ ov }: { ov: Overview }) {
               <td className="text-right">{a.status !== "revoked" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => confirm("Desconectar e apagar os tokens desta conta?") && disconnect.mutate(a.id)}><Trash2 className="h-3 w-3" /> Desconectar</button>}</td>
             </tr>
           ))}</tbody>
-        </table>
+        </table></div>
       )}
     </Section>
   );
@@ -194,7 +213,7 @@ function Rights() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["streamers"] }),
   });
   return (
-    <Section title="3. Direitos de republicação" hint="Marque apenas streamers que autorizaram a republicação dos cortes (ou cujo conteúdo é seu). Sem essa marca, nada entra nas regras automáticas; na publicação manual você confirma caso a caso.">
+    <Section title="Direitos de republicação" hint="Marque apenas streamers que autorizaram a republicação dos cortes (ou cujo conteúdo é seu). Sem essa marca, nada entra nas regras automáticas; na publicação manual você confirma caso a caso.">
       <div className="flex flex-wrap gap-2">
         {(st.data ?? []).filter((s) => s.platform !== "file").map((s) => {
           const on = Boolean((s.preferences as Record<string, unknown>)?.republish_allowed);
@@ -219,7 +238,7 @@ function Rules({ ov }: { ov: Overview }) {
   const st = useQuery({ queryKey: ["streamers"], queryFn: () => api.get<Streamer[]>("/api/streamers") });
   const acctName = (id: number) => ov.accounts.find((a) => a.id === id);
   return (
-    <Section title="4. Regras de publicação" hint="Modo manual: você escolhe cada corte. Semiautomático: a IA propõe os melhores cortes nos horários e você confirma com um clique. Agendado: cortes elegíveis entram nos horários do calendário. Imediato: publica assim que elegível. Público automático só com ativação explícita.">
+    <Section title="Regras de publicação" hint="Modo manual: você escolhe cada corte. Semiautomático: a IA propõe os melhores cortes nos horários e você confirma com um clique. Agendado: cortes elegíveis entram nos horários do calendário. Imediato: publica assim que elegível. Público automático só com ativação explícita.">
       {ov.accounts.filter((a) => a.status === "connected").map((a) => (
         <button key={a.id} className="btn-quiet mb-3 mr-2" onClick={() => setEditing(emptyRule(a))}>Nova regra para {a.name}</button>
       ))}
@@ -305,54 +324,86 @@ function RuleForm({ rule, accounts, streamers, onClose }: { rule: Omit<Rule, "id
   );
 }
 
+const publicationFilters = [
+  { key: "all", label: "Todas", statuses: [] },
+  { key: "pending", label: "Pendentes", statuses: ["draft", "proposed"] },
+  { key: "scheduled", label: "Agendadas", statuses: ["scheduled"] },
+  { key: "processing", label: "Em processamento", statuses: ["uploading", "processing"] },
+  { key: "published", label: "Publicadas", statuses: ["published"] },
+  { key: "failed", label: "Com falha", statuses: ["failed"] },
+  { key: "uncertain", label: "Resultado incerto", statuses: ["uncertain"] },
+  { key: "closed", label: "Encerradas", statuses: ["cancelled", "expired"] },
+];
+
 function Calendar({ accounts }: { accounts: PubAccount[] }) {
   const qc = useQueryClient();
-  const pubs = useQuery({ queryKey: ["publications"], queryFn: () => api.get<Pub[]>("/api/publish/publications?days=60"), refetchInterval: 10_000 });
+  const pubs = useQuery({ queryKey: ["publications", 60], queryFn: () => api.get<Pub[]>("/api/publish/publications?days=60"), refetchInterval: 10_000 });
   const act = useMutation({
     mutationFn: ({ id, a }: { id: number; a: "cancel" | "retry" | "metrics" }) => api.post(`/api/publish/publications/${id}/${a}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["publications"] }),
   });
   const [open, setOpen] = useState<number | null>(null);
+  const [filter, setFilter] = useState("all");
+  const publications = pubs.data ?? [];
+  const statuses = publicationFilters.find((item) => item.key === filter)?.statuses ?? [];
+  const visible = statuses.length ? publications.filter((pub) => statuses.includes(pub.status)) : publications;
   const groups = new Map<string, Pub[]>();
-  for (const p of pubs.data ?? []) {
-    const d = new Date(p.scheduled_at ?? p.published_at ?? p.created_at).toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit" });
+  for (const p of visible) {
+    const d = publicationDay.format(new Date(p.scheduled_at ?? p.published_at ?? p.created_at));
     groups.set(d, [...(groups.get(d) ?? []), p]);
   }
   const acct = (id: number) => accounts.find((a) => a.id === id);
   return (
-    <Section title="6. Acompanhamento" hint="Estados, IDs e links das publicações, erros e reenvio administrativo. Métricas oficiais quando a plataforma fornece.">
+    <section className="space-y-4" aria-label="Acompanhamento de publicações">
+      <nav className="view-switch" aria-label="Filtrar publicações por estado">
+        {publicationFilters.map((item) => {
+          const count = item.statuses.length ? publications.filter((pub) => item.statuses.includes(pub.status)).length : publications.length;
+          return (
+            <button type="button" key={item.key} className="view-switch-item" aria-pressed={filter === item.key}
+              onClick={() => { setFilter(item.key); setOpen(null); }}>
+              {item.label}{pubs.data && <span className="rounded border border-suite-line px-1.5 font-mono text-xs">{count}</span>}
+            </button>
+          );
+        })}
+      </nav>
       <ErrorNote error={pubs.error ?? act.error} />
-      {(pubs.data ?? []).length === 0 && <Empty title="Nenhuma publicação ainda">Publique um corte pela Central de cortes (botão Publicar) ou crie uma regra automática.</Empty>}
+      {act.isSuccess && <Notice>
+        {{ cancel: "Publicação cancelada.", retry: "Reenvio solicitado.", metrics: "Métricas atualizadas." }[act.variables!.a]}
+      </Notice>}
+      {pubs.isLoading && <Skeleton label="Carregando publicações" />}
+      {pubs.data && visible.length === 0 && <Empty title={filter === "all" ? "Nenhuma publicação nos últimos 60 dias" : "Nenhuma publicação neste estado"}>
+        {filter === "all" ? "Envie um corte pela Central de cortes ou acompanhe as propostas no calendário." : "Escolha outro estado para ver mais publicações."}
+      </Empty>}
       <div className="space-y-4">
         {[...groups.entries()].map(([day, items]) => (
-          <div key={day}>
-            <p className="mb-1 text-xs uppercase tracking-wide text-ink-muted">{day}</p>
-            <ul className="space-y-1">
+          <div key={day} className="panel">
+            <h2 className="panel-heading text-sm font-semibold capitalize text-ink-muted">{day}</h2>
+            <ul className="divide-y divide-suite-line">
               {items.map((p) => {
                 const [label, tone] = pubStatus[p.status] ?? [p.status, ""];
                 const prog = p.upload_progress?.size ? Math.round(((p.upload_progress.sent ?? 0) / p.upload_progress.size) * 100) : null;
                 return (
-                  <li key={p.id} className="rounded-md border border-suite-line/60 px-3 py-2 text-sm">
+                  <li key={p.id} className="min-w-0 px-4 py-3 text-sm sm:px-5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <button className="text-left" onClick={() => setOpen(open === p.id ? null : p.id)}>
-                        <span className="font-medium">{p.title}</span>
-                        <span className="ml-2 text-xs text-ink-muted">{acct(p.account_id)?.platform_name} · {acct(p.account_id)?.name} · {privacyLabel[p.privacy] ?? p.privacy} · {p.origin === "auto" ? "automático" : "manual"} · {when(p.scheduled_at)}</span>
+                      <button className="min-w-0 rounded-md text-left hover:text-take" aria-expanded={open === p.id} onClick={() => setOpen(open === p.id ? null : p.id)}>
+                        <span className="flex items-center gap-2 break-words font-semibold"><ChevronDown size={15} className={open === p.id ? "shrink-0 rotate-180" : "shrink-0"} aria-hidden />{p.title || "Publicação sem título"}</span>
+                        <span className="ml-5 block break-words text-xs text-ink-muted">{acct(p.account_id)?.platform_name} · {acct(p.account_id)?.name} · {privacyLabel[p.privacy] ?? p.privacy} · {p.origin === "auto" ? "automático" : "manual"} · {when(p.scheduled_at)}</span>
                       </button>
-                      <span className="flex items-center gap-2">
-                        <span className={`text-xs ${tone}`}>{label}{p.status === "uploading" && prog !== null ? ` ${prog}%` : ""}</span>
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className={`inline-flex items-center gap-1.5 rounded bg-suite-raised px-2 py-1 text-xs font-semibold ${tone}`}>{p.status === "uncertain" && <AlertTriangle size={14} aria-hidden />}{label}{p.status === "uploading" && prog !== null ? ` ${prog}%` : ""}</span>
                         {p.remote_url && <a className="text-take" href={p.remote_url} target="_blank" rel="noreferrer" aria-label="Abrir publicação"><ExternalLink className="h-4 w-4" /></a>}
-                        {["draft", "scheduled"].includes(p.status) && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => act.mutate({ id: p.id, a: "cancel" })}><X className="h-3 w-3" /> Cancelar</button>}
-                        {p.status === "failed" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => act.mutate({ id: p.id, a: "retry" })}><RotateCcw className="h-3 w-3" /> Reenviar</button>}
+                        {["draft", "scheduled"].includes(p.status) && <button className="btn-quiet px-2 py-1 text-xs" disabled={act.isPending} onClick={() => window.confirm("Cancelar esta publicação?") && act.mutate({ id: p.id, a: "cancel" })}><X className="h-3 w-3" /> Cancelar</button>}
+                        {p.status === "failed" && <button className="btn-quiet px-2 py-1 text-xs" disabled={act.isPending} onClick={() => act.mutate({ id: p.id, a: "retry" })}><RotateCcw className="h-3 w-3" /> Reenviar</button>}
                         {p.status === "uncertain" && <ResolveButtons id={p.id} />}
-                        {p.status === "published" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => act.mutate({ id: p.id, a: "metrics" })}>Atualizar métricas</button>}
-                      </span>
+                        {p.status === "published" && <button className="btn-quiet px-2 py-1 text-xs" disabled={act.isPending} onClick={() => act.mutate({ id: p.id, a: "metrics" })}>Atualizar métricas</button>}
+                      </div>
                     </div>
-                    {p.last_error && <p className="mt-1 text-xs text-[#ffb4b6]">{p.last_error}</p>}
+                    {p.last_error && <p className="mt-1 text-xs text-tally">{p.last_error}</p>}
                     {Object.keys(p.metrics ?? {}).length > 0 && <p className="mt-1 text-xs text-ink-muted">{Object.entries(p.metrics).map(([k, v]) => `${k}: ${v}`).join(" · ")}</p>}
                     {open === p.id && (
                       <ul className="mt-2 space-y-0.5 border-t border-suite-line/50 pt-2 text-[11px] text-ink-muted">
-                        {p.log.map((l, i) => <li key={i}>{new Date(l.at).toLocaleString("pt-BR")} — {l.event}{l.detail ? `: ${l.detail}` : ""}</li>)}
-                        {p.clip_id && <li>Corte #{p.clip_id} (nota {p.clip_score?.toFixed(0)})</li>}
+                        {p.log.map((l, i) => <li key={i}>{when(l.at)} — {l.event}{l.detail ? `: ${l.detail}` : ""}</li>)}
+                        {p.clip_id && <li><Link className="text-take hover:underline" to={`/cortes/${p.clip_id}?status=`}>Corte #{p.clip_id}</Link> (nota {p.clip_score?.toFixed(0)})</li>}
                       </ul>
                     )}
                   </li>
@@ -362,7 +413,7 @@ function Calendar({ accounts }: { accounts: PubAccount[] }) {
           </div>
         ))}
       </div>
-    </Section>
+    </section>
   );
 }
 
@@ -376,7 +427,7 @@ function ResolveButtons({ id }: { id: number }) {
   return (
     <span className="inline-flex flex-wrap gap-1">
       <button className="btn-quiet px-2 py-1 text-xs" disabled={res.isPending}
-        onClick={() => { const url = window.prompt("Está no perfil. Cole o link do vídeo (opcional):") ?? ""; res.mutate({ outcome: "published", url: url.trim() }); }}>
+        onClick={() => { const url = window.prompt("Está no perfil. Cole o link do vídeo (opcional):"); if (url !== null) res.mutate({ outcome: "published", url: url.trim() }); }}>
         Está no perfil</button>
       <button className="btn-quiet px-2 py-1 text-xs" disabled={res.isPending}
         onClick={() => window.confirm("Conferiu no perfil e o vídeo NÃO foi publicado? Isso libera um novo envio.") && res.mutate({ outcome: "not_published" })}>

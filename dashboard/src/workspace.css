@@ -1,0 +1,115 @@
+@layer components {
+  .workspace {
+    --sidebar-width: 14.5rem;
+    --topbar-height: 3.75rem;
+    display: grid;
+    min-height: 100dvh;
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  }
+  .workspace-sidebar {
+    @apply sticky top-0 flex h-dvh min-h-0 flex-col border-r border-suite-line bg-suite-panel;
+  }
+  .sidebar-brand { @apply flex shrink-0 items-center px-5 py-5; }
+  .product-brand { @apply inline-flex min-w-0 items-center gap-3; }
+  .product-brand img { @apply h-9 w-9 shrink-0; }
+  .product-brand strong { @apply block text-base font-semibold leading-tight; letter-spacing: -0.025em; }
+  .product-brand strong + span { @apply mt-1 block text-xs leading-tight text-ink-muted; }
+  .workspace-nav { @apply min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-1; scrollbar-width: thin; }
+  .nav-group + .nav-group { @apply mt-3; }
+  .nav-group-toggle {
+    @apply flex min-h-8 w-full items-center justify-between rounded-md px-2.5 text-xs font-semibold text-ink-muted hover:bg-suite-raised hover:text-ink;
+  }
+  .nav-group-toggle[data-current][aria-expanded="false"] { @apply text-take; }
+  .nav-group-toggle svg { transition: transform var(--duration-fast) ease; }
+  .nav-group-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
+  .nav-group ul { @apply space-y-0.5; }
+  .nav-group ul:not([hidden]) { animation: appear var(--duration-panel) ease-out; }
+  .workspace-link {
+    @apply relative flex min-h-9 min-w-0 items-center gap-2.5 rounded-md px-2.5 text-sm text-ink-muted transition-colors hover:bg-suite-raised hover:text-ink;
+  }
+  .workspace-link svg { @apply shrink-0; }
+  .workspace-link[aria-current="page"] { @apply bg-take-dim font-semibold text-take; }
+  .workspace-link[aria-current="page"]::before {
+    content: "";
+    @apply absolute inset-y-2 left-0 w-0.5 rounded-full bg-take;
+  }
+  .nav-count { @apply ml-auto rounded border border-suite-outline px-1.5 font-mono text-xs text-ink; }
+  .sidebar-footer { @apply flex items-center justify-between gap-2 border-t border-suite-line px-5 py-4 text-xs text-ink-muted; }
+  .sidebar-footer a:hover { @apply text-take; }
+  .workspace-content { min-width: 0; }
+  .workspace-topbar {
+    @apply sticky top-0 z-20 flex min-w-0 items-center justify-between gap-3 border-b border-suite-line bg-suite px-4 sm:px-7;
+    min-height: var(--topbar-height);
+  }
+  .breadcrumb { @apply flex min-w-0 items-center gap-2 text-sm text-ink-muted; }
+  .breadcrumb svg { @apply shrink-0; }
+  .breadcrumb strong { @apply truncate font-medium text-ink; }
+  .topbar-health { @apply inline-flex shrink-0 items-center gap-2 rounded-md px-2 py-1 text-xs text-ink-muted hover:text-ink; }
+  .topbar-health span { @apply h-1.5 w-1.5 rounded-full; }
+  .account-menu { @apply relative; }
+  .account-menu summary { @apply flex min-h-10 list-none items-center gap-2 rounded-md px-1.5 text-xs font-medium text-ink-muted hover:bg-suite-panel hover:text-ink; }
+  .account-menu summary::-webkit-details-marker { display: none; }
+  .account-avatar { @apply grid h-7 w-7 place-items-center rounded-md bg-take-dim font-semibold text-take; }
+  .account-menu:not([open]) .account-popover { display: none; }
+  .account-popover {
+    @apply panel absolute right-0 top-full mt-2 w-64 max-w-[calc(100vw-2rem)] space-y-2 p-3;
+    box-shadow: var(--shadow-overlay);
+    animation: appear var(--duration-panel) ease-out;
+  }
+  .workspace-main { @apply mx-auto w-full max-w-[96rem] px-4 pb-10 pt-6 sm:px-7 sm:pt-8 xl:px-9; scroll-margin: var(--topbar-height); }
+  .skip-link { @apply sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-take focus:p-3 focus:text-take-ink; }
+  .workspace-topbar .drawer-toggle { display: none; }
+  .workspace-drawer {
+    @apply fixed inset-0 m-0 h-dvh max-h-none w-screen max-w-none bg-transparent p-0 text-ink;
+  }
+  .workspace-drawer::backdrop { background: rgb(5 7 13 / 68%); }
+  .drawer-sheet {
+    @apply flex h-full w-[min(22rem,calc(100vw-2.25rem))] flex-col border-r border-suite-outline bg-suite-panel;
+    box-shadow: var(--shadow-overlay);
+    animation: drawer-in var(--duration-panel) ease-out;
+  }
+  .drawer-heading { @apply flex items-center justify-between gap-3 border-b border-suite-line p-4; }
+  .drawer-sheet .workspace-nav { @apply pt-3; }
+  .drawer-sheet .workspace-link { @apply min-h-11; }
+  .drawer-sheet .nav-group-toggle { @apply min-h-10; }
+  .review-player video { max-height: min(55dvh, 24rem); }
+  @media (min-width: 1024px) {
+    .review-player video { max-height: clamp(15rem, calc(100dvh - 28rem), 30rem); }
+  }
+  .login-layout { @apply mx-auto grid min-h-dvh max-w-[92rem] items-stretch gap-6 px-5 py-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] md:px-8 md:py-8; }
+  .login-column { @apply mx-auto flex w-full max-w-[26rem] flex-col gap-6 px-1 py-4; }
+  .login-column .product-brand img { @apply h-10 w-10; }
+  .login-stage {
+    @apply relative hidden min-h-[33rem] overflow-hidden rounded-lg border border-suite-line bg-suite-media md:grid md:place-items-center;
+    background-image:
+      linear-gradient(to right, rgb(var(--line) / 28%) 1px, transparent 1px),
+      linear-gradient(to bottom, rgb(var(--line) / 28%) 1px, transparent 1px);
+    background-size: 2rem 2rem;
+  }
+  .login-graphic {
+    @apply relative grid aspect-short w-[38%] max-w-64 place-items-center border border-take/70 bg-take-dim/40 text-take;
+  }
+  .login-graphic::before, .login-graphic::after {
+    content: "";
+    @apply pointer-events-none absolute;
+  }
+  .login-graphic::before { @apply -inset-6 border-x border-dashed border-take/40; }
+  .login-graphic::after { @apply -left-[55%] -right-[55%] top-1/2 border-t border-dashed border-take/40; }
+  .login-tracks { @apply absolute inset-x-5 bottom-5 grid gap-2 border-t border-suite-line py-3; }
+  .login-tracks div { @apply flex h-2.5 gap-1 rounded-sm bg-suite-raised p-0.5; }
+  .login-tracks span { @apply rounded-sm bg-take/50; }
+}
+@keyframes drawer-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@media (max-width: 959px) {
+  #root .workspace { display: block; }
+  .workspace .workspace-sidebar { display: none; }
+  .workspace .workspace-topbar .drawer-toggle { display: inline-grid; }
+}
+@media (max-width: 600px) {
+  .workspace-topbar .breadcrumb > span, .workspace-topbar .breadcrumb svg,
+  .workspace-topbar .topbar-health, .workspace-topbar .account-label { display: none; }
+  .workspace-topbar { --topbar-height: 3.5rem; }
+}

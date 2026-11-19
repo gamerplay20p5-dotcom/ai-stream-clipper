@@ -68,9 +68,9 @@ export default function AnalysisPanel({ clip, onReanalyze, busy }: { clip: Clip;
     <>
     {clip.gate_detail && <GateBlock g={clip.gate_detail} />}
     {d?.editorial && <EditorialBlock e={d.editorial} />}
-    <section className="mt-6 border-t border-suite-line pt-5" aria-label="Análise da IA">
+    <section className="panel panel-body" aria-label="Análise da IA">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">Análise da IA</h3>
+        <h2 className="display text-lg">Análise da IA</h2>
         <AnalysisStatus clip={clip} />
       </div>
 
@@ -206,7 +206,7 @@ export default function AnalysisPanel({ clip, onReanalyze, busy }: { clip: Clip;
 function EditorialBlock({ e }: { e: Editorial }) {
   const crit = Object.entries(e.criteria);
   return (
-    <section className="mt-6 border-t border-suite-line pt-5" aria-label="Julgamento editorial">
+    <section className="panel panel-body" aria-label="Julgamento editorial">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">Julgamento editorial</h3>
         <span className="text-xs text-ink-muted">

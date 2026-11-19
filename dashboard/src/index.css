@@ -1,4 +1,6 @@
-@import "@fontsource-variable/archivo/wdth.css";
+@import "@fontsource-variable/archivo";
+@import "/site/tokens.css";
+@import "./workspace.css";
 
 @tailwind base;
 @tailwind components;
@@ -6,73 +8,86 @@
 
 @layer base {
   html {
-    background: #232428;
-    color: #eceae4;
-    font-feature-settings: "tnum" 1;
+    @apply bg-suite text-ink;
+    color-scheme: dark;
+    font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
   }
-  body {
-    min-height: 100vh;
-  }
-  ::selection {
-    background: #f2b33d;
-    color: #1e1a12;
-  }
+  body { min-height: 100vh; }
+  ::selection { @apply bg-take text-take-ink; }
   :focus-visible {
-    outline: 2px solid #f2b33d;
-    outline-offset: 2px;
+    outline: 2px solid rgb(var(--take));
+    outline-offset: 3px;
   }
-  input,
-  select,
-  textarea {
-    color-scheme: dark;
-  }
+  input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color: rgb(var(--take)); }
+  input, textarea, select { min-width: 0; }
+  video { max-width: 100%; }
+  summary { cursor: pointer; }
+  button, a, summary { -webkit-tap-highlight-color: transparent; }
 }
 
 @layer components {
-  .display {
-    font-variation-settings: "wdth" 125;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-  }
+  .display { font-weight: 650; letter-spacing: -0.025em; }
   .field {
-    @apply w-full rounded-md border border-suite-line bg-suite px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-take focus:outline-none;
+    @apply min-h-10 w-full max-w-full rounded-md border border-suite-outline bg-suite px-3 py-2 text-sm text-ink placeholder:text-ink-faint focus:border-take;
+    transition: border-color var(--duration-fast) ease;
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-9 max-w-full items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50;
   }
-  .btn-take {
-    @apply btn bg-take text-take-ink hover:bg-[#f6c25e];
+  .btn svg { flex-shrink: 0; }
+  .btn-take { @apply btn border border-transparent bg-take text-take-ink hover:bg-take-hover; }
+  .btn-quiet { @apply btn border border-suite-outline text-ink hover:border-take hover:bg-suite-raised; }
+  .btn-danger { @apply btn border border-tally/60 text-tally hover:border-tally hover:bg-tally-dim; }
+  .label { @apply mb-1.5 block text-sm font-medium text-ink-muted; }
+  .panel { @apply min-w-0 rounded-lg border border-suite-line bg-suite-panel; }
+  .panel-heading { @apply flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-suite-line px-4 py-3 sm:px-5; }
+  .panel-body { @apply p-4 sm:p-5; }
+  .page-heading { @apply mb-6 flex flex-wrap items-end justify-between gap-4; }
+  .table-scroll { @apply max-w-full overflow-x-auto rounded-lg border border-suite-line bg-suite-panel; }
+  .table-scroll thead { @apply bg-suite-raised text-ink-muted; }
+  .table-scroll :is(th, td):first-child { @apply pl-3; }
+  .table-scroll :is(th, td):last-child { @apply pr-3; }
+  .table-scroll tbody tr { @apply transition-colors hover:bg-suite-raised/40; }
+  .view-switch { @apply flex flex-wrap gap-1 border-b border-suite-line; }
+  .view-switch-item {
+    @apply -mb-px inline-flex min-h-10 items-center gap-2 rounded-t-md border-b-2 border-transparent px-3 py-2 text-sm font-medium text-ink-muted transition-colors hover:bg-suite-panel hover:text-ink;
   }
-  .btn-quiet {
-    @apply btn border border-suite-line text-ink hover:border-ink-faint hover:bg-suite-raised;
+  .view-switch-item:is([aria-current="page"], [aria-pressed="true"]) { @apply border-take bg-take-dim/50 text-take; }
+  .media-stage {
+    @apply grid min-w-0 place-items-center overflow-hidden rounded-lg border border-suite-line bg-suite-media;
   }
-  .btn-danger {
-    @apply btn border border-suite-line text-tally hover:border-tally hover:bg-tally-dim;
+  .media-video { @apply block aspect-short max-h-[60vh] w-full bg-suite-media object-contain; }
+  .notice { @apply flex items-start gap-2 rounded-md border px-3 py-2 text-sm; animation: appear var(--duration-panel) ease-out; }
+  .empty-state { @apply grid min-h-36 place-content-center justify-items-center gap-2 rounded-lg border border-dashed border-suite-line px-5 py-7 text-center; }
+  .loading-shape { @apply rounded-md bg-suite-raised; }
+  .section-flow { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-section); }
+  .disclosure { @apply panel; }
+  .disclosure > summary { @apply flex min-h-11 list-none items-center justify-between gap-3 px-4 py-3 font-medium; }
+  .disclosure > summary::-webkit-details-marker { display: none; }
+  .disclosure > summary svg { transition: transform var(--duration-panel) ease; }
+  .disclosure[open] > summary { @apply border-b border-suite-line; }
+  .disclosure[open] > summary svg { transform: rotate(180deg); }
+  .disclosure[open] > :not(summary) { animation: appear var(--duration-panel) ease-out; }
+  .confirmation-modal {
+    @apply panel m-auto w-[min(27rem,calc(100%-2rem))] p-5 text-ink sm:p-6;
+    box-shadow: var(--shadow-overlay);
   }
-  .label {
-    @apply mb-1 block text-xs text-ink-muted;
-  }
+  .confirmation-modal[open] { animation: appear var(--duration-panel) ease-out; }
+  .confirmation-modal::backdrop { background: rgb(5 7 13 / 68%); }
+  .icon-action { @apply inline-grid h-10 w-10 shrink-0 place-items-center rounded-md border border-suite-line text-ink-muted transition-colors hover:border-take hover:text-ink disabled:cursor-not-allowed disabled:opacity-40; }
+}
+
+@keyframes appear {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
-}
-
-@keyframes tally {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-.tally-blink {
-  animation: tally 1.6s ease-in-out infinite;
 }

@@ -1,27 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, cloneElement, isValidElement, type ReactNode } from "react";
 import { api, type AISettings, type ModelInfo } from "../api";
-import { ErrorNote, PageHeader } from "../components/ui";
+import { Disclosure, ErrorNote, Notice, PageHeader, Skeleton } from "../components/ui";
 import { dimensionLabel } from "../lib/format";
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  const id = useId();
   return (
     <div className="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,260px)] sm:items-center sm:gap-6">
       <div>
-        <div className="text-sm">{label}</div>
-        {hint && <div className="text-xs text-ink-muted">{hint}</div>}
+        <div id={id} className="text-sm font-medium">{label}</div>
+        {hint && <p id={id + "-hint"} className="text-xs text-ink-muted">{hint}</p>}
       </div>
-      <div>{children}</div>
+      <div>
+        {isValidElement<{ "aria-labelledby"?: string; "aria-describedby"?: string }>(children) && typeof children.type === "string" && ["input", "select", "textarea"].includes(children.type)
+          ? cloneElement(children, { "aria-labelledby": id, "aria-describedby": hint ? id + "-hint" : undefined })
+          : children}
+      </div>
     </div>
   );
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="py-2">
-      <h2 className="display mb-1 text-lg">{title}</h2>
+    <Disclosure title={title}>
       <div className="divide-y divide-suite-line">{children}</div>
-    </section>
+    </Disclosure>
   );
 }
 
@@ -39,19 +43,21 @@ export default function Settings() {
     mutationFn: (b: AISettings) => api.put<AISettings>("/api/settings", b),
     onSuccess: (d) => { qc.setQueryData(["settings"], d); setS(d); },
   });
-  if (!s) return <ErrorNote error={q.error} />;
+  if (!s) return <><PageHeader title="Configurações da IA" /><ErrorNote error={q.error} />{q.isLoading && <Skeleton label="Carregando parâmetros da IA" />}</>;
   const dirty = JSON.stringify(s) !== JSON.stringify(q.data);
   const num = (k: keyof AISettings) => (e: React.ChangeEvent<HTMLInputElement>) => setS({ ...s, [k]: Number(e.target.value) });
   const sel = (k: keyof AISettings) => (e: React.ChangeEvent<HTMLSelectElement>) => setS({ ...s, [k]: e.target.value });
   const bool = (k: keyof AISettings) => (e: React.ChangeEvent<HTMLInputElement>) => setS({ ...s, [k]: e.target.checked });
 
   return (
-    <div className="max-w-3xl pb-24">
-      <PageHeader title="Configurações da IA" />
+    <div className="max-w-4xl pb-24">
+      <PageHeader title="Configurações da IA" description="Ajuste detecção, narrativa, edição e os limites do processamento." />
+      {save.isSuccess && !dirty && <div className="mb-4"><Notice>Configurações salvas.</Notice></div>}
+      <div className="space-y-2">
       <Section title="Detecção">
         <Row label="Sensibilidade" hint="Mais alta encontra mais momentos, com mais falsos positivos.">
           <div className="flex items-center gap-3">
-            <input type="range" min={0} max={1} step={0.05} value={s.sensitivity} onChange={num("sensitivity")} className="w-full accent-[#F2B33D]" />
+            <input type="range" min={0} max={1} step={0.05} value={s.sensitivity} onChange={num("sensitivity")} className="w-full" aria-label="Sensibilidade" />
             <span className="w-10 text-right text-sm">{Math.round(s.sensitivity * 100)}%</span>
           </div>
         </Row>
@@ -81,7 +87,7 @@ export default function Settings() {
       </Section>
       <Section title="Análise visual">
         <Row label="Analisar os quadros dos momentos candidatos">
-          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.vision_enabled} onChange={bool("vision_enabled")} />
+          <input type="checkbox" className="h-4 w-4 " checked={s.vision_enabled} onChange={bool("vision_enabled")} />
         </Row>
         <Row label="Provedor" hint="O modelo multimodal exige GPU Intel validada (servidores 201 e 210).">
           <select className="field" value={s.vision_provider} onChange={sel("vision_provider")}>
@@ -108,7 +114,7 @@ export default function Settings() {
       </Section>
       <Section title="Diretor e narrativa">
         <Row label="Usar o diretor automático" hint="Combina fala, som e visão para decidir início, fim e se o corte fica.">
-          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.director_enabled} onChange={bool("director_enabled")} />
+          <input type="checkbox" className="h-4 w-4 " checked={s.director_enabled} onChange={bool("director_enabled")} />
         </Row>
         <Row label="Modelo de texto (justificativa e títulos)" hint={s.narrative_model.startsWith("qwen3-") ? where(s.narrative_model) : "Sem modelo extra na memória"}>
           <select className="field" value={s.narrative_model} onChange={sel("narrative_model")}>
@@ -129,12 +135,12 @@ export default function Settings() {
         </Row>
         <Row label="Intensidade do zoom no pico" hint="0 desliga. O zoom nunca passa de 1,35x.">
           <div className="flex items-center gap-3">
-            <input type="range" min={0} max={1.5} step={0.1} value={s.zoom_intensity} onChange={num("zoom_intensity")} className="w-full accent-[#F2B33D]" />
+            <input type="range" min={0} max={1.5} step={0.1} value={s.zoom_intensity} onChange={num("zoom_intensity")} className="w-full" aria-label="Sensibilidade" />
             <span className="w-10 text-right text-sm">{s.zoom_intensity.toFixed(1)}</span>
           </div>
         </Row>
         <Row label="Normalizar o volume" hint="Ganho linear até -14 LUFS sem passar de -1 dBTP: não distorce nem comprime.">
-          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.normalize_audio} onChange={bool("normalize_audio")} />
+          <input type="checkbox" className="h-4 w-4 " checked={s.normalize_audio} onChange={bool("normalize_audio")} />
         </Row>
       </Section>
       <Section title="Exportação">
@@ -153,12 +159,12 @@ export default function Settings() {
           </select>
         </Row>
         <Row label="Mostrar o título no vídeo">
-          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.show_title_overlay} onChange={bool("show_title_overlay")} />
+          <input type="checkbox" className="h-4 w-4 " checked={s.show_title_overlay} onChange={bool("show_title_overlay")} />
         </Row>
       </Section>
       <Section title="Quality Gate (seleção em 4 dimensões)">
         <Row label="Usar o Quality Gate" hint="Separa a qualidade do acontecimento da qualidade do corte: um bom momento mal cortado é reeditado antes de ser descartado.">
-          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.gate_enabled} onChange={bool("gate_enabled")} />
+          <input type="checkbox" className="h-4 w-4 " checked={s.gate_enabled} onChange={bool("gate_enabled")} />
         </Row>
         <Row label="Acontecimento mínimo (0–10)" hint="Abaixo disso (e fora da margem de dúvida) o momento é rejeitado.">
           <input type="number" step={0.1} min={0} max={10} className="field" value={s.gate_event_min} onChange={num("gate_event_min")} />
@@ -183,7 +189,7 @@ export default function Settings() {
           <input type="number" step={0.1} min={0.4} max={3} className="field" value={s.editor_min_gap} onChange={num("editor_min_gap")} />
         </Row>
         <Row label="Prévia do clímax no início" hint="Mostra 2–3 s do clímax com o aviso “Daqui a pouco…” e depois a sequência real, em ordem.">
-          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.editor_teaser} onChange={bool("editor_teaser")} />
+          <input type="checkbox" className="h-4 w-4 " checked={s.editor_teaser} onChange={bool("editor_teaser")} />
         </Row>
         <Row label="Análises de formato (prints) por hora" hint="Viral Intelligence: roda nos servidores de visão com prioridade baixa, depois das lives.">
           <input type="number" min={0} max={60} className="field" value={s.refs_analyses_per_hour} onChange={num("refs_analyses_per_hour")} />
@@ -203,7 +209,7 @@ export default function Settings() {
       </Section>
       <Section title="Legendas inteligentes">
         <Row label="Reconhecer quem está falando" hint="Separa a voz do streamer das outras (rádio, personagens). Confirme a voz na página Streamers.">
-          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.speakers_enabled} onChange={bool("speakers_enabled")} />
+          <input type="checkbox" className="h-4 w-4 " checked={s.speakers_enabled} onChange={bool("speakers_enabled")} />
         </Row>
         <Row label="O que legendar" hint="“Só o streamer” vale apenas depois que você confirmar a voz; antes disso as outras vozes aparecem menores.">
           <select className="field" value={s.caption_mode} onChange={sel("caption_mode")}>
@@ -219,7 +225,7 @@ export default function Settings() {
         </Row>
         <Row label="Tamanho" hint="100% é o tamanho atual.">
           <div className="flex items-center gap-3">
-            <input type="range" min={60} max={160} step={5} value={s.caption_size_pct} onChange={num("caption_size_pct")} className="w-full accent-[#F2B33D]" />
+            <input type="range" min={60} max={160} step={5} value={s.caption_size_pct} onChange={num("caption_size_pct")} className="w-full" aria-label="Sensibilidade" />
             <span className="w-12 text-right text-sm">{s.caption_size_pct}%</span>
           </div>
         </Row>
@@ -248,11 +254,11 @@ export default function Settings() {
         </Row>
         <Row label="Marca d'água discreta" hint="Texto pequeno e semitransparente, longe das legendas.">
           <div className="flex flex-wrap items-center gap-3">
-            <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.brand_watermark} onChange={bool("brand_watermark")} />
+            <input type="checkbox" className="h-4 w-4 " checked={s.brand_watermark} onChange={bool("brand_watermark")} />
             <select className="field max-w-[180px]" value={s.brand_watermark_position} onChange={sel("brand_watermark_position")}>
               <option value="top_right">Canto superior direito</option><option value="top_left">Canto superior esquerdo</option><option value="bottom_left">Canto inferior esquerdo</option>
             </select>
-            <input type="range" min={0.1} max={1} step={0.05} value={s.brand_watermark_opacity} onChange={num("brand_watermark_opacity")} className="w-28 accent-[#F2B33D]" aria-label="Opacidade" />
+            <input type="range" min={0.1} max={1} step={0.05} value={s.brand_watermark_opacity} onChange={num("brand_watermark_opacity")} className="w-28 " aria-label="Opacidade" />
           </div>
         </Row>
         <Row label="Chamada no final do vídeo" hint="Ex.: “Siga para mais cortes”. Vazio não adiciona nada.">
@@ -281,25 +287,26 @@ export default function Settings() {
         {Object.entries(s.weights).map(([k, v]) => (
           <Row key={k} label={dimensionLabel[k] ?? k}>
             <div className="flex items-center gap-3">
-              <input type="range" min={0} max={3} step={0.1} value={v} className="w-full accent-[#F2B33D]"
+              <input type="range" min={0} max={3} step={0.1} value={v} aria-label={dimensionLabel[k] ?? k} className="w-full"
                 onChange={(e) => setS({ ...s, weights: { ...s.weights, [k]: Number(e.target.value) } })} />
               <span className="w-8 text-right text-sm">{v.toFixed(1)}</span>
             </div>
           </Row>
         ))}
       </Section>
-      <p className="mt-4 text-sm text-ink-muted">Publicação automática nas redes é um módulo futuro e continua desativada.</p>
-
-      <div className={`fixed inset-x-0 bottom-0 border-t border-suite-line bg-suite-panel/95 px-4 py-3 backdrop-blur transition-transform md:left-56 ${dirty ? "translate-y-0" : "translate-y-full"}`}>
-        <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
+      </div>
+      {dirty && (
+        <div className="sticky bottom-0 z-10 mt-4 rounded-lg border border-suite-outline bg-suite-panel p-3">
           <ErrorNote error={save.error} />
-          <span className="text-sm text-ink-muted">{save.error ? "" : "Alterações não salvas"}</span>
-          <div className="flex gap-2">
-            <button className="btn-quiet" onClick={() => setS(q.data!)}>Descartar</button>
-            <button className="btn-take" disabled={save.isPending} onClick={() => save.mutate(s)}>Salvar configurações</button>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="text-sm text-ink-muted">Alterações pendentes</span>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-quiet" disabled={save.isPending} onClick={() => setS(q.data!)}>Descartar</button>
+              <button className="btn-take" disabled={save.isPending} onClick={() => save.mutate(s)}>{save.isPending ? "Salvando…" : "Salvar configurações"}</button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

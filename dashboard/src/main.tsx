@@ -3,6 +3,7 @@ import React, { useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { api, ApiError } from "./api";
+import { Skeleton } from "./components/ui";
 import Layout from "./components/Layout";
 import "./index.css";
 import Clips from "./pages/Clips";
@@ -41,7 +42,7 @@ function App() {
     return () => window.removeEventListener("asc:unauthorized", onUnauth);
   }, []);
 
-  if (me.isLoading) return <div className="p-10 text-ink-muted">Carregando…</div>;
+  if (me.isLoading) return <main className="mx-auto max-w-md p-6"><Skeleton label="Verificando sessão" /></main>;
   const user = me.data;
   return (
     <Routes>

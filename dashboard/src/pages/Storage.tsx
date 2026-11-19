@@ -3,7 +3,7 @@ import { Heart, ShieldCheck, Undo2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { ErrorNote, PageHeader } from "../components/ui";
+import { Disclosure, Empty, ErrorNote, Notice, PageHeader, Skeleton } from "../components/ui";
 import { ago, bytes } from "../lib/format";
 
 type Overview = { bytes: Record<string, number>; clips: Record<string, number>; recovered_bytes: number;
@@ -55,10 +55,12 @@ export default function Storage() {
   const enabledNow = Boolean(form?.cleanup_enabled) && !form?.cleanup_dry_run;
   return (
     <div className="space-y-6">
-      <PageHeader title="Armazenamento" />
-      <ErrorNote error={ov.error ?? sim.error ?? save.error ?? flag.error ?? retro.error} />
+      <PageHeader title="Armazenamento" description="Acompanhe o uso do disco e simule os efeitos da política de retenção." />
+      <ErrorNote error={ov.error ?? sim.error ?? logq.error ?? settings.error ?? save.error ?? flag.error ?? retro.error} />
+      {ov.isLoading && <Skeleton label="Consultando uso do disco" />}
+      {save.isSuccess && <Notice>Política de retenção salva.</Notice>}
       {o && (
-        <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="panel grid grid-cols-2 divide-suite-line sm:grid-cols-3 xl:grid-cols-6 xl:divide-x">
           <Card label="Cortes renderizados" value={bytes(o.bytes.video)} />
           <Card label="Mídias de origem" value={bytes(o.bytes.source)} />
           <Card label="Miniaturas" value={bytes(o.bytes.thumbnail)} />
@@ -68,7 +70,7 @@ export default function Storage() {
         </div>
       )}
       {o && (
-        <p className={`rounded-md border px-3 py-2 text-sm ${o.enabled && !o.dry_run ? "border-tally/50 bg-tally-dim text-[#ffb4b6]" : "border-ok/40 bg-ok/10 text-ok"}`}>
+        <p className={`rounded-md border px-3 py-2 text-sm ${o.enabled && !o.dry_run ? "border-tally/50 bg-tally-dim text-tally" : "border-ok/40 bg-ok/10 text-ok"}`}>
           {!o.enabled ? "Limpeza automática desligada: nada é apagado. A simulação abaixo mostra o que aconteceria."
             : o.dry_run ? "Limpeza em modo simulação: as decisões são registradas, mas nenhum arquivo é apagado."
               : "Limpeza ativa: cortes elegíveis vão para a quarentena e a mídia é apagada depois do prazo. Os registros e as avaliações são sempre mantidos."}
@@ -76,14 +78,16 @@ export default function Storage() {
         </p>
       )}
 
-      <section className="rounded-lg border border-suite-line p-4">
-        <h2 className="mb-1 font-semibold">Simulação da limpeza</h2>
+      <section className="panel">
+        <header className="panel-heading"><h2 className="display text-lg">Simulação da limpeza</h2></header>
+        <div className="panel-body">
         <p className="mb-3 text-xs text-ink-muted">Somente leitura. Mostra o que a limpeza faria com as configurações atuais. Ao mudar as configurações, salve e a simulação é atualizada.</p>
         <label className="mb-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={includeExisting} onChange={(e) => setIncludeExisting(e.target.checked)} />
           Incluir os cortes que já existiam (prévia; apagar esses cortes exige autorização retroativa)</label>
+        {sim.isLoading && <Skeleton label="Calculando simulação" />}
         {s && (
           <>
-            <div className="mb-3 grid gap-3 sm:grid-cols-4">
+            <div className="mb-4 grid grid-cols-2 divide-suite-line rounded-md bg-suite-raised sm:grid-cols-4 sm:divide-x">
               <Card label="Seriam removidos" value={`${s.counts.eligible} cortes`} hint={`${s.files} arquivos`} />
               <Card label="Espaço recuperado" value={bytes(s.total_bytes)} hint={`vídeo ${bytes(s.bytes.video)} · origem ${bytes(s.bytes.source)} · miniaturas ${bytes(s.bytes.thumbnail)}`} />
               <Card label="Protegidos" value={String(s.counts.protected)} hint={s.excluded_existing ? `${s.excluded_existing} por serem anteriores à ativação` : ""} />
@@ -93,11 +97,11 @@ export default function Storage() {
             <ClipTable title="Protegidos e o motivo" rows={s.protected} />
           </>
         )}
+        </div>
       </section>
 
       {form && (
-        <section className="rounded-lg border border-suite-line p-4">
-          <h2 className="mb-3 font-semibold">Configurações</h2>
+        <Disclosure title="Política de retenção e cotas">
           <div className="grid gap-3 md:grid-cols-2">
             {FIELDS.map(([k, label, kind]) => (
               <label key={k} className="flex items-center justify-between gap-3 text-sm">
@@ -108,40 +112,39 @@ export default function Storage() {
               </label>
             ))}
           </div>
-          {enabledNow && <p className="mt-3 text-xs text-[#ffb4b6]">Atenção: com a simulação desligada, cortes elegíveis entram em quarentena e a mídia é apagada depois de {String(form.cleanup_quarantine_days)} dias. Os cortes que já existiam continuam fora até você autorizar abaixo.</p>}
-          <button className="btn-take mt-3" disabled={save.isPending} onClick={() => save.mutate(form)}>Salvar configurações</button>
-        </section>
+          {enabledNow && <p className="mt-3 text-xs text-tally">Atenção: com a simulação desligada, cortes elegíveis entram em quarentena e a mídia é apagada depois de {String(form.cleanup_quarantine_days)} dias. Os cortes que já existiam continuam fora até você autorizar abaixo.</p>}
+          <button className="btn-take mt-3" disabled={save.isPending} onClick={() => save.mutate(form)}>{save.isPending ? "Salvando…" : "Salvar configurações"}</button>
+        </Disclosure>
       )}
 
       {o && (
-        <section className="rounded-lg border border-suite-line p-4 text-sm">
-          <h2 className="mb-1 font-semibold">Limpeza retroativa</h2>
+        <Disclosure title="Limpeza retroativa">
           {o.retro_authorized ? <p className="text-ok">Autorizada: cortes antigos elegíveis também entram no ciclo.</p> : (
             <>
               <p className="mb-2 text-ink-muted">Os cortes existentes antes da ativação nunca são apagados sem sua autorização. Para incluí-los, revise a simulação com "Incluir os cortes que já existiam" marcado e digite <b>AUTORIZO A LIMPEZA RETROATIVA</b>.</p>
-              <div className="flex flex-wrap gap-2"><input className="field max-w-sm" value={phrase} onChange={(e) => setPhrase(e.target.value)} />
-                <button className="btn-danger" disabled={!phrase || retro.isPending} onClick={() => retro.mutate()}>Autorizar</button></div>
+              <div className="flex flex-wrap gap-2"><input className="field max-w-sm" aria-label="Frase de autorização da limpeza retroativa" value={phrase} onChange={(e) => setPhrase(e.target.value)} />
+                <button className="btn-danger" disabled={phrase.trim().toUpperCase() !== "AUTORIZO A LIMPEZA RETROATIVA" || retro.isPending} onClick={() => retro.mutate()}>Autorizar</button></div>
             </>
           )}
-        </section>
+        </Disclosure>
       )}
 
-      <section className="rounded-lg border border-suite-line p-4">
-        <h2 className="mb-2 font-semibold">Histórico</h2>
-        <ul className="space-y-1 text-xs">
-          {(logq.data ?? []).length === 0 && <li className="text-ink-faint">Nenhuma ação registrada.</li>}
+      <Disclosure title="Histórico de limpeza">
+        {logq.isLoading && <Skeleton label="Carregando histórico" lines={2} />}
+        {logq.data?.length === 0 && <Empty title="Nenhuma ação registrada" />}
+        <ul className="divide-y divide-suite-line text-sm">
           {(logq.data ?? []).map((r) => (
-            <li key={r.id}><span className="text-ink-muted">{ago(r.at)}</span> · {r.dry_run ? "simulação" : r.action}{r.clip_id ? <> · <Link className="text-take" to={`/cortes/${r.clip_id}?status=`}>#{r.clip_id}</Link></> : ""} · {r.reason}{r.bytes_freed ? ` · ${bytes(r.bytes_freed)}` : ""}</li>
+            <li key={r.id} className="break-words py-2"><span className="text-ink-muted">{ago(r.at)}</span> · {r.dry_run ? "simulação" : r.action}{r.clip_id ? <> · <Link className="text-take" to={`/cortes/${r.clip_id}?status=`}>#{r.clip_id}</Link></> : ""} · {r.reason}{r.bytes_freed ? ` · ${bytes(r.bytes_freed)}` : ""}</li>
           ))}
         </ul>
-      </section>
+      </Disclosure>
     </div>
   );
 }
 
 function Card({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-lg border border-suite-line p-3">
+    <div className="min-w-0 border-suite-line p-3 sm:p-4">
       <p className="text-xs text-ink-muted">{label}</p>
       <p className="display mt-1 text-lg">{value}</p>
       {hint && <p className="mt-1 text-[11px] text-ink-faint">{hint}</p>}
@@ -154,7 +157,8 @@ function ClipTable({ title, rows, onFlag }: { title: string; rows: Item[]; onFla
   return (
     <details className="mb-3">
       <summary className="cursor-pointer text-sm font-medium">{title} ({rows.length})</summary>
-      <table className="mt-2 w-full text-sm">
+      <div className="table-scroll mt-2" tabIndex={0} role="region" aria-label={title}>
+      <table className="w-full min-w-[30rem] text-sm">
         <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Corte</th><th>Motivo</th><th>Nota</th><th>Tamanho</th><th /></tr></thead>
         <tbody>{rows.slice(0, 150).map((r) => (
           <tr key={r.clip_id} className="border-t border-suite-line/50">
@@ -162,11 +166,12 @@ function ClipTable({ title, rows, onFlag }: { title: string; rows: Item[]; onFla
             <td className="text-xs">{r.protected_by ? r.protected_by.join("; ") : r.reason}</td>
             <td>{r.score.toFixed(0)}</td><td>{bytes(r.bytes)}</td>
             <td className="space-x-1 text-right">{onFlag && <>
-              <button className="btn-quiet px-2 py-1 text-xs" title="Proteger contra limpeza" onClick={() => onFlag(r.clip_id, "protect", true)}><ShieldCheck className="h-3 w-3" /></button>
-              <button className="btn-quiet px-2 py-1 text-xs" title="Favoritar" onClick={() => onFlag(r.clip_id, "favorite", true)}><Heart className="h-3 w-3" /></button>
+              <button className="btn-quiet px-2 py-1 text-xs" aria-label="Proteger contra limpeza" title="Proteger contra limpeza" onClick={() => onFlag(r.clip_id, "protect", true)}><ShieldCheck className="h-3 w-3" /></button>
+              <button className="btn-quiet px-2 py-1 text-xs" aria-label="Favoritar" title="Favoritar" onClick={() => onFlag(r.clip_id, "favorite", true)}><Heart className="h-3 w-3" /></button>
             </>}</td>
           </tr>))}</tbody>
       </table>
+      </div>
     </details>
   );
 }
@@ -179,11 +184,11 @@ export function StorageFlags({ clipId, protectedFlag, favorite, lifecycle, purge
   });
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-      <button className={`btn-quiet px-2 py-1 ${protectedFlag ? "text-ok" : ""}`} onClick={() => m.mutate({ path: "protect", body: { value: !protectedFlag } })}>
+      <button className={`btn-quiet px-2 py-1 ${protectedFlag ? "text-ok" : ""}`} disabled={m.isPending} onClick={() => m.mutate({ path: "protect", body: { value: !protectedFlag } })}>
         <ShieldCheck className="h-3.5 w-3.5" /> {protectedFlag ? "Protegido" : "Proteger da limpeza"}</button>
-      <button className={`btn-quiet px-2 py-1 ${favorite ? "text-take" : ""}`} onClick={() => m.mutate({ path: "favorite", body: { value: !favorite } })}>
+      <button className={`btn-quiet px-2 py-1 ${favorite ? "text-take" : ""}`} disabled={m.isPending} onClick={() => m.mutate({ path: "favorite", body: { value: !favorite } })}>
         <Heart className="h-3.5 w-3.5" /> {favorite ? "Favorito" : "Favoritar"}</button>
-      {lifecycle === "quarantined" && <button className="btn-quiet px-2 py-1 text-take" onClick={() => m.mutate({ path: "restore" })}><Undo2 className="h-3.5 w-3.5" /> Restaurar (exclusão em {purgeAfter ? new Date(purgeAfter).toLocaleDateString("pt-BR") : "breve"})</button>}
+      {lifecycle === "quarantined" && <button className="btn-quiet px-2 py-1 text-take" disabled={m.isPending} onClick={() => m.mutate({ path: "restore" })}><Undo2 className="h-3.5 w-3.5" /> Restaurar (exclusão em {purgeAfter ? new Date(purgeAfter).toLocaleDateString("pt-BR") : "breve"})</button>}
       {lifecycle === "purged" && <span className="text-ink-faint">Mídia removida pela limpeza (registro e avaliações preservados)</span>}
       <ErrorNote error={m.error} />
     </div>

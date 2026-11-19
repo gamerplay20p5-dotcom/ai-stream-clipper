@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ClipboardCheck, Download, RotateCcw, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, Check, ChevronLeft, ChevronRight, ClipboardCheck, Download, RotateCcw, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type Clip, type Streamer } from "../api";
 import AnalysisPanel, { AnalysisStatus } from "../components/AnalysisPanel";
@@ -9,7 +9,7 @@ import CaptionEditor from "../components/CaptionEditor";
 import BatchBar from "../components/BatchBar";
 import VersionsPanel from "../components/VersionsPanel";
 import { StorageFlags } from "./Storage";
-import { ClipFrame, ClipStatus, Empty, ErrorNote, Meter, PageHeader, ScoreMark } from "../components/ui";
+import { ClipFrame, ClipStatus, ClipVideo, ConfirmAction, Disclosure, Empty, ErrorNote, Meter, Notice, PageHeader, ScoreMark, Skeleton, Status } from "../components/ui";
 import { dimensionLabel, platformName, seconds, timecode } from "../lib/format";
 
 const tabs = [
@@ -52,12 +52,16 @@ export default function Clips() {
     if (k === "status" && !v) p.set("status", "");
     setParams(p);
   }
-  const open = (cid: number | null) => navigate({ pathname: cid ? `/cortes/${cid}` : "/cortes", search: params.toString() });
+  const open = (cid: number | null) => {
+    const search = new URLSearchParams(params);
+    if (cid === null) search.delete("aba");
+    navigate({ pathname: cid ? `/cortes/${cid}` : "/cortes", search: search.toString() });
+  };
 
   return (
-    <div className={selectedId ? "lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(420px,520px)] lg:gap-8" : ""}>
-      <div className={`min-w-0 ${selectedId ? "hidden lg:block" : ""}`}>
-        <PageHeader title="Central de cortes">
+    <div>
+      <div hidden={Boolean(selectedId)}>
+        <PageHeader title="Central de cortes" description="Filtre por etapa e abra um corte para assistir, revisar ou editar.">
           <div className="flex flex-wrap gap-2">
             <select className="field w-auto" value={streamer} onChange={(e) => setParam("streamer", e.target.value)} aria-label="Filtrar por streamer">
               <option value="">Todos os streamers</option>
@@ -69,45 +73,61 @@ export default function Clips() {
             </select>
           </div>
         </PageHeader>
-        <div className="mb-5 flex gap-1 overflow-x-auto border-b border-suite-line" role="tablist">
+        <nav className="view-switch mb-4" aria-label="Estados dos cortes">
           {tabs.map((t) => (
-            <button key={t.label} role="tab" aria-selected={status === t.key} onClick={() => setParam("status", t.key)}
-              className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm ${status === t.key ? "border-take text-ink" : "border-transparent text-ink-muted hover:text-ink"}`}>
-              {t.label}
-            </button>
+            <button key={t.label} type="button" className="view-switch-item" aria-pressed={status === t.key}
+              onClick={() => setParam("status", t.key)}>{t.label}</button>
           ))}
+        </nav>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-ink-muted">
+            {list.data && (list.data.total > items.length ? `${items.length} de ${list.data.total} cortes` : `${items.length} ${items.length === 1 ? "corte" : "cortes"}`)}
+          </p>
+          {items.length > 0 && picked.length === 0 && (
+            <button className="btn-quiet py-1 text-xs" onClick={() => setPicked(items.map((c) => c.id))}>Selecionar todos desta lista</button>
+          )}
         </div>
         <ErrorNote error={list.error} />
+        {list.isLoading && <Skeleton label="Carregando cortes" />}
         {list.data && items.length === 0 && (
           <Empty title={status === "ready" ? "Tudo revisado" : "Nenhum corte nesta lista"}>
             {status === "ready" ? "Novos cortes aparecem aqui quando a IA encontra um momento com pontuação acima do mínimo." : null}
           </Empty>
         )}
-        <div className={`grid gap-4 ${selectedId ? "grid-cols-2 sm:grid-cols-3 xl:grid-cols-4" : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6"}`}>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
           {items.map((c) => (
             <div key={c.id}>
               <ClipFrame clip={c} selected={c.id === selectedId} onOpen={() => open(c.id)} />
-              <div className="mt-1.5 flex items-center justify-between text-xs">
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-1 text-xs">
                 <ClipStatus status={c.status} />
                 <label className="flex cursor-pointer items-center gap-1 text-ink-faint">
-                  <input type="checkbox" className="accent-[#F2B33D]" checked={picked.includes(c.id)} onChange={() => toggle(c.id)}
+                  <input type="checkbox" checked={picked.includes(c.id)} onChange={() => toggle(c.id)}
                     aria-label={`Selecionar corte ${c.id}`} />#{c.id}
                 </label>
               </div>
             </div>
           ))}
         </div>
-        {items.length > 0 && picked.length === 0 && (
-          <button className="btn-quiet mt-3 px-2 py-1 text-xs" onClick={() => setPicked(items.map((c) => c.id))}>Selecionar todos desta lista</button>
-        )}
         {picked.length > 0 && <BatchBar ids={picked} onClear={() => setPicked([])} />}
       </div>
-      {selectedId && <ReviewBench key={selectedId} clipId={selectedId} items={items} onNavigate={open} />}
+      {selectedId && <ReviewBench key={selectedId} clipId={selectedId} items={items} onNavigate={open} startInVersions={params.get("aba") === "versoes"} />}
     </div>
   );
 }
 
-function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Clip[]; onNavigate: (id: number | null) => void }) {
+const reviewViews = [
+  { key: "review", label: "Revisão" },
+  { key: "versions", label: "Versões e comparação" },
+  { key: "edit", label: "Edição e legendas" },
+  { key: "publish", label: "Publicação" },
+] as const;
+
+function ReviewBench({ clipId, items, onNavigate, startInVersions }: {
+  clipId: number; items: Clip[]; onNavigate: (id: number | null) => void; startInVersions: boolean;
+}) {
+  const [requestedView, setView] = useState<(typeof reviewViews)[number]["key"]>(startInVersions ? "versions" : "review");
+  const bench = useRef<HTMLDivElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
   const qc = useQueryClient();
   const clip = useQuery({
     queryKey: ["clip", clipId],
@@ -115,6 +135,7 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
     refetchInterval: (q) => (q.state.data && ["ready", "approved", "rejected", "failed"].includes(q.state.data.status) ? false : 3000),
   });
   const c = clip.data;
+  const view = c?.has_video || requestedView === "edit" ? requestedView : "review";
   const idx = items.findIndex((x) => x.id === clipId);
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["clips"] });
@@ -144,111 +165,162 @@ function ReviewBench({ clipId, items, onNavigate }: { clipId: number; items: Cli
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const t = e.target as HTMLElement;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (t.closest("input, textarea, select, video, [contenteditable], dialog") || document.querySelector("dialog[open]")
+        || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
       if (k === "j" && items[idx + 1]) onNavigate(items[idx + 1].id);
       else if (k === "k" && idx > 0) onNavigate(items[idx - 1].id);
-      else if (k === "a" && c && ["ready", "rejected"].includes(c.status)) action.mutate("approve");
-      else if (k === "r" && c && ["ready", "approved", "failed"].includes(c.status)) action.mutate("reject");
+      else if (k === "a" && !action.isPending && c && ["ready", "rejected"].includes(c.status)) action.mutate("approve");
+      else if (k === "r" && !action.isPending && c && ["ready", "approved", "failed"].includes(c.status)) action.mutate("reject");
       else if (k === "escape") onNavigate(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [idx, items, c, action, onNavigate]);
 
-  if (!c) return <aside className="mt-8 lg:mt-0"><ErrorNote error={clip.error} /></aside>;
-  const dims = Object.entries(c.score_breakdown).filter(([k]) => k in dimensionLabel);
+  const loaded = Boolean(c);
+  useEffect(() => {
+    document.getElementById("conteudo")?.scrollIntoView({ block: "start" });
+    heading.current?.focus({ preventScroll: true });
+  }, [clipId, loaded]);
+
+  function changeView(next: typeof view) {
+    if (next === view) return;
+    bench.current?.querySelectorAll("video").forEach((video) => video.pause());
+    setView(next);
+  }
+
+  const dims = Object.entries(c?.score_breakdown ?? {}).filter(([k]) => k in dimensionLabel);
 
   return (
-    <aside className="mt-10 lg:sticky lg:top-6 lg:mt-0 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto lg:pr-1" aria-label="Revisão do corte">
-      <div className="flex items-start gap-4">
-        <ScoreMark score={c.score} size="lg" />
-        <div className="min-w-0 flex-1">
-          <h2 className="display text-lg leading-snug">{c.title || "Sem título"}</h2>
-          <p className="mt-1 text-sm text-ink-muted">
-            {c.streamer?.display_name} em {platformName[c.streamer?.platform ?? ""] ?? "live"}, {timecode(c.start)} a {timecode(c.end)} da sessão #{c.session_id}
-          </p>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            {c.is_test && <span className="rounded bg-take-dim px-1.5 py-0.5 text-xs font-semibold text-take">TESTE MANUAL</span>}
-            <ClipStatus status={c.status} /><AnalysisStatus clip={c} />
-          </div>
-        </div>
-        <button className="btn-quiet p-2" onClick={() => onNavigate(null)} aria-label="Fechar revisão (Esc)"><X className="h-4 w-4" /></button>
-      </div>
-
-      <div className="mt-5 grid gap-5 sm:grid-cols-[minmax(0,240px)_1fr]">
-        <div>
-          {c.has_video ? (
-            <video key={c.version} data-clip-video className="aspect-short w-full rounded-lg bg-black" controls preload="metadata"
-              poster={c.has_thumbnail ? `/api/clips/${c.id}/thumbnail?v=${c.version}` : undefined}
-              src={`/api/clips/${c.id}/video?v=${c.version}`} />
-          ) : (
-            <div className="flex aspect-short w-full items-center justify-center rounded-lg bg-suite-panel p-4 text-center text-sm text-ink-muted">
-              {c.status === "failed" ? "A renderização falhou." : "O vídeo aparece aqui quando a renderização terminar."}
-            </div>
-          )}
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <button className="btn-take" disabled={!["ready", "rejected"].includes(c.status) || action.isPending} onClick={() => action.mutate("approve")}>
-              <Check className="h-4 w-4" /> Aprovar
-            </button>
-            <button className="btn-quiet" disabled={!["ready", "approved", "failed"].includes(c.status) || action.isPending} onClick={() => action.mutate("reject")}>
-              <X className="h-4 w-4" /> Rejeitar
-            </button>
-            <a className={`btn-quiet ${c.has_video ? "" : "pointer-events-none opacity-50"}`} href={`/api/clips/${c.id}/download`} download>
-              <Download className="h-4 w-4" /> Baixar
-            </a>
-            <button className="btn-danger" disabled={remove.isPending}
-              onClick={() => window.confirm("Excluir este corte e seus arquivos? Isso não pode ser desfeito.") && remove.mutate()}>
-              <Trash2 className="h-4 w-4" /> Excluir
-            </button>
-          </div>
-          <button className="btn-quiet mt-2 w-full" disabled={evaluate.isPending} onClick={() => evaluate.mutate()}>
-            <ClipboardCheck className="h-4 w-4" /> Avaliar este corte (feedback para a IA)
+    <div ref={bench}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <button className="btn-quiet" onClick={() => onNavigate(null)}><ArrowLeft size={16} aria-hidden /> Voltar aos cortes</button>
+        <div className="flex items-center gap-2">
+          <button className="icon-action" disabled={idx <= 0} onClick={() => onNavigate(items[idx - 1].id)} aria-label="Corte anterior (K)">
+            <ChevronLeft size={17} aria-hidden />
           </button>
-          <StorageFlags clipId={c.id} protectedFlag={c.protected} favorite={c.favorite} lifecycle={c.lifecycle} purgeAfter={c.purge_after} />
-          {c.has_video && <PublishPanel clipId={c.id} isTest={c.is_test} />}
-          <p className="mt-2 text-xs text-ink-faint">Atalhos: A aprova, R rejeita, J e K navegam, Esc fecha.</p>
-          <ErrorNote error={action.error || remove.error || evaluate.error} />
-        </div>
-
-        <div className="min-w-0 space-y-5">
-          <section>
-            <h3 className="mb-2 text-sm font-semibold">Por que este momento</h3>
-            <ul className="space-y-1.5 text-sm">
-              {c.reasons.map((r, i) => <li key={i} className="border-l-2 border-take pl-2.5 text-ink/90">{r}</li>)}
-            </ul>
-          </section>
-          <section>
-            <h3 className="mb-2 text-sm font-semibold">Pontuação por critério</h3>
-            <dl className="space-y-2">
-              {dims.map(([k, v]) => (
-                <div key={k} className="grid grid-cols-[8.5rem_1fr_2rem] items-center gap-2 text-xs">
-                  <dt className="text-ink-muted">{dimensionLabel[k]}</dt>
-                  <dd><Meter value={v} /></dd>
-                  <dd className="text-right">{v === null ? "n/d" : v.toFixed(1)}</dd>
-                </div>
-              ))}
-            </dl>
-            <p className="mt-2 text-xs text-ink-faint">Notas heurísticas de 0 a 10, não são probabilidade de viralizar. n/d: sinal indisponível.</p>
-          </section>
+          {idx >= 0 && <span className="font-mono text-xs text-ink-muted">{idx + 1} / {items.length}</span>}
+          <button className="icon-action" disabled={idx < 0 || idx + 1 >= items.length}
+            onClick={() => onNavigate(items[idx + 1].id)} aria-label="Próximo corte (J)">
+            <ChevronRight size={17} aria-hidden />
+          </button>
         </div>
       </div>
+      <ErrorNote error={clip.error} />
+      {!c ? (clip.isLoading && <Skeleton label="Carregando corte" />) : (
+        <>
+          <header className="mb-4 flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <h1 ref={heading} tabIndex={-1} className="display break-words text-2xl outline-none sm:text-3xl">{c.title || "Sem título"}</h1>
+              <p className="mt-2 text-sm text-ink-muted">
+                {c.streamer?.display_name} / {platformName[c.streamer?.platform ?? ""] ?? "Live"} / Sessão #{c.session_id}
+                <span className="ml-2 font-mono text-xs">{timecode(c.start)} a {timecode(c.end)}</span>
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {c.is_test && <Status tone="warning">Teste manual</Status>}
+                <ClipStatus status={c.status} /><AnalysisStatus clip={c} />
+              </div>
+            </div>
+            <ScoreMark score={c.score} size="lg" />
+          </header>
 
-      {c.error && <div className="mt-4"><ErrorNote error={c.error} /></div>}
+          <nav className="view-switch mb-5" aria-label="Áreas do corte">
+            {reviewViews.filter((item) => c.has_video || !["versions", "publish"].includes(item.key)).map((item) => (
+              <button type="button" key={item.key} className="view-switch-item" aria-pressed={item.key === view}
+                onClick={() => changeView(item.key)}>{item.label}</button>
+            ))}
+          </nav>
 
-      <section className="mt-6">
-        <h3 className="mb-2 text-sm font-semibold">Transcrição</h3>
-        <p className="max-h-40 overflow-y-auto rounded-md bg-suite-panel p-3 text-sm leading-relaxed text-ink/90">{c.transcript || "Sem fala detectada."}</p>
-      </section>
+          {(action.error || remove.error || evaluate.error || c.error || action.isSuccess) && <div className="mb-4 space-y-2">
+            <ErrorNote error={action.error || remove.error || evaluate.error || c.error} />
+            {action.isSuccess && <Notice>
+              {{ approve: "Corte aprovado.", reject: "Corte rejeitado.", rerender: "Renderização solicitada.", reanalyze: "Nova análise solicitada." }[action.variables!]}
+            </Notice>}
+          </div>}
 
-      <AnalysisPanel clip={c} busy={action.isPending} onReanalyze={() => action.mutate("reanalyze")} />
+          <div className="grid items-start gap-5 lg:grid-cols-[minmax(240px,0.86fr)_minmax(0,1.14fr)]">
+            <section hidden={view === "versions"} className="panel lg:sticky lg:top-[calc(var(--topbar-height)+1rem)]" aria-label="Prévia do corte">
+              <div className="panel-heading"><h2 className="text-sm font-semibold">Prévia</h2><span className="font-mono text-xs text-ink-muted">9:16 / {seconds(c.duration)}</span></div>
+              <div className="panel-body space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <button className="btn-take" disabled={!["ready", "rejected"].includes(c.status) || action.isPending} onClick={() => action.mutate("approve")}>
+                    <Check size={16} aria-hidden /> Aprovar
+                  </button>
+                  <button className="btn-quiet" disabled={!["ready", "approved", "failed"].includes(c.status) || action.isPending} onClick={() => action.mutate("reject")}>
+                    <X size={16} aria-hidden /> Rejeitar
+                  </button>
+                </div>
+                {c.has_video ? (
+                  <ClipVideo className="review-player" data-clip-video key={c.version} aria-label="Vídeo do corte"
+                    poster={c.has_thumbnail ? `/api/clips/${c.id}/thumbnail?v=${c.version}` : undefined}
+                    src={`/api/clips/${c.id}/video?v=${c.version}`} />
+                ) : (
+                  <div className="media-stage min-h-56 px-6 text-center text-sm text-ink-muted">
+                    {c.status === "failed" ? "A renderização falhou." : "O vídeo aparece aqui quando a renderização terminar."}
+                  </div>
+                )}
+                <Disclosure title="Arquivo e ações">
+                  <div className="flex flex-wrap gap-2">
+                    {c.has_video && <a className="btn-quiet" href={`/api/clips/${c.id}/download`} download><Download size={16} aria-hidden /> Baixar</a>}
+                    <ConfirmAction title="Excluir este corte?" description="O corte e seus arquivos serão removidos permanentemente."
+                      confirmLabel="Excluir corte" pending={remove.isPending} onConfirm={() => remove.mutate()}>
+                      <Trash2 size={16} aria-hidden /> Excluir
+                    </ConfirmAction>
+                  </div>
+                  <StorageFlags clipId={c.id} protectedFlag={c.protected} favorite={c.favorite} lifecycle={c.lifecycle} purgeAfter={c.purge_after} />
+                </Disclosure>
+                <p className="text-xs text-ink-muted">A aprova, R rejeita, J e K navegam, Esc volta à fila.</p>
+              </div>
+            </section>
 
-      <CaptionEditor clipId={c.id} onSaved={invalidate} />
+            <div hidden={view !== "review"} className="min-w-0 space-y-4">
+              <section className="panel">
+                <div className="panel-heading">
+                  <h2 className="display text-lg">Leitura editorial</h2>
+                  <button className="btn-quiet" disabled={evaluate.isPending} onClick={() => evaluate.mutate()}>
+                    <ClipboardCheck size={15} aria-hidden /> Avaliar para a IA
+                  </button>
+                </div>
+                <div className="panel-body space-y-4">
+                  {c.reasons.length > 0 && <ul className="space-y-2 border-l-2 border-take pl-3 text-sm">{c.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>}
+                  {dims.length > 0 && (
+                    <section>
+                      <h3 className="mb-3 text-sm font-semibold">Pontuação por critério</h3>
+                      <dl className="space-y-2">
+                        {dims.map(([key, value]) => (
+                          <div key={key} className="grid grid-cols-[minmax(6.7rem,1fr)_minmax(2rem,1fr)_2rem] items-center gap-2 text-xs">
+                            <dt className="text-ink-muted">{dimensionLabel[key]}</dt>
+                            <dd><Meter value={value} label={dimensionLabel[key]} /></dd>
+                            <dd className="text-right">{value === null ? "n/d" : value.toFixed(1)}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                      <p className="mt-2 text-xs text-ink-muted">Notas heurísticas de 0 a 10. n/d indica sinal indisponível.</p>
+                    </section>
+                  )}
+                </div>
+              </section>
+              <AnalysisPanel clip={c} busy={action.isPending} onReanalyze={() => action.mutate("reanalyze")} />
+              <Disclosure title="Transcrição">
+                <p className="max-h-64 overflow-y-auto text-sm leading-relaxed">{c.transcript || "Sem fala detectada."}</p>
+              </Disclosure>
+            </div>
 
-      {c.has_video && <VersionsPanel clipId={c.id} version={c.version} onChanged={invalidate} />}
-
-      <ClipEditor clip={c} onSaved={invalidate} />
-    </aside>
+            {c.has_video && <div hidden={view !== "versions"} className="min-w-0 lg:col-span-2">
+              <VersionsPanel clipId={c.id} version={c.version} onChanged={invalidate} />
+            </div>}
+            <div hidden={view !== "edit"} className="panel panel-body min-w-0">
+              <ClipEditor clip={c} onSaved={invalidate} />
+              <CaptionEditor clipId={c.id} videoVersion={c.version} onSaved={invalidate} />
+            </div>
+            {c.has_video && <div hidden={view !== "publish"} className="panel panel-body min-w-0">
+              <PublishPanel clipId={c.id} isTest={c.is_test} />
+            </div>}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -278,7 +350,7 @@ function ClipEditor({ clip, onSaved }: { clip: Clip; onSaved: () => void }) {
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
 
   return (
-    <section className="mt-6 border-t border-suite-line pt-5">
+    <section className="space-y-3">
       <h3 className="mb-3 text-sm font-semibold">Editar e exportar</h3>
       <div className="space-y-3">
         <div>
