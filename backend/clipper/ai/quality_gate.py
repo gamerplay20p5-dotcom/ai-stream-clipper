@@ -77,17 +77,37 @@ class GateSettings:
 
 
 def _mean(criteria: dict, keys: dict) -> tuple[float | None, list[str]]:
+    """Weighted mean of the known criteria + their concrete evidence (from ai/editorial.py).
+    Criteria are listed strongest-weight first; a criterion without evidence says so."""
     num = den = 0.0
     ev = []
-    for k, w in keys.items():
+    for k, w in sorted(keys.items(), key=lambda kv: -kv[1]):
         c = criteria.get(k) or {}
         v = c.get("value")
         if v is None:
             continue
         num += w * float(v)
         den += w
-        ev.append(f"{c.get('label', k)} {float(v):.0f}/10")
+        proof = [e for e in (c.get("evidence") or []) if e]
+        ev.append(f"{c.get('label', k)} {float(v):.0f}/10 — " + ("; ".join(proof[:2]) if proof else "sem evidência específica"))
     return (round(num / den, 1) if den else None), ev
+
+
+def covered(media, a: float, b: float, tol: float = 0.25) -> bool:
+    """True when [a, b] is inside the available media with no gap longer than ``tol``.
+    ``media``: (lo, hi) or a list of (start, end) intervals (available capture segments)."""
+    spans = [media] if media and isinstance(media[0], (int, float)) else list(media or [])
+    spans = sorted((float(x), float(y)) for x, y in spans)
+    pos = a
+    for x, y in spans:
+        if y < pos:
+            continue
+        if x > pos + tol:
+            return False
+        pos = max(pos, y)
+        if pos >= b - tol:
+            return True
+    return pos >= b - tol
 
 
 def dead_time(words: list, start: float, end: float) -> tuple[float, float]:
@@ -108,8 +128,9 @@ def dead_time(words: list, start: float, end: float) -> tuple[float, float]:
 
 
 def evaluate(*, judgement: dict, start: float, end: float, peak: float, keep: bool, words: list,
-             media: tuple[float, float], kinds: list[str] | None = None, word_probs: list[float] | None = None,
-             speakers: list[str] | None = None, visual_ok: bool = False, rework_runs: int = 0,
+             media, kinds: list[str] | None = None, word_probs: list[float] | None = None,
+             speakers: list[str] | None = None, visual_ok: bool = False, visual_events: bool = False,
+             rework_runs: int = 0,
              history: list[dict] | None = None, settings: GateSettings | None = None,
              is_test: bool = False, approved: bool = False) -> GateResult:
     s = settings or GateSettings()
@@ -117,7 +138,9 @@ def evaluate(*, judgement: dict, start: float, end: float, peak: float, keep: bo
     story = judgement.get("story") or {}
     kinds = list(kinds or [])
     dur = max(1.0, end - start)
-    lo, hi = media
+    spans = [media] if media and isinstance(media[0], (int, float)) else list(media or [])
+    lo = min((float(x) for x, _ in spans), default=start)
+    hi = max((float(y) for _, y in spans), default=end)
 
     # A - the happening
     ev_score, ev_ev = _mean(crit, EVENT_KEYS)
@@ -126,7 +149,9 @@ def evaluate(*, judgement: dict, start: float, end: float, peak: float, keep: bo
     # B - this cut of it (dead time measured from the words, a reaction-only moment is not "dead")
     nar_score, nar_ev = _mean(crit, NARRATIVE_KEYS)
     dead_s, dead_r = dead_time(words, start, end) if words is not None else (0.0, 0.0)  # None = not measured
-    lively = bool({"laughter", "scream", "game_impact", "loudness_spike"} & set(kinds)) or visual_ok
+    # silence is not "dead" when a reaction is heard or something RELEVANT happens on screen;
+    # a valid visual analysis alone (visual_ok) proves nothing about on-screen events
+    lively = bool({"laughter", "scream", "game_impact", "loudness_spike"} & set(kinds)) or visual_events
     if nar_score is not None and dead_r > 0.35 and not lively:
         nar_score = round(max(0.0, nar_score - min(3.0, (dead_r - 0.35) * 8)), 1)
         nar_ev.append(f"{dead_s:.0f}s sem fala de {dur:.0f}s ({dead_r:.0%})")
@@ -136,19 +161,27 @@ def evaluate(*, judgement: dict, start: float, end: float, peak: float, keep: bo
     fixes: list[Fix] = []
     s_start, climax, last = story.get("start"), story.get("climax_t"), story.get("last")
     if s_start is not None and float(s_start) < start - 2:
-        new_start = max(lo, float(s_start) - 1.0)
-        ok = new_start < start - 1 and (end - new_start) <= s.max_len
-        fixes.append(Fix("context_before", f"a situação começa {start - float(s_start):.0f}s antes do corte",
+        new_start = float(s_start) - 1.0
+        in_media = covered(spans, new_start, start)
+        ok = in_media and (end - new_start) <= s.max_len
+        why = "" if ok else (" — o início real está fora da mídia gravada disponível" if not in_media
+                             else " — ficaria mais longo que o limite de duração")
+        fixes.append(Fix("context_before", f"a situação começa {start - float(s_start):.0f}s antes do corte" + why,
                          ok, start=round(new_start, 2) if ok else None))
     outcome_t = climax if climax is not None and float(climax) > end - 1 else (
         last if story.get("outcome") and last is not None and float(last) > end else None)
     if outcome_t is not None and float(outcome_t) > end - 1:
-        new_end = min(hi, float(outcome_t) + 4.0)
-        ok = new_end > end + 1 and (new_end - start) <= s.max_len
-        fixes.append(Fix("outcome_after", f"o clímax/desfecho fica em {float(outcome_t) - start:.0f}s, depois do fim",
+        # the outcome itself plus at least 1 s of reaction must be recorded; up to 4 s when available
+        must = float(outcome_t) + 1.0
+        in_media = covered(spans, end, must)
+        new_end = min(hi, float(outcome_t) + 4.0) if in_media else None
+        ok = in_media and new_end is not None and new_end > end + 1 and (new_end - start) <= s.max_len
+        why = "" if ok else (" — o desfecho está depois do último segmento gravado disponível" if not in_media
+                             else " — ficaria mais longo que o limite de duração")
+        fixes.append(Fix("outcome_after", f"o clímax/desfecho fica em {float(outcome_t) - start:.0f}s, depois do fim" + why,
                          ok, end=round(new_end, 2) if ok else None))
     if (peak - start) / dur > 0.6 and dur > 20 and not any(f.kind == "context_before" for f in fixes):
-        new_start = max(start, peak - max(8.0, 0.35 * dur))
+        new_start = max(start, peak - max(8.0, 0.35 * dur))  # inside the current cut: always recorded
         fixes.append(Fix("late_peak", f"o ponto alto chega em {peak - start:.0f}s de {dur:.0f}s", True,
                          start=round(new_start, 2)))
     if dead_r > 0.25 and not lively:

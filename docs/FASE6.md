@@ -85,6 +85,52 @@ Princípios fixos:
 - **Evidência real:** reaplicação somente leitura nos 6 cortes de produção que têm julgamento editorial. Os 6 foram rejeitados pelo diretor com nota editorial entre 55 e 69; com o gate, 2 iriam para REWORK e 4 para revisão humana, em vez de descarte silencioso. **Nenhuma melhora de qualidade está comprovada**: esses 6 não têm rótulo humano. A taxa de acerto do gate será medida pelas decisões na aba "Revisão humana".
 - **Limitações:** o corte de pausas (`dead_time`) é detectado, mas só será aplicado pelo editor estrutural (6B). A troca de enquadramento ainda não entra como correção.
 
+### Ajustes da revisão do PR #1
+
+1. **Limites de mídia:**
+   - uma correção só é aplicável se o trecho novo estiver **inteiramente** dentro dos segmentos gravados disponíveis, sem buraco de reconexão (`quality_gate.covered`);
+   - o desfecho precisa de pelo menos 1 s de reação gravada depois dele;
+   - não há mais "corte parcial": se o início real da história está antes da gravação, a correção fica não aplicável e o motivo aparece no painel;
+   - a mídia já copiada para a API (fonte do corte) também conta.
+2. **Evidências:** cada dimensão mostra as evidências concretas dos 14 critérios de `ai/editorial.py`, como "Interesse 7/10 — situação: perseguição até a delegacia". Quando um critério não tem evidência, aparece "sem evidência específica", nunca um texto inventado.
+3. **Tempo morto:** análise visual válida (`visual_ok`) é diferente de acontecimento visual relevante (`visual_events`). Um silêncio só deixa de contar como tempo morto se houver um evento inesperado ou engraçado, ou ação forte **com reação do streamer** (`pipeline_ai.visual_relevant`).
+4. **Testes:** 6 de regressão em `test_quality_gate.py` e 4 de migração em `test_migration_0009.py`, cobrindo:
+   - clímax depois do último segmento;
+   - início antes da gravação;
+   - buraco de reconexão;
+   - evidências concretas;
+   - análise válida sem evento visual;
+   - regra de relevância visual;
+   - pipeline com segmentos expirados;
+   - integridade da migração.
+
+### Migração 0009 e rollback
+
+- **Integridade testada em SQLite** (`tests/test_migration_0009.py`):
+  - existe uma única head (0009 depois de 0008);
+  - subir preserva as linhas (cortes antigos ficam com `gate = ''`);
+  - a coluna é `NOT NULL` com padrão do servidor `''`, com índice `ix_clips_gate`;
+  - descer para 0008 remove só a coluna e o índice, mantendo os dados;
+  - é possível subir de novo.
+- **PostgreSQL:** `ADD COLUMN ... DEFAULT '' NOT NULL` é instantâneo no PostgreSQL 11 ou superior, sem reescrever a tabela.
+- **Atenção, comprovado em teste:** a API executa `alembic upgrade head` ao iniciar. Uma imagem antiga (v0.5.7) diante de um banco já na 0009 **não sobe**, porque não conhece essa revisão. Por isso o rollback tem ordem obrigatória:
+
+```
+# 0. (antes do deploy) backup
+sudo -n asc-ctl backup-db                       # no 210
+
+# 1. com a imagem v0.6.0 ainda rodando: descer o banco para 0008
+sudo -n asc-ctl exec asc-api -- clipper migrate --downgrade 0008   # no 210
+
+# 2. voltar a imagem nos três servidores (as imagens 0.5.7 ficam guardadas pelo deploy)
+#    210: ASC_IMAGE_TAG=0.5.7 em ~/asc.env -> sudo -n asc-ctl env-install ~/asc.env -> sudo -n asc-ctl compose up --gpu
+#    206 e 201: sudo -n asc-ctl set-tag 0.5.7 -> sudo -n asc-ctl compose up
+
+# Se o passo 1 falhar: restaurar o backup do passo 0 (operação destrutiva: só com autorização).
+```
+
+O downgrade apaga apenas a coluna `gate`, que é recalculada na próxima análise; nenhum corte, rótulo ou publicação é afetado. O mesmo cuidado vale para qualquer rollback que cruze uma migração.
+
 ---
 
 **EN summary:** the audit found a single-number, binary keep/reject decision whose edit suggestions are never applied, and a renderer limited to one continuous segment. YouTube retention needs the Analytics API scope, which we do not hold. Instagram Business Discovery is not assumed to be available. Phase 6 adds a four-dimension quality gate with REWORK (6A), segment-based structural editing (6B), a references lab with permitted metadata and image-based format profiles (6C), abstract pattern library from authorised media (6D), performance learning on our own posts (6E) and fixed-sample validation (6F).

@@ -171,3 +171,71 @@ def test_pipeline_rejection_and_human_review(client):
     cid2 = _clip("hr")
     held, status, gate, _ = _gate(cid2, J(), keep=False)
     assert not held and gate == "HUMAN_REVIEW"  # rendered so a person can decide
+
+
+# ------------------------------------------------------------------ PR #1 review regressions
+SEGS = [(i * 10.0, i * 10.0 + 10.0) for i in range(0, 4)]  # media recorded from 0 to 40 s
+
+
+def test_review1_climax_after_the_last_recorded_segment_is_not_applicable():
+    story = {"start": 0.0, "climax_t": 45.0, "summary": "fuga", "kind": "police_chase"}
+    r = ev(J(story=story, narrative=3, retention=3), media=SEGS)
+    fix = next(f for f in r.fixes if f.kind == "outcome_after")
+    assert not fix.applicable and fix.end is None and "último segmento" in fix.detail
+    assert r.outcome != qg.REWORK  # never asks the worker for media that does not exist
+    # the climax only 1 s before the end of the recording is still not enough (needs the reaction)
+    story["climax_t"] = 39.5
+    assert not next(f for f in ev(J(story=story), media=SEGS).fixes if f.kind == "outcome_after").applicable
+    story["climax_t"] = 34.0
+    ok = next(f for f in ev(J(story=story), media=SEGS).fixes if f.kind == "outcome_after")
+    assert ok.applicable and ok.end == 38.0
+
+
+def test_review1_story_start_before_the_recording_or_across_a_gap_is_not_applicable():
+    story = {"start": -20.0, "summary": "perseguição"}
+    f = next(f for f in ev(J(story=story, context=2, narrative=3), start=5.0, end=35.0, media=SEGS).fixes
+             if f.kind == "context_before")
+    assert not f.applicable and f.start is None and "fora da mídia" in f.detail  # no clamping to a partial start
+    gap = [(0.0, 10.0), (20.0, 40.0)]  # reconnection hole between 10 and 20 s
+    f = next(f for f in ev(J(story={"start": 6.0, "summary": "x"}), start=25.0, end=38.0, media=gap).fixes
+             if f.kind == "context_before")
+    assert not f.applicable
+    assert qg.covered(SEGS, 2.0, 38.0) and not qg.covered(gap, 5.0, 25.0)
+
+
+def test_review2_dimensions_carry_the_concrete_editorial_evidence():
+    j = J()
+    j["criteria"]["interest"]["evidence"] = ["situação: perseguição até a delegacia", "sinais acústicos e de fala"]
+    r = ev(j)
+    assert any("perseguição até a delegacia" in e for e in r.event.evidence)
+    assert any("sem evidência específica" in e for e in r.narrative.evidence)  # never invented
+
+
+def test_review3_valid_visual_analysis_is_not_an_on_screen_event():
+    sparse = [(0.5, 1.0), (14.0, 14.5), (28.0, 28.5)]
+    # VLM answered (visual_ok) but saw nothing relevant: the silence is still dead time
+    quiet = ev(J(), words=sparse, kinds=[], visual_ok=True, visual_events=False)
+    assert any(f.kind == "dead_time" for f in quiet.fixes)
+    # something relevant on screen during the silence: not dead time
+    busy = ev(J(), words=sparse, kinds=[], visual_ok=True, visual_events=True)
+    assert not any(f.kind == "dead_time" for f in busy.fixes)
+
+
+def test_review3_visual_relevance_rule():
+    from clipper.ai.schemas import VisualAnalysis
+
+    base = dict(provider="x", summary="", frame_times=[])
+    assert not pipeline_ai.visual_relevant(VisualAnalysis(**base, action=8))  # movement nobody reacts to
+    assert pipeline_ai.visual_relevant(VisualAnalysis(**base, action=8, reaction_linked=True))
+    assert pipeline_ai.visual_relevant(VisualAnalysis(**base, unexpected=7))
+
+
+def test_review1_pipeline_uses_the_recorded_segments(client):
+    cid = _clip("gap")
+    with session_scope() as db:
+        c = db.get(Clip, cid)
+        for seg in db.scalars(select(Segment).where(Segment.session_id == c.session_id, Segment.start < 90)):
+            seg.available = False  # evicted from the ring buffer
+    j = J(story={"start": 60.0, "summary": "perseguição"}, context=2, narrative=3, standalone=3)
+    held, status, gate, g = _gate(cid, j)
+    assert gate != "REWORK" and "pending" not in (g or {})

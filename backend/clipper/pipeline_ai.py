@@ -298,6 +298,12 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
     enqueue_render(db, clip)
 
 
+def visual_relevant(v: VisualAnalysis) -> bool:
+    """Something that matters for the story happened ON SCREEN (not just "the VLM answered"):
+    a surprising or funny event, or strong action the streamer reacts to."""
+    return v.unexpected >= 6 or v.funny >= 6 or (v.action >= 7 and v.reaction_linked is True)
+
+
 def _apply_gate(db: Session, clip: Clip, decision: DirectorDecision, visual: VisualAnalysis | None,
                 settings: AISettings) -> bool:
     """Quality Gate 2.0. Returns True when the clip must NOT be rendered now (rework, waiting, rejected)."""
@@ -311,13 +317,19 @@ def _apply_gate(db: Session, clip: Clip, decision: DirectorDecision, visual: Vis
                              TranscriptWord.speaker).where(
         TranscriptWord.session_id == clip.session_id, TranscriptWord.start >= decision.start_abs,
         TranscriptWord.start < decision.end_abs)).all()
-    lo, hi = media_bounds(db, clip)
+    spans = [(float(a), float(a) + float(d)) for a, d in db.execute(
+        select(Segment.start, Segment.duration).where(Segment.session_id == clip.session_id,
+                                                      Segment.available.is_(True))).all()]
+    if clip.source_path and clip.source_duration:  # media already copied to the API also counts
+        spans.append((clip.source_start, clip.source_start + clip.source_duration))
     lim = _limits(db, clip, settings)
+    vis_ok = visual is not None and not visual.fallback
     res = qg.evaluate(
         judgement=judgement, start=decision.start_abs, end=decision.end_abs, peak=decision.peak_abs,
-        keep=decision.keep, words=[(r[0], r[1]) for r in rows], media=(lo, hi), kinds=clip.kinds or [],
+        keep=decision.keep, words=[(r[0], r[1]) for r in rows], media=spans, kinds=clip.kinds or [],
         word_probs=[r[2] for r in rows], speakers=[r[3] or "" for r in rows],
-        visual_ok=visual is not None and not visual.fallback, rework_runs=runs, history=g.get("history") or [],
+        visual_ok=vis_ok, visual_events=bool(vis_ok and visual_relevant(visual)),
+        rework_runs=runs, history=g.get("history") or [],
         settings=qg.GateSettings(settings.gate_event_min, settings.gate_narrative_min, settings.gate_recovery_min,
                                  max_len=max(lim["max_len"], settings.max_story_seconds),
                                  max_rework=settings.gate_max_rework),
