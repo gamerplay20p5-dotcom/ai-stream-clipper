@@ -6,6 +6,13 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.6.3", "date": "2026-11-19", "title": "Viral Intelligence: laboratório de referências", "items": [
+        "Nova página Viral Intelligence: referências do YouTube e do Instagram, coleções, categorias, jogos, humor e formato.",
+        "Metadados públicos do YouTube pela API autorizada (canal, vídeo, Short); Instagram por cadastro manual com o motivo.",
+        "Envie um print: a IA mede a organização da tela (webcam, legenda, cores, selo) e cria um perfil de formato ajustável.",
+        "Teste o perfil num corte nosso: a prévia vira uma variante para comparar; o vídeo principal não muda sozinho.",
+        "Selo de identificação com a nossa foto e o nosso nome.",
+    ]},
     {"version": "0.6.2", "date": "2026-11-19", "title": "Editor estrutural", "items": [
         "Cinco estruturas para o mesmo acontecimento: gancho imediato, suspense, humor de reação, história completa e momento rápido.",
         "Corte de pausas que nunca remove reações, o ponto alto nem o desfecho; só trechos reais, na ordem real.",

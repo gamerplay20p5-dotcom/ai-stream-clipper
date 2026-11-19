@@ -81,6 +81,7 @@ async def _run_worker(roles: list[str], stop_event=None) -> None:
         from .ai.registry import installed
 
         specs.append(RoleSpec("vision_analyze", handlers.handle_vision, s.concurrency_vision))
+        specs.append(RoleSpec("format_analyze", handlers.handle_format, 1))  # Phase 6C, one at a time
         models = [m for m in installed() if not s.ai_models or m in s.ai_models]
         vram = gpu_memory()
         extra_caps.update({

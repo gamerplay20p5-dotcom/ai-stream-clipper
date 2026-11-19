@@ -28,6 +28,18 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (res.status === 204 ? undefined : await res.json()) as T;
 }
 
+/** Raw file upload (images): body = the file, same auth/CSRF as the JSON helper. */
+export async function upload<T = unknown>(path: string, file: File): Promise<T> {
+  const res = await fetch(path, { method: "POST", credentials: "same-origin", body: file,
+    headers: { "X-ASC-CSRF": "1", "Content-Type": file.type || "application/octet-stream" } });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { const j = await res.json(); detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch { /* ignore */ }
+    throw new ApiError(res.status, detail);
+  }
+  return (await res.json()) as T;
+}
+
 export const api = {
   get: <T,>(p: string) => request<T>("GET", p),
   post: <T,>(p: string, b?: unknown) => request<T>("POST", p, b ?? {}),
@@ -337,6 +349,7 @@ export type AISettings = {
   speakers_enabled: boolean;
   gate_enabled: boolean;
   editor_mode: "off" | "shadow" | "on";
+  refs_analyses_per_hour: number;
   editor_min_gap: number;
   editor_teaser: boolean;
   editor_structure_prefs: Record<string, string>;

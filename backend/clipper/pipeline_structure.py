@@ -159,8 +159,13 @@ def variant_spec(db: Session, clip: Clip, name: str, base: dict) -> dict:
     plan = dict(base.get("edit_plan") or {})
     plan.update({"segments": segs, "structure": rec["structure"]})
     words = [[w[0], w[1], w[2], w[3]] for w in caption_words(db, clip, a - 0.5, b)]
-    return {**base, **loc, "start": a, "end": b, "edit_plan": plan, "words": words, "variant": name,
-            "store_source": False}
+    out = {**base, **loc, "start": a, "end": b, "edit_plan": plan, "words": words, "variant": name,
+           "store_source": False}
+    if rec.get("format_params"):  # Phase 6C preview: same montage, the profile's look
+        from .format_lab import apply_format
+
+        out = apply_format(out, rec, clip.id)
+    return out
 
 
 def store_variant(db: Session, clip: Clip, name: str, video_rel: str, thumb_rel: str, size: int,
@@ -240,6 +245,9 @@ def promote(db: Session, clip: Clip, name: str, user: str) -> dict:
     segs = rec["plan"]["segments"]
     new_plan = dict(old_plan)
     new_plan.update({"segments": segs, "structure": rec.get("structure"), "structure_reason": rec.get("reason", "")})
+    if rec.get("format_params"):  # a promoted format preview keeps its look in future re-renders
+        new_plan["format_params"] = rec["format_params"]
+        new_plan["format_profile_id"] = rec.get("format_profile_id")
     clip.edit_plan = new_plan
     clip.start, clip.end = float(rec.get("start", min(s["a"] for s in segs))), float(rec.get("end", max(s["b"] for s in segs)))
     clip.video_path, clip.thumb_path = rec["video_path"], rec.get("thumb_path", "")
@@ -250,7 +258,7 @@ def promote(db: Session, clip: Clip, name: str, user: str) -> dict:
     prov = dict(clip.provenance or {})
     prov["render"] = {"expected": None, "version": clip.version, "promoted": name}
     clip.provenance = prov
-    other = "original" if name == "edit" else "edit"
+    other = "original" if name in ("edit", "format") else "edit"
     v = _variants(clip)
     v.pop(name, None)
     v[other] = old_main

@@ -25,6 +25,19 @@ log = logging.getLogger(__name__)
 ADVISORY_KEY = 7_420_151
 
 
+def _refs_retention(db) -> None:
+    """Phase 6C: API-derived reference data older than 30 days is cleared (policy compliance)."""
+    try:
+        from .refs_lab import expire_api_data
+
+        with db.begin_nested():
+            n = expire_api_data(db)
+        if n:
+            log.info("expired reference API data", extra={"count": n})
+    except Exception:
+        log.exception("reference retention failed")
+
+
 def tick() -> dict:
     out = {"expired": 0, "offline": 0, "vision_fallback": 0}
     with session_scope() as db:
@@ -40,6 +53,7 @@ def tick() -> dict:
         out["offline"] = pipeline.mark_stale_workers(db)
         out["vision_fallback"] = pipeline.vision_timeouts(db)
         out["revisited"] = pipeline.revisit_waiting_all(db)
+        _refs_retention(db)
         from . import pipeline_story
         from .settings_store import load_ai_settings as _load
 

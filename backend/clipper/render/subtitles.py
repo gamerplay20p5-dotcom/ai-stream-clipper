@@ -63,6 +63,9 @@ class CaptionOptions:
     watermark_opacity: float = 0.45
     cta: str = ""  # end-card text (cross-promotion), shown in the last ``cta_seconds``
     cta_seconds: float = 3.0
+    uppercase: bool = True
+    badge_name: str = ""  # Phase 6C: OUR profile name next to OUR avatar
+    badge_position: str = ""  # top_left | top_right | bottom_left | bottom_right
     extra: dict = field(default_factory=dict)
 
 
@@ -169,6 +172,7 @@ def build_ass(
         f"Style: Title,{font},58,{WHITE},{WHITE},{BOX},{BOX},-1,0,0,0,100,100,0,0,3,18,0,8,80,80,{title_margin_v},1\n"
         f"Style: Mark,{font},34,{wm_col},{wm_col},&H80000000,&H00000000,-1,0,0,0,100,100,1,0,1,1,0,{wm_align},"
         f"60,150,{wm_mv},1\n"
+        f"Style: Badge,{font},40,{WHITE},{WHITE},&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,3,1,4,0,0,0,1\n"
         f"Style: Note,{font},44,{WHITE},{WHITE},{BOX},{BOX},-1,1,0,0,100,100,0,0,3,12,0,8,{SAFE_SIDE},{SAFE_SIDE},"
         f"{title_margin_v + 120},1\n"
         f"Style: Cta,{font},54,{WHITE},{WHITE},{BOX},{BOX},-1,0,0,0,100,100,0,0,3,16,0,5,{SAFE_SIDE},{SAFE_SIDE},0,1\n\n"
@@ -181,6 +185,15 @@ def build_ass(
     end_all = duration if duration > 0 else 3600
     if title:
         lines.append(f"Dialogue: 1,{_ts(0)},{_ts(end_all)},Title,,0,0,0,,{_esc(title)}")
+    name = _clean_overlay(o.badge_name)[:32]
+    if name and o.badge_position:  # next to the avatar circle drawn by the renderer
+        from .renderer import BADGE_D, BADGE_POS
+
+        bx, by = BADGE_POS.get(o.badge_position, BADGE_POS["top_left"])
+        right = o.badge_position.endswith("right")
+        tx = bx - 18 if right else bx + BADGE_D + 18
+        lines.append(f"Dialogue: 2,{_ts(0)},{_ts(end_all)},Badge,,0,0,0,,"
+                     f"{{\\an{6 if right else 4}\\pos({tx},{by + BADGE_D // 2})}}{_esc(name)}")
     for a, b, text in notes or []:  # structural edit labels (e.g. the teaser's "Daqui a pouco...")
         lines.append(f"Dialogue: 4,{_ts(a)},{_ts(b)},Note,,0,0,0,,{_esc(_clean_overlay(text)[:60])}")
     mark = _clean_overlay(o.watermark)[:40]
@@ -208,7 +221,7 @@ def build_ass(
             if cta_start is not None:
                 g_end = min(g_end, cta_start)
             if o.animation == "none":
-                txt = " ".join(_word_markup(x, emph_set, emph) for x in g)
+                txt = " ".join(_word_markup(x, emph_set, emph, o.uppercase) for x in g)
                 lines.append(f"Dialogue: 0,{_ts(g[0].start)},{_ts(g_end)},{sty},,0,0,0,,{txt}")
                 continue
             for wi, w in enumerate(g):
@@ -222,9 +235,10 @@ def build_ass(
                     if k == wi:
                         # other voices keep their own colour: the highlight colour means "the streamer"
                         col = _ovc(other) if sty == "Other" else _ovc(active)
-                        parts.append(f"{{\\1c{col}{scale}}}{_esc(display_text(x.text).upper())}{{\\r}}")
+                        shown = display_text(x.text).upper() if o.uppercase else display_text(x.text)
+                        parts.append(f"{{\\1c{col}{scale}}}{_esc(shown)}{{\\r}}")
                     else:
-                        parts.append(_word_markup(x, emph_set, emph))
+                        parts.append(_word_markup(x, emph_set, emph, o.uppercase))
                 pop = "{\\fad(40,0)}" if wi == 0 else ""
                 if o.animation == "pop" and wi == 0:
                     pop = "{\\fad(60,0)\\t(0,90,\\fscx108\\fscy108)\\t(90,160,\\fscx100\\fscy100)}"
@@ -232,8 +246,8 @@ def build_ass(
     return header + "\n".join(lines) + "\n"
 
 
-def _word_markup(x: SubWord, emph_set: set[str], emph: str) -> str:
-    txt = _esc(display_text(x.text).upper())
+def _word_markup(x: SubWord, emph_set: set[str], emph: str, uppercase: bool = True) -> str:
+    txt = _esc(display_text(x.text).upper() if uppercase else display_text(x.text))
     if is_emphasis(x.text) or x.text.lower().strip(".,!?") in emph_set or x.text.endswith("!"):
         return f"{{\\1c{_ovc(emph)}}}{txt}{{\\r}}"
     return txt
