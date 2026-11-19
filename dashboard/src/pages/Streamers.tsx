@@ -214,10 +214,11 @@ function MonitorBadge({ s, live }: { s: Streamer; live: boolean }) {
 function MonitorAlert({ streamers }: { streamers: Streamer[] }) {
   const stale = streamers.filter((x) => x.enabled && x.monitor?.state === "stale");
   if (!stale.length) return null;
+  const never = stale.some((x) => x.monitor?.last_checked_age_s == null);
   const oldest = Math.max(...stale.map((x) => x.monitor?.last_checked_age_s ?? 0));
   return (
     <div role="alert" className="mb-4 rounded-md border border-[#F2B33D]/60 px-3 py-2 text-sm text-[#F2B33D]">
-      <strong>Monitoramento atrasado</strong> em {stale.length} {stale.length === 1 ? "canal" : "canais"}: a verificação mais antiga foi {minutes(oldest)}.
+      <strong>Monitoramento atrasado</strong> em {stale.length} {stale.length === 1 ? "canal" : "canais"}: {never ? "há canal que nunca foi verificado" : `a verificação mais antiga foi ${minutes(oldest)}`}.
       Os estados abaixo são o último resultado conhecido e podem não ser atuais.
     </div>
   );
