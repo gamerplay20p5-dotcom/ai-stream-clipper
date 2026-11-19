@@ -119,9 +119,9 @@ function Refs() {
         </form>
       </Disclosure>
       {add.isSuccess && <Notice>Referência cadastrada.</Notice>}
-      <section className="panel" aria-labelledby="reference-filters">
-        <div className="panel-heading"><h2 id="reference-filters" className="display text-lg">Buscar na biblioteca</h2></div>
-        <div className="panel-body flex flex-wrap gap-2">
+      <section className="library-filters" aria-labelledby="reference-filters">
+        <div><h2 id="reference-filters" className="display text-lg">Buscar na biblioteca</h2></div>
+        <div className="flex flex-wrap gap-2">
           <input className="field w-auto grow" type="search" aria-label="Buscar referências" placeholder="Buscar por termo" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} />
           <select className="field w-auto" aria-label="Filtrar plataforma" value={filter.platform} onChange={(e) => setFilter({ ...filter, platform: e.target.value })}>
             <option value="">Todas as plataformas</option><option value="youtube">YouTube</option><option value="instagram">Instagram</option><option value="other">Por imagem</option>
@@ -138,17 +138,17 @@ function Refs() {
         {(items.data ?? []).map((it) => (
           <li key={it.id} className="panel panel-body text-sm">
             <div className="flex items-start gap-3">
-              {it.has_image && <img src={`/api/refs/items/${it.id}/image`} alt="" className="h-20 w-12 rounded object-cover" />}
+              {it.has_image && <img src={`/api/refs/items/${it.id}/image`} alt="" className="reference-still" />}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <h3 className="min-w-0 break-words font-semibold">{it.title || it.handle || it.url || "Referência sem título"}</h3>
+                  <h3 className="display min-w-0 break-words text-lg">{it.title || it.handle || it.url || "Referência sem título"}</h3>
                   <button type="button" className="icon-action" aria-label="Favorito" aria-pressed={it.favorite} disabled={patch.isPending}
                     onClick={() => patch.mutate({ id: it.id, b: { favorite: !it.favorite } })}>
                     <Star size={16} className={it.favorite ? "fill-take text-take" : ""} aria-hidden />
                   </button>
                 </div>
                 <p className="text-xs text-ink-muted">{it.platform} · {it.kind}{it.category ? ` · ${it.category}` : ""}{it.url && <> · <a className="inline-flex items-center gap-1 text-take hover:underline" href={it.url} target="_blank" rel="noreferrer">Abrir fonte <ExternalLink size={12} aria-hidden /></a></>}</p>
-                {it.why && <p className="mt-1 text-xs">{it.why}</p>}
+                {it.why && <p className="mt-2 text-sm">{it.why}</p>}
                 <p className="mt-1 text-[11px] text-ink-faint">{[...it.games, ...it.humor, ...it.formats, ...it.tags].join(" · ")}</p>
                 {Object.keys(it.api_data).length > 0 && (
                   <p className="mt-1 text-[11px] text-ink-muted">

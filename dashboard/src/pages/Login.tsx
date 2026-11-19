@@ -30,6 +30,8 @@ export default function Login({ onDone }: { onDone: () => void }) {
 
   return (
     <main className="login-layout">
+      <div className="login-art" aria-hidden="true"><div className="login-aperture"><img src="/site/clipper-mark.svg" alt=""/></div></div>
+      <div className="login-access">
       <header><Brand /></header>
       <div className="login-form">
         <h1 className="display text-3xl">Acesse o painel</h1>
@@ -59,6 +61,7 @@ export default function Login({ onDone }: { onDone: () => void }) {
         <a className="hover:text-take" href="/termos">Termos de uso</a>
         <span className="ml-auto font-mono">v{__APP_VERSION__}</span>
       </footer>
+      </div>
     </main>
   );
 }

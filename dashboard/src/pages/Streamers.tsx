@@ -32,6 +32,20 @@ export default function Streamers() {
   return (
     <div className="space-y-5">
       <PageHeader title="Lives e streamers" description="Gerencie os canais monitorados, o estado da captura e as preferências de corte." />
+
+
+      {add.isSuccess && <Notice>Canal adicionado ao monitoramento.</Notice>}
+      <ErrorNote error={list.error} />
+      {list.isLoading && <Skeleton label="Carregando canais monitorados" />}
+      {list.data && list.data.length > 0 && <section className="panel">
+      <header className="panel-heading">
+        <h2 className="display text-lg">Canais cadastrados</h2>
+        <span className="text-sm text-ink-muted">{list.data.filter((channel) => channel.live_session).length} ao vivo / {list.data.length} cadastrados</span>
+      </header>
+      <ul className="divide-y divide-suite-line">
+        {list.data.map((channel) => <StreamerRow key={channel.id} s={channel} />)}
+      </ul>
+      </section>}
       <Disclosure title="Adicionar canal">
       <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
         <div>
@@ -60,20 +74,7 @@ export default function Streamers() {
         </div>
       </form>
       </Disclosure>
-
-      {add.isSuccess && <Notice>Canal adicionado ao monitoramento.</Notice>}
-      <ErrorNote error={list.error} />
-      {list.isLoading && <Skeleton label="Carregando canais monitorados" />}
-      {list.data && list.data.length > 0 && <section className="panel">
-      <header className="panel-heading">
-        <h2 className="display text-lg">Canais cadastrados</h2>
-        <span className="text-sm text-ink-muted">{list.data.filter((channel) => channel.live_session).length} ao vivo / {list.data.length} cadastrados</span>
-      </header>
-      <ul className="divide-y divide-suite-line">
-        {list.data.map((channel) => <StreamerRow key={channel.id} s={channel} />)}
-      </ul>
-      </section>}
-      {list.data?.length === 0 && <Empty title="Nenhum canal cadastrado">Cole o link de um canal acima para começar.</Empty>}
+      {list.data?.length === 0 && <Empty title="Nenhum canal cadastrado">Abra Adicionar canal e informe o link da transmissão.</Empty>}
 
     </div>
   );

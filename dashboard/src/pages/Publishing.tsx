@@ -188,18 +188,15 @@ function Accounts({ ov }: { ov: Overview }) {
       )}
       <ErrorNote error={start.error ?? disconnect.error} />
       {ov.accounts.length === 0 ? <Empty title="Nenhuma conta conectada">Configure o app OAuth e clique em Conectar.</Empty> : (
-        <div className="table-scroll" tabIndex={0} role="region" aria-label="Contas por plataforma"><table className="w-full min-w-[36rem] text-sm">
-          <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Conta</th><th>Plataforma</th><th>Estado</th><th>Cota hoje</th><th /></tr></thead>
-          <tbody>{ov.accounts.map((a) => (
-            <tr key={a.id} className="border-t border-suite-line/50">
-              <td className="py-1.5">{a.name} <span className="text-ink-muted">{a.handle}</span></td>
-              <td>{a.platform_name}</td>
-              <td className={a.status === "connected" ? "text-ok" : "text-tally"}>{a.status === "connected" ? "conectada" : a.status}{a.last_error && <span className="block text-[11px] text-ink-faint">{a.last_error}</span>}</td>
-              <td className="text-xs">{a.platform === "youtube" ? `${a.quota?.uploads ?? 0} / ${a.meta.upload_limit ?? 100} envios hoje` : "—"}</td>
-              <td className="text-right">{a.status !== "revoked" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => confirm("Desconectar e apagar os tokens desta conta?") && disconnect.mutate(a.id)}><Trash2 className="h-3 w-3" /> Desconectar</button>}</td>
-            </tr>
-          ))}</tbody>
-        </table></div>
+        <ul className="account-roster">{ov.accounts.map(a => <li key={a.id} className="account-destination">
+          <div className="min-w-0"><span className="text-sm text-ink-muted">{a.platform_name}</span>
+            <h3 className="display break-words text-lg">{a.name}</h3><p className="break-words text-sm text-ink-muted">{a.handle}</p></div>
+          <div className="min-w-0"><span className={a.status === "connected" ? "text-ok" : "text-tally"}>{a.status === "connected" ? "Conectada" : a.status}</span>
+            {a.last_error && <p className="break-words text-sm text-ink-muted">{a.last_error}</p>}
+            {a.platform === "youtube" && <p className="text-sm text-ink-muted">{a.quota?.uploads ?? 0} / {a.meta.upload_limit ?? 100} envios hoje</p>}</div>
+          {a.status !== "revoked" && <button className="btn-quiet" onClick={() => confirm("Desconectar e apagar os tokens desta conta?") && disconnect.mutate(a.id)}>
+            <Trash2 size={14} aria-hidden/> Desconectar</button>}
+        </li>)}</ul>
       )}
     </Section>
   );

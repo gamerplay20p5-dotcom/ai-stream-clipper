@@ -93,9 +93,9 @@ export function EditorialCalendar() {
       {dismiss.isSuccess && <Notice>Propostas recusadas.</Notice>}
       {move.isSuccess && <Notice>Horário atualizado.</Notice>}
       {Array.from(days.entries()).map(([d, list]) => (
-        <section key={d} className="panel">
-          <h2 className="panel-heading text-sm font-semibold capitalize text-ink-muted">
-            {d === "sem data" ? "Imediato" : new Date(d + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "2-digit" })}
+        <section key={d} className="agenda-day">
+          <h2 className="agenda-date">
+            {d === "sem data" ? "Imediato" : <time dateTime={d}><strong>{d.slice(8,10)}</strong> {new Date(d + "T12:00:00").toLocaleDateString("pt-BR", { weekday:"short", month:"short", year:"numeric" })}</time>}
           </h2>
           <ul className="divide-y divide-suite-line">
             {list.map((it) => (
@@ -104,7 +104,7 @@ export function EditorialCalendar() {
                   <input type="checkbox" checked={sel.includes(it.id)} aria-label={`Selecionar proposta ${it.id}`}
                     onChange={() => setSel(sel.includes(it.id) ? sel.filter((x) => x !== it.id) : [...sel, it.id])} />
                 )}
-                <span className="w-12 font-mono text-xs">{it.when ? it.when.slice(11, 16) : "agora"}</span>
+                <span className="w-12 font-mono text-sm font-semibold">{it.when ? it.when.slice(11, 16) : "agora"}</span>
                 {it.thumb && it.clip_id && <img src={`/api/clips/${it.clip_id}/thumbnail?v=${it.version}`} alt="" className="h-10 w-6 rounded object-cover" />}
                 <div className="min-w-[9rem] flex-1">
                   {it.clip_id ? <Link className="break-words font-semibold hover:text-take hover:underline"

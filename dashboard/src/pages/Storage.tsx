@@ -3,7 +3,7 @@ import { Heart, ShieldCheck, Undo2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
-import { Disclosure, Empty, ErrorNote, Notice, PageHeader, Skeleton } from "../components/ui";
+import { Disclosure, Empty, ErrorNote, Meter, Notice, PageHeader, Skeleton } from "../components/ui";
 import { ago, bytes } from "../lib/format";
 
 type Overview = { bytes: Record<string, number>; clips: Record<string, number>; recovered_bytes: number;
@@ -59,6 +59,11 @@ export default function Storage() {
       <ErrorNote error={ov.error ?? sim.error ?? logq.error ?? settings.error ?? save.error ?? flag.error ?? retro.error} />
       {ov.isLoading && <Skeleton label="Consultando uso do disco" />}
       {save.isSuccess && <Notice>Política de retenção salva.</Notice>}
+      {o?.disk.total != null && o.disk.total > 0 && o.disk.free != null && <section className="disk-capacity">
+        <div className="flex flex-wrap items-baseline justify-between gap-3"><h2 className="display text-lg">Capacidade do disco</h2>
+          <span className="text-sm text-ink-muted">{bytes(o.disk.free)} livres de {bytes(o.disk.total)}</span></div>
+        <Meter label="Espaço ocupado" max={o.disk.total} value={o.disk.total-o.disk.free}/>
+      </section>}
       {o && (
         <div className="panel grid grid-cols-2 divide-suite-line sm:grid-cols-3 xl:grid-cols-6 xl:divide-x">
           <Card label="Cortes renderizados" value={bytes(o.bytes.video)} />
@@ -74,7 +79,6 @@ export default function Storage() {
           {!o.enabled ? "Limpeza automática desligada: nada é apagado. A simulação abaixo mostra o que aconteceria."
             : o.dry_run ? "Limpeza em modo simulação: as decisões são registradas, mas nenhum arquivo é apagado."
               : "Limpeza ativa: cortes elegíveis vão para a quarentena e a mídia é apagada depois do prazo. Os registros e as avaliações são sempre mantidos."}
-          {o.disk.total ? ` Disco: ${bytes(o.disk.free ?? 0)} livres de ${bytes(o.disk.total)}.` : ""}
         </p>
       )}
 

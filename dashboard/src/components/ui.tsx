@@ -42,10 +42,10 @@ export function Meter({ value, max = 10, tone = "take", label = "Medição" }: {
 }) {
   if (value === null || value === undefined) return <div className="h-1.5 w-full rounded-full bg-suite-line/50" />;
   const current = Math.max(0, Math.min(max, value));
-  const color = tone === "take" ? "bg-ink-muted" : tone === "tally" ? "bg-tally" : "bg-ink-muted";
+  const color = tone === "take" ? "bg-take" : tone === "tally" ? "bg-tally" : "bg-ink-muted";
   return (
     <div className="h-1.5 w-full rounded-full bg-suite-line" role="meter" aria-label={label} aria-valuenow={current} aria-valuemin={0} aria-valuemax={max}>
-      <div className={`h-1.5 rounded-full ${color}`} style={{ width: `${(current / max) * 100}%` }} />
+      <div className={`h-1.5 rounded-full transition-[width] duration-200 ${color}`} style={{ width: `${(current / max) * 100}%` }} />
     </div>
   );
 }

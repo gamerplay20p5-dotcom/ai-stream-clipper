@@ -80,7 +80,7 @@ function ReviewDesk({ tax }: { tax: Taxonomy }) {
   };
 
   return (
-    <div className="grid items-start gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
+    <div className="grid items-start gap-4 lg:grid-cols-[minmax(12rem,.32fr)_minmax(0,1fr)]">
       <aside className="panel min-w-0">
         <div className="panel-heading"><h2 className="text-sm font-semibold">Exemplos</h2></div>
         <div className="p-3">
@@ -104,7 +104,7 @@ function ReviewDesk({ tax }: { tax: Taxonomy }) {
           {items.map((e) => (
             <li key={e.id}>
               <button onClick={() => select(e.id)} aria-current={e.id === sel ? "true" : undefined}
-                className={`w-full rounded-md px-3 py-2 text-left text-sm ${e.id === sel ? "bg-suite-raised ring-1 ring-take" : "hover:bg-suite-panel"}`}>
+                className={`w-full rounded-md px-3 py-2 text-left text-sm ${e.id === sel ? "bg-suite-raised border-l-2 border-take" : "hover:bg-suite-panel"}`}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate font-medium">{e.streamer_name || "—"}</span>
                   <span className="shrink-0 text-xs text-ink-muted">{e.ai.decision === "accepted" ? "corte" : "rejeitado"} · {fmt(e.ai.score)}</span>

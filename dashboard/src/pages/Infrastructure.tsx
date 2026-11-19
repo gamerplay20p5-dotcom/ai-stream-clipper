@@ -105,7 +105,7 @@ export default function Infrastructure() {
       {d && d.hosts.length === 0 && <Empty title="Sem servidores reportados">O uso de recursos aparece após o primeiro sinal de um worker.</Empty>}
       {d && (
         <>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="host-rack">
             {d.hosts.map((h) => <HostColumn key={h.label} h={h} />)}
           </div>
 

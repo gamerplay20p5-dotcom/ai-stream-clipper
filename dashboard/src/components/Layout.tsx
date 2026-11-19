@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity, CalendarDays, ChevronDown, ChevronRight, Clapperboard, ClipboardCheck, Gauge,
-  HardDrive, Library, Link2, LogOut, Menu, Radio, ScrollText, Send, Server, SlidersHorizontal, Sparkles, X,
+  HardDrive, Library, Link2, LogOut, Menu, Radio, ScrollText, Send, Server, SlidersHorizontal, AudioLines, X,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -26,7 +26,7 @@ const groups = [
     { to: "/publicacao?aba=contas", label: "Contas conectadas", icon: Link2 },
   ] },
   { label: "Inteligência", items: [
-    { to: "/diretor", label: "Diretor IA", icon: Sparkles },
+    { to: "/diretor", label: "Diretor IA", icon: AudioLines },
     { to: "/referencias", label: "Referências", icon: Library },
     { to: "/ia", label: "Parâmetros", icon: SlidersHorizontal },
   ] },
@@ -123,7 +123,6 @@ export default function Layout({ email }: { email: string }) {
     <div className="workspace">
       <a className="skip-link" href="#conteudo">Ir para o conteúdo</a>
       <aside className="workspace-sidebar">
-        <Link to="/" className="sidebar-brand" aria-label="AI Stream Clipper, início"><Brand /></Link>
         <WorkspaceNav current={current} count={toReview} />
         <div className="sidebar-footer">
           <Link to="/patch-notes" className="font-mono text-xs">v{__APP_VERSION__}</Link>
@@ -134,6 +133,7 @@ export default function Layout({ email }: { email: string }) {
       <div className="workspace-content">
         <header className="workspace-topbar">
           <div className="flex min-w-0 items-center gap-3">
+            <Link to="/" className="console-brand" aria-label="AI Stream Clipper, início"><Brand /></Link>
             <button type="button" className="icon-action drawer-toggle" aria-label="Abrir navegação" aria-haspopup="dialog"
               onClick={() => drawer.current?.showModal()}><Menu size={19} aria-hidden /></button>
             <div className="breadcrumb">
@@ -159,8 +159,9 @@ export default function Layout({ email }: { email: string }) {
                 <ChevronDown size={14} aria-hidden />
               </summary>
               <div className="account-popover">
+                <h2 className="display text-lg">Minha conta</h2>
                 <div className="border-b border-suite-line pb-3">
-                  <div className="break-all text-sm font-semibold">{email}</div>
+                  <div className="break-all text-sm font-medium">{email}</div>
                   <p className="mt-1 text-xs text-ink-muted">HTS / HowTo.Software</p>
                 </div>
                 <button type="button" onClick={logout} disabled={isLoggingOut} className="btn-quiet mt-3 w-full">

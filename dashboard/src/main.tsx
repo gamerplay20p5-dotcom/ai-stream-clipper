@@ -50,8 +50,7 @@ function App() {
       {user ? (
         <Route element={<Layout email={user.email} />}>
           <Route index element={<Overview />} />
-          <Route path="cortes" element={<Clips />} />
-          <Route path="cortes/:id" element={<Clips />} />
+          <Route path="cortes/:id?" element={<Clips />} />
           <Route path="streamers" element={<Streamers />} />
           <Route path="ia" element={<Settings />} />
           <Route path="infra" element={<Infrastructure />} />

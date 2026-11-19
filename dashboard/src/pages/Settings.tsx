@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useState, cloneElement, isValidElement, type ReactNode } from "react";
+import { AudioLines, BrainCircuit, ClipboardCheck, Scissors, Palette, SlidersHorizontal } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type AISettings, type ModelInfo } from "../api";
 import { ErrorNote, PageHeader, Skeleton } from "../components/ui";
@@ -11,7 +12,7 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
     <div className="grid grid-cols-1 gap-2 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,18rem)] sm:items-center sm:gap-8">
       <div>
         <div id={id} className="text-sm font-medium">{label}</div>
-        {hint && <p id={id + "-hint"} className="text-xs text-ink-muted">{hint}</p>}
+        {hint && <p id={id + "-hint"} className="mt-1 text-sm text-ink-muted">{hint}</p>}
       </div>
       <div>
         {isValidElement<{ "aria-labelledby"?: string; "aria-describedby"?: string }>(children) && typeof children.type === "string" && ["input", "select", "textarea"].includes(children.type)
@@ -25,7 +26,7 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
 function Section({ title, children }: { title: string; children: ReactNode }) {
   const id = useId();
   return (
-    <section className="min-w-0 border-b border-suite-line pb-4" aria-labelledby={id}>
+    <section className="parameter-section" aria-labelledby={id}>
       <h2 id={id} className="display mb-1 text-lg">{title}</h2>
       <div className="divide-y divide-suite-line/70">{children}</div>
     </section>
@@ -33,12 +34,12 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 const parameterViews = [
-  { key: "deteccao", label: "Detecção" },
-  { key: "modelos", label: "Modelos" },
-  { key: "avaliacao", label: "Avaliação" },
-  { key: "edicao", label: "Edição" },
-  { key: "canal", label: "Marca do canal" },
-  { key: "operacao", label: "Operação" },
+  { key: "deteccao", label: "Detecção", icon: AudioLines },
+  { key: "modelos", label: "Modelos", icon: BrainCircuit },
+  { key: "avaliacao", label: "Avaliação", icon: ClipboardCheck },
+  { key: "edicao", label: "Edição", icon: Scissors },
+  { key: "canal", label: "Marca do canal", icon: Palette },
+  { key: "operacao", label: "Operação", icon: SlidersHorizontal },
 ] as const;
 
 export default function Settings() {
@@ -68,20 +69,21 @@ export default function Settings() {
   const bool = (key: keyof AISettings) => (event: React.ChangeEvent<HTMLInputElement>) => update({ [key]: event.target.checked });
 
   return (
-    <div className="max-w-4xl">
+    <div className="parameters">
       <PageHeader title="Parâmetros" description="Configure detecção, modelos e edição dos cortes." />
-      <div className="sticky top-[var(--topbar-height)] z-10 mb-6 border-b border-suite-line bg-suite">
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-1">
-          <nav className="view-switch border-b-0" aria-label="Abas de parâmetros">
+      <div className="parameter-desk">
+      <aside className="parameter-nav">
+        <div className="min-w-0">
+          <nav className="parameter-links" aria-label="Abas de parâmetros">
             {parameterViews.map((item) => (
               <Link key={item.key} to={item.key === "deteccao" ? "/ia" : `/ia?aba=${item.key}`}
-                className="view-switch-item px-2.5" aria-current={view.key === item.key ? "page" : undefined}>
-                {item.label}
+                className="parameter-link" aria-current={view.key === item.key ? "page" : undefined}>
+                <item.icon size={17} aria-hidden/>{item.label}
               </Link>
             ))}
           </nav>
           {s && (
-            <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 py-1">
+            <div className="parameter-save">
               <p role="status" className="text-xs text-ink-muted">
                 {dirty ? "Alterações pendentes" : save.isSuccess ? "Parâmetros salvos." : ""}
               </p>
@@ -96,7 +98,8 @@ export default function Settings() {
           )}
         </div>
         <ErrorNote error={save.error} />
-      </div>
+      </aside>
+      <div className="min-w-0">
       <ErrorNote error={q.error} />
       {q.isLoading && <Skeleton label="Carregando parâmetros da IA" />}
       {s && (
@@ -372,6 +375,8 @@ export default function Settings() {
           </div>
         </fieldset>
       )}
+      </div>
+      </div>
     </div>
   );
 }

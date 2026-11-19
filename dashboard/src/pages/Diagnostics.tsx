@@ -133,6 +133,7 @@ export default function Diagnostics() {
       <div className="section-flow">
         <ErrorNote error={q.error} />
         {q.isLoading && <Skeleton label="Carregando diagnóstico" />}
+        {(q.data?.streamers ?? []).map((d) => <StreamerDiag key={d.streamer.id} d={d} />)}
         {q.data && (
           <section className="panel">
             <div className="panel-heading"><h2 className="display text-lg">Workers por função</h2></div>
@@ -149,7 +150,6 @@ export default function Diagnostics() {
             </dl>
           </section>
         )}
-        {(q.data?.streamers ?? []).map((d) => <StreamerDiag key={d.streamer.id} d={d} />)}
         {q.data?.streamers.length === 0 && <Empty title="Nenhum canal monitorado"><Link to="/streamers" className="text-take hover:underline">Cadastro de transmissões</Link></Empty>}
       </div>
     </div>

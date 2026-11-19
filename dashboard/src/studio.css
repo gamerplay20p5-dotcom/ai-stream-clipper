@@ -1,0 +1,109 @@
+@layer components {
+  .session-select { @apply inline-flex min-h-10 max-w-full items-center gap-2 rounded-md border border-suite-outline bg-suite-panel px-3 text-take; }
+  .session-select select,.story-picker select { @apply min-w-0 max-w-full bg-suite-panel py-2 text-sm font-medium text-ink; }
+  .session-band { @apply grid min-w-0 items-center gap-5 rounded-lg border border-suite-line bg-suite-panel px-4 py-4 sm:px-5; }
+  .session-identity { @apply flex min-w-0 items-center gap-3; }
+  .source-symbol { @apply grid size-12 shrink-0 place-items-center rounded-lg border border-suite-outline bg-suite-raised text-ink; }
+  .session-identity h2 { @apply mt-1 break-words text-xl font-semibold leading-tight; }
+  .session-stats { @apply flex min-w-0 flex-wrap gap-x-5 gap-y-2; }
+  .session-stats div { @apply border-l border-suite-outline pl-3; }
+  .session-stats dt { @apply text-xs text-ink-muted; }
+  .session-stats dd { @apply mt-1 text-xl font-medium leading-none; }
+  .session-readout { @apply mb-5 mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs text-ink-muted; }
+  .session-readout svg { @apply text-take; }
+  .session-readout span + span { @apply border-l border-suite-line pl-3; }
+  .narrative-desk { @apply mb-5 grid items-start gap-5; }
+  .desk-heading { @apply mb-3 flex min-w-0 items-center gap-2; }
+  .desk-heading > svg { @apply size-5 shrink-0 text-ink-muted; }
+  .desk-heading :is(h2,h3) { @apply text-lg font-semibold; letter-spacing:-.025em; }
+  .desk-heading > span { @apply ml-auto rounded bg-suite-raised px-2 text-sm text-ink-muted; }
+  .story-picker { @apply mb-3 flex flex-wrap items-center justify-between gap-1 rounded-md border border-suite-line bg-suite-panel px-3 text-sm text-ink-muted; }
+  .story-picker select { flex:1; margin-left:.5rem; }
+  .scope { @apply overflow-hidden rounded-lg border border-suite-outline bg-suite-media; }
+  .scope-caption { @apply flex flex-wrap items-center justify-between gap-2 border-b border-suite-line px-4 py-3; }
+  .scope-caption strong { @apply text-base font-semibold; }
+  .scope-caption span,.scope-ruler,.scope-reading time,.event-log time { @apply font-mono text-xs; }
+  .scope-caption span { @apply text-ink-muted; }
+  .scope-track { @apply grid gap-x-3 px-4 pb-3 pt-5; grid-template-columns:max-content minmax(0,1fr); }
+  .lane-names { display:grid; grid-auto-rows:24px; align-items:center; }
+  .lane-names span { @apply text-xs text-ink-muted; }
+  .scope-grid { position:relative; margin-inline:5px;
+    background-image:linear-gradient(to right,rgb(var(--line) / .64) 1px,transparent 1px),linear-gradient(to bottom,transparent 11px,rgb(var(--line) / .7) 11px,rgb(var(--line) / .7) 12px,transparent 12px);
+    background-size:12.5% 100%,100% 24px; }
+  .scope-grid svg { @apply absolute inset-0 size-full text-take; overflow:visible; }
+  .scope-point { position:absolute; width:8px; height:8px; transform:translate(-50%,-50%); border-radius:50%; background:rgb(var(--take)); border:2px solid rgb(var(--media)); }
+  .scope-point[data-selected="true"] { width:11px; height:11px; outline:1px solid rgb(var(--take)); }
+  .climax-cursor { @apply absolute inset-y-0 border-l border-dashed border-take/70; }
+  .scope-ruler { @apply col-start-2 mt-2 flex justify-between text-ink-faint; }
+  .scope-reading { @apply flex flex-wrap items-center gap-2 border-t border-suite-line bg-suite-panel px-4 py-2 text-sm; }
+  .scope-reading svg,.scope-reading time { @apply text-take; }
+  .event-log { @apply overflow-hidden rounded-lg border border-suite-line; }
+  .event-log li + li { @apply border-t border-suite-line; }
+  .event-log button { @apply grid w-full items-center gap-3 bg-suite-panel px-4 py-3 text-left transition-colors hover:bg-suite-raised; grid-template-columns:3.4rem minmax(0,1fr) auto; }
+  .event-log button[aria-pressed="true"] { @apply bg-suite-raised; box-shadow:inset 3px 0 rgb(var(--take)); }
+  .event-log button:focus-visible,.bin-clip:focus-visible { outline-offset:-3px; }
+  .event-log time { @apply text-ink-muted; }
+  .event-copy small,.bin-caption small { @apply block text-xs text-ink-muted; }
+  .event-copy strong,.bin-caption strong { @apply block break-words text-sm font-semibold; }
+  .event-source { @apply break-words rounded bg-suite-media/60 px-2 py-1 text-xs text-ink-muted; max-width:10rem; }
+  .story-inspector { @apply min-w-0 rounded-lg border border-suite-line bg-suite-panel; }
+  .story-inspector > .desk-heading { @apply m-0 border-b border-suite-line px-4 py-3; }
+  .inspector-body,.inspector-clips { @apply px-4 py-4; }
+  .inspector-body h3 { @apply mb-2 mt-3 text-xl font-semibold; letter-spacing:-.03em; }
+  .inspector-body p { @apply break-words text-base; }
+  .confidence-label { @apply mb-2 mt-4 flex justify-between gap-2 text-sm text-ink-muted; }
+  .confidence-label strong { @apply text-take; }
+  .decision-facts { @apply mt-4 space-y-2 border-t border-suite-line pt-3; }
+  .decision-facts div { @apply grid gap-2 text-sm; grid-template-columns: minmax(5rem,.7fr) minmax(0,1fr); }
+  .decision-facts dt { @apply text-ink-muted; }
+  .decision-facts dd { overflow-wrap:anywhere; }
+  .inspector-clips { @apply border-t border-suite-line; }
+  .inspector-clips h3,.monitor-label { @apply flex items-center gap-2 text-sm font-semibold; }
+  .linked-cut { @apply mt-3 grid justify-items-start gap-1 rounded-md border border-suite-line bg-suite px-3 py-3 transition-colors hover:border-take; }
+  .linked-cut[data-media="true"] { grid-template-columns:4rem minmax(0,1fr); column-gap:.8rem; }
+  .linked-cut .linked-still { @apply h-full w-full rounded bg-suite-media object-cover; grid-row:span 4; max-height:7rem; }
+  .linked-cut strong { @apply text-sm text-take; }
+  .linked-cut strong svg { display:inline; }
+  .linked-cut > span:not(:last-child),.quiet-copy { @apply text-sm text-ink-muted; }
+  .cut-desk { @apply grid min-w-0 items-start gap-4; }
+  .cut-bin { @apply min-w-0 overflow-hidden rounded-lg border border-suite-line bg-suite-panel; }
+  .cut-bin header { @apply m-0 px-3 py-2.5; }
+  .cut-bin ul { @apply flex min-w-0 snap-x overflow-auto border-y border-suite-line; scrollbar-width:thin; }
+  .cut-bin li { @apply relative min-w-0 shrink-0 snap-start border-r border-suite-line py-1 pr-6; width:min(77vw,16rem); }
+  .cut-bin li[data-current="true"] { @apply bg-suite-raised; box-shadow:inset 3px 0 rgb(var(--take)); }
+  .bin-clip { @apply grid w-full min-w-0 items-center gap-3 p-2 text-left transition-colors hover:bg-suite-raised; grid-template-columns:3rem minmax(0,1fr); }
+  .bin-frame { @apply grid aspect-short max-h-20 w-full place-items-center overflow-hidden rounded bg-suite-media; }
+  .bin-frame img { @apply size-full object-cover; }
+  .bin-caption strong { @apply my-1 line-clamp-2 leading-tight; }
+  .bin-check { @apply absolute right-0 top-0 flex min-h-9 w-7 cursor-pointer items-center justify-center; }
+  .bin-all { @apply block w-full p-2.5 text-left text-xs font-semibold text-ink-muted hover:text-ink; }
+  .cut-bench { @apply min-w-0 rounded-lg border border-suite-line bg-suite-panel p-3 sm:p-4; container-type:inline-size; }
+  .monitor-label b { @apply rounded bg-suite-media px-2 py-0.5 font-mono text-xs font-normal text-ink-muted; }
+  .monitor-grid { @apply grid min-w-0 items-start gap-5; }
+  .compare-stage { grid-column:1/-1; }
+  .monitor-stage .review-player video { max-height:clamp(18rem,46vh,32rem); aspect-ratio:16/11; }
+  .key-guide { @apply flex flex-wrap items-center gap-1 text-xs text-ink-muted; }
+  .key-guide kbd { @apply rounded border border-suite-outline px-1; }
+  .event-sheet,.story-inspector,.monitor-grid > :not([hidden]) { animation:appear var(--duration-panel) ease-out; }
+  @container (min-width:40rem) {
+    .monitor-grid { grid-template-columns:minmax(0,1.12fr) minmax(0,1fr); }
+  }
+  @media(min-width:740px) {
+    .session-band { grid-template-columns:minmax(0,1fr) auto; }
+    .session-stats { column-gap:1.6rem; }
+    .session-stats dd { font-size:1.65rem; }
+    .narrative-desk { grid-template-columns:minmax(0,1.7fr) minmax(15.5rem,.88fr); }
+  }
+  @media(min-width:1200px) {
+    .cut-desk { grid-template-columns:clamp(12.5rem,17vw,17rem) minmax(0,1fr); }
+    .cut-bin ul { @apply block max-h-[65vh]; }
+    .cut-bin li { @apply w-full border-b border-r-0 border-suite-line; }
+    .cut-bin li:last-child { border-bottom:0; }
+  }
+  @media(max-width:420px) {
+    .event-log button { grid-template-columns:2.65rem minmax(0,1fr); gap:.2rem .65rem; }
+    .event-source { grid-column:2; justify-self:start; }
+    .scope-track { padding-inline:.75rem; gap:.4rem; }
+    .session-stats { gap:.75rem; }
+  }
+}

@@ -77,8 +77,8 @@ export default function Overview() {
             <ErrorNote error={review.error} />
             {review.isLoading && <Skeleton label="Carregando cortes para revisar" />}
             {review.data && (review.data.items.length > 0 ? (
-              <ul className="review-strip" aria-label="Cortes prontos com maior pontuação">
-                {review.data.items.map((clip) => (
+              <ul className="overview-reel" aria-label="Cortes prontos com maior pontuação">
+                {review.data.items.slice(0, 4).map((clip) => (
                   <li key={clip.id}><ClipFrame clip={clip} onOpen={() => navigate(`/cortes/${clip.id}`)} /></li>
                 ))}
               </ul>
@@ -114,7 +114,7 @@ export default function Overview() {
           </section>
         </div>
 
-        <div className="min-w-0 space-y-6 border-t border-suite-line pt-5 xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
+        <div className="operation-rail">
           <section aria-labelledby="operation-title">
             <h2 id="operation-title" className="display mb-2 text-lg">Operação</h2>
             {failureLink && <div className="mb-2 hidden xl:block">{failureLink}</div>}

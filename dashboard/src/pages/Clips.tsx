@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, ChevronLeft, ChevronRight, ClipboardCheck, Download, RotateCcw, Trash2, X } from "lucide-react";
+import { ListVideo, Film, ArrowLeft, Check, ChevronLeft, ChevronRight, ClipboardCheck, Download, RotateCcw, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type Clip, type Streamer } from "../api";
@@ -9,7 +9,7 @@ import CaptionEditor from "../components/CaptionEditor";
 import BatchBar from "../components/BatchBar";
 import VersionsPanel from "../components/VersionsPanel";
 import { StorageFlags } from "./Storage";
-import { ClipFrame, ClipStatus, ClipVideo, ConfirmAction, Disclosure, Empty, ErrorNote, Meter, Notice, PageHeader, ScoreMark, Skeleton, Status } from "../components/ui";
+import { ClipStatus, ClipVideo, ConfirmAction, Disclosure, Empty, ErrorNote, Meter, Notice, PageHeader, ScoreMark, Skeleton, Status } from "../components/ui";
 import { dimensionLabel, platformName, seconds, timecode } from "../lib/format";
 
 const tabs = [
@@ -42,77 +42,76 @@ export default function Clips() {
   const streamers = useQuery({ queryKey: ["streamers"], queryFn: () => api.get<Streamer[]>("/api/streamers") });
   const items = list.data?.items ?? [];
   const selectedId = id ? Number(id) : null;
+  const [queueOpen, setQueueOpen] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const toggle = (cid: number) => setPicked((p) => (p.includes(cid) ? p.filter((x) => x !== cid) : [...p, cid]));
 
-  function setParam(k: string, v: string) {
-    const p = new URLSearchParams(params);
-    if (v) p.set(k, v);
-    else p.delete(k);
-    if (k === "status" && !v) p.set("status", "");
-    setParams(p);
-  }
   const open = (cid: number | null) => {
     const search = new URLSearchParams(params);
     if (cid === null) search.delete("aba");
     navigate({ pathname: cid ? `/cortes/${cid}` : "/cortes", search: search.toString() });
   };
 
-  return (
-    <div>
-      <div hidden={Boolean(selectedId)}>
-        <PageHeader title="Central de cortes" description="Filtre por etapa e abra um corte para assistir, revisar ou editar.">
-          <div className="flex flex-wrap gap-2">
-            <select className="field w-auto" value={streamer} onChange={(e) => setParam("streamer", e.target.value)} aria-label="Filtrar por streamer">
-              <option value="">Todos os streamers</option>
-              {(streamers.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
-            </select>
-            <select className="field w-auto" value={sort} onChange={(e) => setParam("sort", e.target.value)} aria-label="Ordenar">
-              <option value="score">Maior pontuação</option>
-              <option value="recent">Mais recentes</option>
-            </select>
-          </div>
-        </PageHeader>
-        <nav className="view-switch mb-4" aria-label="Estados dos cortes">
-          {tabs.map((t) => (
-            <button key={t.label} type="button" className="view-switch-item" aria-pressed={status === t.key}
-              onClick={() => setParam("status", t.key)}>{t.label}</button>
-          ))}
-        </nav>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm text-ink-muted">
-            {list.data && (list.data.total > items.length ? `${items.length} de ${list.data.total} cortes` : `${items.length} ${items.length === 1 ? "corte" : "cortes"}`)}
-          </p>
-          {items.length > 0 && picked.length === 0 && (
-            <button className="btn-quiet py-1 text-xs" onClick={() => setPicked(items.map((c) => c.id))}>Selecionar todos desta lista</button>
-          )}
-        </div>
-        <ErrorNote error={list.error} />
-        {list.isLoading && <Skeleton label="Carregando cortes" />}
-        {list.data && items.length === 0 && (
-          <Empty title={status === "ready" ? "Tudo revisado" : "Nenhum corte nesta lista"}>
-            {status === "ready" ? "Novos cortes aparecem aqui quando a IA encontra um momento com pontuação acima do mínimo." : null}
-          </Empty>
-        )}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-          {items.map((c) => (
-            <div key={c.id}>
-              <ClipFrame clip={c} selected={c.id === selectedId} onOpen={() => open(c.id)} />
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-1 text-xs">
-                <ClipStatus status={c.status} />
-                <label className="flex cursor-pointer items-center gap-1 text-ink-faint">
-                  <input type="checkbox" checked={picked.includes(c.id)} onChange={() => toggle(c.id)}
-                    aria-label={`Selecionar corte ${c.id}`} />#{c.id}
-                </label>
-              </div>
-            </div>
-          ))}
-        </div>
-        {picked.length > 0 && <BatchBar ids={picked} onClear={() => setPicked([])} />}
+  const monitorId = selectedId ?? items[0]?.id;
+  function filter(k: string, v: string) {
+    const next = new URLSearchParams(params);
+    next.delete("aba");
+    if (v || k === "status") next.set(k, v);
+    else next.delete(k);
+    if (selectedId) navigate({ pathname: "/cortes", search: next.toString() });
+    else setParams(next);
+  }
+  return <div className="cut-room">
+    <PageHeader title="Central de cortes">
+      <div className="flex flex-wrap gap-2">
+        <select className="field w-auto" value={streamer} onChange={(e) => filter("streamer", e.target.value)} aria-label="Filtrar por streamer">
+          <option value="">Todos os streamers</option>
+          {(streamers.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
+        </select>
+        <select className="field w-auto" value={sort} onChange={(e) => filter("sort", e.target.value)} aria-label="Ordenar">
+          <option value="score">Maior pontuação</option>
+          <option value="recent">Mais recentes</option>
+        </select>
       </div>
-      {selectedId && <ReviewBench key={selectedId} clipId={selectedId} items={items} onNavigate={open} startInVersions={params.get("aba") === "versoes"} />}
-    </div>
-  );
+    </PageHeader>
+    <label className="compact-status">Etapa
+      <select className="field" aria-label="Etapa dos cortes" value={status} onChange={e => filter("status", e.target.value)}>
+        {tabs.map(t => <option key={t.label} value={t.key}>{t.label}</option>)}
+      </select></label>
+    <nav className="cut-states view-switch mb-4" aria-label="Estados dos cortes">
+      {tabs.map((t) => (
+        <button key={t.label} type="button" className="view-switch-item" aria-pressed={status === t.key}
+          onClick={() => filter("status", t.key)}>{t.label}</button>
+      ))}
+    </nav>
+    <ErrorNote error={list.error}/>
+    {list.isLoading && <Skeleton label="Carregando cortes"/>}
+    {list.data && !items.length && !selectedId && <Empty title={status === "ready" ? "Tudo revisado" : "Nenhum corte nesta lista"}>
+      {status === "ready" && "Novos cortes aparecem aqui quando a IA identifica um momento acima da pontuação mínima."}
+    </Empty>}
+    {monitorId != null && <div className="cut-desk">
+      <aside className="cut-bin" data-open={queueOpen} aria-label="Fila de cortes">
+        <header className="desk-heading">
+          <ListVideo aria-hidden /><h2>Fila de cortes</h2>
+          <button type="button" className="queue-toggle" aria-expanded={queueOpen} aria-controls="bin-list"
+            onClick={() => setQueueOpen(!queueOpen)}>{queueOpen ? "Recolher" : "Ver fila"}</button>
+          {list.data && <span>{items.length < list.data.total ? `${items.length} / ${list.data.total}` : items.length}</span>}
+        </header>
+        <ul id="bin-list">{items.map(c => <li key={c.id} data-current={monitorId === c.id}>
+          <button type="button" className="bin-clip" aria-pressed={monitorId === c.id} onClick={() => { setQueueOpen(false); open(c.id); }}>
+            <span className="bin-frame">{c.has_thumbnail ? <img alt="" loading="lazy" src={`/api/clips/${c.id}/thumbnail?v=${c.version}`}/> : <Film size={19} aria-hidden/>}</span>
+            <span className="bin-caption"><small>#{c.id} · {seconds(c.duration)} · {Math.round(c.score)}/100</small><strong>{c.title || "Sem título"}</strong>
+            <small>{c.is_test ? "Teste manual" : c.streamer?.display_name}</small>
+            {!status && <ClipStatus status={c.status} />}</span></button>
+          <label className="bin-check"><input type="checkbox" checked={picked.includes(c.id)} onChange={() => toggle(c.id)} aria-label={`Selecionar corte ${c.id}`}/></label>
+        </li>)}</ul>
+        {!items.length && <p className="quiet-copy px-3">Fila vazia neste filtro.</p>}
+        {items.length > 0 && picked.length === 0 && <button type="button" className="bin-all" onClick={() => setPicked(items.map(c => c.id))}>Selecionar todos desta lista</button>}
+      </aside>
+      <ReviewBench key={monitorId} clipId={monitorId} items={items} onNavigate={open} explicit={selectedId !== null} startInVersions={params.get("aba") === "versoes"}/>
+    </div>}
+    {picked.length > 0 && <BatchBar ids={picked} onClear={() => setPicked([])} />}
+  </div>;
 }
 
 const reviewViews = [
@@ -122,10 +121,11 @@ const reviewViews = [
   { key: "publish", label: "Publicação" },
 ] as const;
 
-function ReviewBench({ clipId, items, onNavigate, startInVersions }: {
-  clipId: number; items: Clip[]; onNavigate: (id: number | null) => void; startInVersions: boolean;
+function ReviewBench({ clipId, items, onNavigate, startInVersions, explicit }: {
+  clipId: number; items: Clip[]; onNavigate: (id: number | null) => void; startInVersions: boolean; explicit: boolean;
 }) {
   const [requestedView, setView] = useState<(typeof reviewViews)[number]["key"]>(startInVersions ? "versions" : "review");
+  const [visited, setVisited] = useState<Set<string>>(() => new Set([startInVersions ? "versions" : "review"]));
   const bench = useRef<HTMLDivElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const qc = useQueryClient();
@@ -168,34 +168,40 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions }: {
       if (t.closest("input, textarea, select, video, [contenteditable], dialog") || document.querySelector("dialog[open]")
         || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key.toLowerCase();
-      if (k === "j" && items[idx + 1]) onNavigate(items[idx + 1].id);
+      if (k === "j" && idx >= 0 && items[idx + 1]) onNavigate(items[idx + 1].id);
       else if (k === "k" && idx > 0) onNavigate(items[idx - 1].id);
+      else if (!explicit) return;
       else if (k === "a" && !action.isPending && c && ["ready", "rejected"].includes(c.status)) action.mutate("approve");
       else if (k === "r" && !action.isPending && c && ["ready", "approved", "failed"].includes(c.status)) action.mutate("reject");
       else if (k === "escape") onNavigate(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [idx, items, c, action, onNavigate]);
+  }, [idx, items, c, action, onNavigate, explicit]);
 
   const loaded = Boolean(c);
   useEffect(() => {
-    document.getElementById("conteudo")?.scrollIntoView({ block: "start" });
+    if (!explicit) return;
     heading.current?.focus({ preventScroll: true });
-  }, [clipId, loaded]);
+  }, [clipId, loaded, explicit]);
 
   function changeView(next: typeof view) {
     if (next === view) return;
+    if (!explicit) onNavigate(clipId);
     bench.current?.querySelectorAll("video").forEach((video) => video.pause());
+    setVisited(previous => new Set(previous).add(next));
     setView(next);
   }
 
   const dims = Object.entries(c?.score_breakdown ?? {}).filter(([k]) => k in dimensionLabel);
 
   return (
-    <div ref={bench}>
+    <div ref={bench} className="cut-bench">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <button className="btn-quiet" onClick={() => onNavigate(null)}><ArrowLeft size={16} aria-hidden /> Voltar aos cortes</button>
+        <div className="flex flex-wrap items-center gap-2">
+          {explicit && <button className="icon-action" title="Voltar à fila" aria-label="Voltar à fila" onClick={() => onNavigate(null)}><ArrowLeft size={16} aria-hidden/></button>}
+          <span className="monitor-label"><Film size={16} aria-hidden/> Monitor <b>#{clipId}</b></span>
+        </div>
         <div className="flex items-center gap-2">
           <button className="icon-action" disabled={idx <= 0} onClick={() => onNavigate(items[idx - 1].id)} aria-label="Corte anterior (K)">
             <ChevronLeft size={17} aria-hidden />
@@ -212,7 +218,7 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions }: {
         <>
           <header className="mb-4 flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <h1 ref={heading} tabIndex={-1} className="display break-words text-2xl outline-none sm:text-3xl">{c.title || "Sem título"}</h1>
+              <h2 ref={heading} tabIndex={-1} className="display break-words text-xl outline-none sm:text-2xl">{c.title || "Sem título"}</h2>
               <p className="mt-2 text-sm text-ink-muted">
                 {c.streamer?.display_name} / {platformName[c.streamer?.platform ?? ""] ?? "Live"} / Sessão #{c.session_id}
                 <span className="ml-2 font-mono text-xs">{timecode(c.start)} a {timecode(c.end)}</span>
@@ -239,18 +245,10 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions }: {
             </Notice>}
           </div>}
 
-          <div className="grid items-start gap-6 lg:grid-cols-[minmax(260px,0.9fr)_minmax(0,1.1fr)] lg:gap-8">
-            <section hidden={view === "versions"} className="min-w-0 lg:sticky lg:top-[calc(var(--topbar-height)+1rem)]" aria-label="Prévia do corte">
+          <div className="monitor-grid">
+            <section hidden={view === "versions"} className="monitor-stage min-w-0" aria-label="Prévia do corte">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h2 className="display text-lg">Prévia</h2><span className="font-mono text-xs text-ink-muted">9:16 / {seconds(c.duration)}</span></div>
               <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <button className="btn-take" disabled={!["ready", "rejected"].includes(c.status) || action.isPending} onClick={() => action.mutate("approve")}>
-                    <Check size={16} aria-hidden /> Aprovar
-                  </button>
-                  <button className="btn-quiet" disabled={!["ready", "approved", "failed"].includes(c.status) || action.isPending} onClick={() => action.mutate("reject")}>
-                    <X size={16} aria-hidden /> Rejeitar
-                  </button>
-                </div>
                 {c.has_video ? (
                   <ClipVideo className="review-player" data-clip-video key={c.version} aria-label="Vídeo do corte"
                     poster={c.has_thumbnail ? `/api/clips/${c.id}/thumbnail?v=${c.version}` : undefined}
@@ -260,6 +258,14 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions }: {
                     {c.status === "failed" ? "A renderização falhou." : "O vídeo aparece aqui quando a renderização terminar."}
                   </div>
                 )}
+                <div className="grid grid-cols-2 gap-2">
+                  <button className="btn-take" disabled={!["ready", "rejected"].includes(c.status) || action.isPending} onClick={() => action.mutate("approve")}>
+                    <Check size={16} aria-hidden /> Aprovar
+                  </button>
+                  <button className="btn-quiet" disabled={!["ready", "approved", "failed"].includes(c.status) || action.isPending} onClick={() => action.mutate("reject")}>
+                    <X size={16} aria-hidden /> Rejeitar
+                  </button>
+                </div>
                 <Disclosure title="Arquivo e ações">
                   <div className="flex flex-wrap gap-2">
                     {c.has_video && <a className="btn-quiet" href={`/api/clips/${c.id}/download`} download><Download size={16} aria-hidden /> Baixar</a>}
@@ -270,7 +276,7 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions }: {
                   </div>
                   <StorageFlags clipId={c.id} protectedFlag={c.protected} favorite={c.favorite} lifecycle={c.lifecycle} purgeAfter={c.purge_after} />
                 </Disclosure>
-                <p className="text-xs text-ink-muted">A aprova, R rejeita, J e K navegam, Esc volta à fila.</p>
+                {explicit && <p className="key-guide"><kbd>A</kbd> Aprovar <kbd>R</kbd> Rejeitar <kbd>J</kbd><kbd>K</kbd> Navegar <kbd>Esc</kbd> Fila</p>}
               </div>
             </section>
 
@@ -307,14 +313,14 @@ function ReviewBench({ clipId, items, onNavigate, startInVersions }: {
               </Disclosure>
             </div>
 
-            {c.has_video && <div hidden={view !== "versions"} className="min-w-0 lg:col-span-2">
+            {c.has_video && visited.has("versions") && <div hidden={view !== "versions"} className="compare-stage min-w-0">
               <VersionsPanel clipId={c.id} version={c.version} onChanged={invalidate} />
             </div>}
-            <div hidden={view !== "edit"} className="panel panel-body min-w-0">
+            {visited.has("edit") && <div hidden={view !== "edit"} className="panel panel-body min-w-0">
               <ClipEditor clip={c} onSaved={invalidate} />
               <CaptionEditor clipId={c.id} videoVersion={c.version} onSaved={invalidate} />
-            </div>
-            {c.has_video && <div hidden={view !== "publish"} className="panel panel-body min-w-0">
+            </div>}
+            {c.has_video && visited.has("publish") && <div hidden={view !== "publish"} className="panel panel-body min-w-0">
               <PublishPanel clipId={c.id} isTest={c.is_test} />
             </div>}
           </div>

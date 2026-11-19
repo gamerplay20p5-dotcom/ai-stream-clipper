@@ -1,6 +1,7 @@
 @import "@fontsource-variable/archivo";
 @import "/site/tokens.css";
 @import "./workspace.css";
+@import "./studio.css";
 
 @tailwind base;
 @tailwind components;
