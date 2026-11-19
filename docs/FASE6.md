@@ -136,7 +136,7 @@ sudo -n asc-ctl exec asc-api -- clipper migrate --downgrade 0008   # no 210
 
 O downgrade apaga apenas a coluna `gate`, que é recalculada na próxima análise; nenhum corte, rótulo ou publicação é afetado. O mesmo cuidado vale para qualquer rollback que cruze uma migração.
 
-## 4. Etapa 6B: editor estrutural (v0.6.1)
+## 4. Etapa 6B: editor estrutural (v0.6.2)
 
 **Implementado**
 - **`ai/structure.py`** (funções puras):
@@ -251,12 +251,87 @@ Ao voltar para a v0.6.2, o `alembic upgrade` restaura os votos e os snapshots.
 - A transição é um corte seco: sem efeitos, por escolha.
 - Avaliar o resultado com o VLM depois do render é a próxima etapa, sem usar a nota do próprio modelo como prova.
 
+## 5. Etapa 6C: Laboratório de Referências e perfis de formato (v0.6.3)
+
+### Auditoria das APIs (testada em 2026-11-19 com as credenciais de produção, sem novos escopos)
+
+Sonda só de leitura dentro do contêiner da API: nenhum token foi exibido e cerca de 105 das 10.000 unidades diárias do YouTube foram usadas.
+
+| Plataforma | Recurso | Situação | Evidência / alternativa |
+|---|---|---|---|
+| YouTube | Canal por @handle ou ID (título, descrição, inscritos se públicos, views, nº de vídeos) | **comprovado** | `channels.list` 200 (1 unidade) |
+| YouTube | Vídeo/Short por link (título, duração, views, likes, comentários, data) | **comprovado** | `videos.list` 200 (1 unidade) |
+| YouTube | Últimos uploads de um canal | **comprovado** | `playlistItems.list` 200 (1 unidade) |
+| YouTube | Saber se é Short | **parcial** | a API não tem esse campo: usamos o link `/shorts/` ou duração ≤ 3 min, marcado como "provável" |
+| YouTube | Busca por termo | disponível, **não usado** | `search.list` 200, mas custa 100 unidades: a cota é das publicações |
+| YouTube | Retenção / visualizações engajadas dos nossos vídeos | **indisponível** | 403 `accessNotConfigured`: exigiria ativar a YouTube Analytics API no projeto do Google e o escopo `yt-analytics.readonly`, com reconexão. Não solicitado |
+| YouTube | Retenção de vídeos de terceiros | **indisponível** | nenhuma API fornece; nunca estimamos |
+| Instagram | Perfil de outra conta profissional (Business Discovery) | **indisponível** | OAuthException **#10** com o login unificado atual. Exigiria Facebook Login com `instagram_basic` e página vinculada. Alternativa: cadastro manual (link, prints, observações) |
+| Instagram | Reel de terceiros por link (oEmbed) | **indisponível** | #10 "Meta oEmbed Read" exige revisão do app. Alternativa: print enviado por você |
+| Instagram | Mídias da nossa conta | **comprovado** | `/{ig-user}/media` 200 |
+| Instagram | Insights da nossa conta | **indisponível** | #10 na configuração atual. **Consequência:** as métricas do Instagram na página Publicação ficam vazias até que insights entrem na configuração do login unificado |
+| Todas | Baixar vídeos de terceiros | **proibido** | nunca; análise visual só de prints enviados por você e de vídeos nossos |
+
+Política de armazenamento: os dados de API ficam separados das suas anotações, com data de coleta e de expiração em **30 dias** (política do YouTube). Uma tarefa de manutenção apaga só esses dados quando vencem, sem tocar em notas, tags, prints e coleções.
+
+### O que foi implementado
+- **Laboratório** (página **Viral Intelligence**):
+  - referências do YouTube e do Instagram por link, ou só título e print;
+  - categoria, jogos, tipo de humor, formato, tags, "por que é interessante", favoritos e busca;
+  - coleções;
+  - consulta de metadados pelo YouTube; o Instagram fica manual, com o motivo explicado;
+  - aba com a matriz de capacidades.
+- **Imagens:** validadas e **regravadas**, o que descarta os metadados do arquivo original; limites de 8 MB e 4096 px.
+- **Perfil de formato a partir de um print** (`ai/format_profile.py`):
+  - **medição** com OpenCV: proporção, linha divisória webcam/gameplay pela diferença de cor, rosto (lado da webcam), faixa da legenda (posição, tamanho, cor de destaque, se tem caixa), paleta, contraste e círculo de perfil num canto;
+  - **IA visual existente** (Qwen3-VL), só com **categorias fechadas**;
+  - cada campo registra a fonte (medido, IA visual, padrão ou manual) e a confiança, e você pode editar tudo.
+  - Do print sai **só posição, tamanho, cor e estilo**. O selo usa a **nossa** foto e o **nosso** nome, enviados por você.
+- **Job `format_analyze`:** nos workers de visão, um por vez, com prioridade 90 (depois de lives, renders e reanálises) e limite de análises por hora (10, ajustável). Uma falha da IA mantém a medição.
+- **Prévia num corte nosso:** é uma **variante `format`** do sistema da 6B (mesmo renderer, mesma proteção contra render obsoleto, modo sombra), com comparação cega e promoção manual. O renderer ganhou altura da webcam (20 a 60%), webcam embaixo, caixa alta opcional e o selo circular com nome. Um perfil "webcam + gameplay" num corte sem webcam conhecida mantém o layout atual, sem inventar.
+- **Migração 0011:** só tabelas novas. O downgrade **renomeia** para `*_preserved` e o upgrade restaura, então suas referências nunca se perdem num rollback.
+
+### Validação com dados reais
+- **Medição em 36 quadros reais** (12 cortes nossos, 3 instantes cada, layout verdadeiro conhecido):
+  - layout correto em **29 de 36** (81%);
+  - **0 falsos "webcam + gameplay"**: todos os erros foram divisões não detectadas;
+  - altura da webcam com erro médio de **0,45 ponto percentual** (real: 36,7%);
+  - legenda medida em 10 de 36 quadros (nem todo quadro tem legenda);
+  - cor de destaque medida (#F8E205) bate com o amarelo que usamos (#FFE500);
+  - cerca de 0,4 s por print na CPU.
+- **IA visual real** (Qwen3-VL 2B local, 11 a 26 s por print no notebook) revelou dois problemas, corrigidos antes do PR:
+  - **copiou um nome de usuário de terceiro** num campo de observação livre, apesar da instrução. Agora o campo livre não existe: só ficam as categorias fechadas;
+  - **inventou** um selo e uma webcam em cortes que não têm. Agora a IA **sozinha** não liga o selo nem muda o layout; isso exige medição, e a sugestão fica registrada como "não confirmada".
+
+### Testes
+324 passando, 25 deles novos (`tests/test_refs_lab.py`):
+- reconhecimento de links;
+- API do YouTube simulada (só chamadas de 1 unidade, nunca a busca, expiração em 30 dias);
+- Instagram manual com o motivo;
+- expiração que preserva as notas;
+- imagens inválidas ou grandes demais;
+- coleções;
+- parâmetros validados;
+- fila com prioridade e limite por hora;
+- medição em imagens sintéticas (webcam em cima e embaixo, legenda, selo);
+- categorias fechadas, IA que falha e IA que não decide sozinha;
+- prévia em modo sombra (sem foto não há selo, sem webcam conhecida não há split);
+- avatar servido só com assinatura interna;
+- render real com webcam embaixo e selo;
+- migração 0011 preservando dados.
+
+### Limitações
+- Só o vídeo inteiro é reestilizado. Não há "picture-in-picture" (webcam num canto); a IA pode sugerir, mas o renderer ainda não faz.
+- Fontes: só as instaladas na imagem (Noto Sans, DejaVu Sans, Noto Serif). O estilo tipográfico do print é aproximado por peso, caixa e cor.
+- A medição da legenda depende de haver legenda no quadro enviado.
+- Métricas do Instagram (insights) seguem indisponíveis até que a configuração do login unificado inclua insights. Mudar isso exige sua decisão; nada foi alterado.
+
 ---
 
 **Rollback check (EN):** `clipper rollback-check` reports every blocker: not paused, any active send (uploading/processing or a running publish job, even without media divergence) and mismatched pending publications. It exits 1 until none remain.
 
 **EN summary:** the audit found a single-number, binary keep/reject decision whose edit suggestions are never applied, and a renderer limited to one continuous segment. YouTube retention needs the Analytics API scope, which we do not hold. Instagram Business Discovery is not assumed to be available. Phase 6 adds a four-dimension quality gate with REWORK (6A), segment-based structural editing (6B), a references lab with permitted metadata and image-based format profiles (6C), abstract pattern library from authorised media (6D), performance learning on our own posts (6E) and fixed-sample validation (6F).
 
-**6B (v0.6.1):** five faithful structures, pause removal that never touches reactions, peak or outcome, an optional explicitly labelled teaser, segment rendering, shadow variants with blind human comparison and promotion. On 12 real clips the chosen structure shortened clips from 32.2 s to 14.4 s and moved the peak from 19.9 s to 4.1 s, keeping all reactions, but it left out 38.8% of the original speech. No quality improvement is claimed until blind comparisons exist.
+**6B (v0.6.2):** five faithful structures, pause removal that never touches reactions, peak or outcome, an optional explicitly labelled teaser, segment rendering, shadow variants with blind human comparison and promotion. On 12 real clips the chosen structure shortened clips from 32.2 s to 14.4 s and moved the peak from 19.9 s to 4.1 s with chronological order kept (reaction preservation was not measurable: no reaction was detected in those clips, 0/0), but it left out 38.8% of the original speech. No quality improvement is claimed until blind comparisons exist.
 
 **6C (v0.6.3):** references lab (YouTube metadata through the authorized API with 1-unit calls and a 30-day expiry; Instagram is manual because Business Discovery and oEmbed answered #10). Screenshots become abstract format profiles: OpenCV measurement plus the existing VLM restricted to closed categories. Layout was correct on 29 of 36 real frames with no false splits. The real VLM copied a third-party username and hallucinated a badge, so free text was removed and the model alone can no longer switch the layout or enable the badge. Previews reuse the 6B variant system in shadow mode.
