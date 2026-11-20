@@ -185,6 +185,9 @@ export default function Settings() {
         <Row label="Prévia do clímax no início" hint="Mostra 2–3 s do clímax com o aviso “Daqui a pouco…” e depois a sequência real, em ordem.">
           <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.editor_teaser} onChange={bool("editor_teaser")} />
         </Row>
+        <Row label="Análises de formato (prints) por hora" hint="Viral Intelligence: roda nos servidores de visão com prioridade baixa, depois das lives.">
+          <input type="number" min={0} max={60} className="field" value={s.refs_analyses_per_hour} onChange={num("refs_analyses_per_hour")} />
+        </Row>
         <Row label="Variantes automáticas por hora" hint="Orçamento de renderizações extras no servidor 206.">
           <input type="number" min={0} max={120} className="field" value={s.editor_variants_per_hour} onChange={num("editor_variants_per_hour")} />
         </Row>

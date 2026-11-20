@@ -369,6 +369,14 @@ async def handle_render(ctx: JobContext) -> dict:
     src, src_start = await obtain_source(ctx, clip_id, spec)
     ctx.check_cancel()
     s = ctx.settings
+    badge = (spec.get("edit_plan") or {}).get("badge")
+    if badge and badge.get("avatar_url"):  # Phase 6C: OUR avatar for the identification badge
+        av = ctx.workdir / "avatar.img"
+        try:
+            await ctx.client.download(badge["avatar_url"], av)
+            spec["edit_plan"] = {**spec["edit_plan"], "badge_avatar": str(av), "badge_position": badge.get("position")}
+        except InternalError:
+            spec["edit_plan"] = {k: v for k, v in spec["edit_plan"].items() if k != "badge"}  # render without it
     rs = RenderSpec(
         source=src, source_start=src_start, start=float(spec["start"]), end=float(spec["end"]),
         peak=float(spec["peak"]), words=[SubWord(float(w[0]), float(w[1]), str(w[2]), str(w[3]) if len(w) > 3 else "")
@@ -467,3 +475,64 @@ async def monitor_loop(rt: WorkerRuntime) -> None:
                   deadline_s=s.monitor_probe_timeout_s, http_timeout_s=s.monitor_http_timeout_s, stall_s=s.monitor_stall_s)
     rt.extra_metrics.append(mon.snapshot)
     await run_supervised(mon)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6C: visual format of an uploaded print (measurement + existing VLM, closed categories)
+# ---------------------------------------------------------------------------
+
+
+async def handle_format(ctx: JobContext) -> dict:
+    import cv2
+    import numpy as np
+
+    from ..ai import format_profile
+
+    pid = int(ctx.payload["profile_id"])
+    img_path = ctx.workdir / "print.img"
+    try:
+        await ctx.client.download(f"/internal/format-profiles/{pid}/image", img_path)
+    except InternalError as exc:
+        if exc.status == 404:
+            return {"skipped": "profile/image gone"}
+        raise JobError(f"image download failed: {exc}") from exc
+    img = cv2.imdecode(np.fromfile(str(img_path), dtype=np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        await ctx.client.post(f"/internal/format-profiles/{pid}/analysis", {"result": None, "error": "imagem inválida"})
+        return {"error": "bad image"}
+    vlm = _format_vlm(ctx, ctx.payload.get("model"))
+    t0 = time.monotonic()
+    result = await asyncio.to_thread(format_profile.analyze, img, vlm)
+    result["seconds"] = round(time.monotonic() - t0, 2)
+    await ctx.client.post(f"/internal/format-profiles/{pid}/analysis", {"result": result})
+    return {"seconds": result["seconds"], "vlm": bool(result.get("vlm")), "vlm_error": result.get("vlm_error", "")}
+
+
+def _format_vlm(ctx: JobContext, model: str | None):
+    """callable(prompt, img) for the loaded VLM, or None (measurement only)."""
+    if not model:
+        return None
+    from ..ai.manager import ModelUnavailable, get_manager
+    from ..ai.registry import MODELS
+    from ..ai.vlm import _to_tensor
+
+    if model not in MODELS or MODELS[model].kind != "vlm":
+        return None
+    s = ctx.settings
+    manager = get_manager(s.openvino_device, s.ai_allow_cpu_fallback)
+
+    def call(prompt: str, img) -> str:
+        import openvino_genai as ov_genai
+
+        try:
+            pipe, _device = manager.acquire(model)
+        except ModelUnavailable as exc:
+            raise RuntimeError(str(exc)) from exc
+        cfg = ov_genai.GenerationConfig()
+        cfg.max_new_tokens = 200
+        cfg.do_sample = False
+        out = pipe.generate(prompt, images=[_to_tensor(img, 896)], generation_config=cfg)
+        texts = getattr(out, "texts", None)
+        return texts[0] if texts else str(out)
+
+    return call

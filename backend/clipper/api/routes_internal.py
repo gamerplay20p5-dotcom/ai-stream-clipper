@@ -499,10 +499,59 @@ def _delete_unreferenced(db: Session, clip: Clip, paths: list[str]) -> None:
 
 
 def _variant_name(v: str) -> str:
-    if v not in ("edit", "original"):
+    if v not in ("edit", "original", "format"):
         raise HTTPException(422, "unknown variant")
     return v
 
 
 def internal_enabled() -> bool:
     return bool(get_settings().internal_secret)
+
+
+# --- Phase 6C: format profiles (vision workers) --------------------------------------------------
+class FormatResultIn(BaseModel):
+    result: dict | None = None
+    error: str = ""
+
+
+@router.get("/format-profiles/{pid}/image")
+def format_image(pid: int, _: str = Depends(worker_auth), db: Session = Depends(get_db)):
+    from ..models import FormatProfile
+
+    p = db.get(FormatProfile, pid)
+    if p is None or not p.image_path:
+        raise HTTPException(404, "image not found")
+    f = storage.resolve(p.image_path)
+    if not f.is_file():
+        raise HTTPException(404, "image not found")
+    from ..security import sha256_file
+
+    return FileResponse(f, headers={"X-ASC-SHA256": sha256_file(f)})
+
+
+@router.get("/format-profiles/{pid}/avatar")
+def format_avatar(pid: int, _: str = Depends(worker_auth), db: Session = Depends(get_db)):
+    from ..models import FormatProfile
+
+    p = db.get(FormatProfile, pid)
+    if p is None or not p.avatar_path:
+        raise HTTPException(404, "avatar not found")
+    f = storage.resolve(p.avatar_path)
+    if not f.is_file():
+        raise HTTPException(404, "avatar not found")
+    from ..security import sha256_file
+
+    return FileResponse(f, headers={"X-ASC-SHA256": sha256_file(f)})
+
+
+@router.post("/format-profiles/{pid}/analysis")
+def format_analysis(pid: int, body: FormatResultIn, _: str = Depends(worker_auth), db: Session = Depends(get_db)):
+    from ..format_lab import store_analysis
+    from ..models import FormatProfile
+
+    p = db.get(FormatProfile, pid)
+    if p is None:
+        raise HTTPException(404, "profile not found")
+    store_analysis(db, p, body.result, body.error)
+    db.commit()
+    return {"ok": True, "status": p.status}

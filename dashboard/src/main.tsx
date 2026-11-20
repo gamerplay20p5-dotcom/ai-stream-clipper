@@ -14,6 +14,7 @@ import Infrastructure from "./pages/Infrastructure";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
 import PatchNotes from "./pages/PatchNotes";
+import References from "./pages/References";
 import Settings from "./pages/Settings";
 import Storage from "./pages/Storage";
 import Streamers from "./pages/Streamers";
@@ -58,6 +59,7 @@ function App() {
           <Route path="diretor" element={<Director />} />
           <Route path="armazenamento" element={<Storage />} />
           <Route path="patch-notes" element={<PatchNotes />} />
+          <Route path="referencias" element={<References />} />
           <Route path="publicacao" element={<Publishing />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

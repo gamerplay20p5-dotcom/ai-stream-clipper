@@ -113,15 +113,20 @@ def build_filter(layout: str, src_w: int, src_h: int, webcam: dict | None, fps: 
         post.append(f"fade=t=in:st=0:d={fi:.2f}")
     if fo > 0 and duration > fo + fi:
         post.append(f"fade=t=out:st={duration - fo:.2f}:d={fo:.2f}")
-    if has_subs:
-        post.append("ass=subs.ass")
-    tail = ("[comp];[comp]" + ",".join(post) + "[v]") if post else "[v]"
+    badge = plan.get("badge_avatar")
+    if badge:  # Phase 6C: OUR avatar in a circle, under the captions (name drawn by the ASS file)
+        tail = _badge_tail(post, has_subs, plan)
+    else:
+        if has_subs:
+            post.append("ass=subs.ass")
+        tail = ("[comp];[comp]" + ",".join(post) + "[v]") if post else "[v]"
     fpsf = f"fps={fps}"
+    band = _split_band(plan)
 
     if layout == "split" and webcam:
         cx, cy = webcam["x"] * src_w, webcam["y"] * src_h
         cw, ch = max(16, webcam["w"] * src_w), max(16, webcam["h"] * src_h)
-        band_ar = W / SPLIT_TOP
+        band_ar = W / band
         if cw / ch < band_ar:
             nw = min(src_w, ch * band_ar)
             cx -= (nw - cw) / 2
@@ -134,15 +139,16 @@ def build_filter(layout: str, src_w: int, src_h: int, webcam: dict | None, fps: 
             cw = min(cw, ch * band_ar)
         cx = min(max(0, cx), src_w - cw)
         cy = min(max(0, cy), src_h - ch)
-        bottom_h = H - SPLIT_TOP
+        bottom_h = H - band
         gw = min(src_w, src_h * W / bottom_h)
+        order = "[bot][top]" if plan.get("webcam_position") == "bottom" else "[top][bot]"
         return (
             f"[0:v]{fpsf},split=2[a][b];"
-            f"[a]crop={_even(cw)}:{_even(ch)}:{int(cx)}:{int(cy)},scale={W}:{SPLIT_TOP}:force_original_aspect_ratio="
-            f"increase,crop={W}:{SPLIT_TOP},setsar=1[top];"
+            f"[a]crop={_even(cw)}:{_even(ch)}:{int(cx)}:{int(cy)},scale={W}:{band}:force_original_aspect_ratio="
+            f"increase,crop={W}:{band},setsar=1[top];"
             f"[b]crop={_even(gw)}:{_even(src_h)}:(iw-ow)/2:0,scale={W}:{bottom_h}:force_original_aspect_ratio=increase,"
             f"crop={W}:{bottom_h},setsar=1[bot];"
-            f"[top][bot]vstack=inputs=2" + tail
+            f"{order}vstack=inputs=2" + tail
         )
     if layout == "action":
         cw = _even(min(src_w, src_h * W / H))
@@ -169,10 +175,37 @@ def caption_options(raw: dict | None) -> CaptionOptions:
     return CaptionOptions(**{k: v for k, v in (raw or {}).items() if k in known})
 
 
-def caption_margin(layout: str) -> int:
+BADGE_D = 112  # avatar diameter (px) of the identification badge
+BADGE_POS = {"top_left": (60, 170), "top_right": (W - 60 - BADGE_D, 170),
+             "bottom_left": (60, H - 420 - BADGE_D), "bottom_right": (W - 160 - BADGE_D, H - 420 - BADGE_D)}
+
+
+def _split_band(plan: dict) -> int:
+    """Webcam band height for the split layout (format profile: 20-60% of the frame)."""
+    pct = plan.get("webcam_height_pct")
+    if pct:
+        return _even(H * max(20, min(60, float(pct))) / 100)
+    return SPLIT_TOP
+
+
+def _badge_tail(post: list[str], has_subs: bool, plan: dict) -> str:
+    x, y = BADGE_POS.get(plan.get("badge_position") or "top_left", BADGE_POS["top_left"])
+    d = BADGE_D
+    circle = (f"[1:v]scale={d}:{d}:force_original_aspect_ratio=increase,crop={d}:{d},format=rgba,"
+              f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-{d / 2},Y-{d / 2}),{d / 2 - 1}),255,0)'[av]")
+    head = f"[comp];[comp]{','.join(post)}[pre];" if post else "[comp];[comp]null[pre];"
+    end = ",ass=subs.ass" if has_subs else ""
+    return f"{head}{circle};[pre][av]overlay={x}:{y}:format=auto{end}[v]"
+
+
+def caption_margin(layout: str, plan: dict | None = None) -> int:
     # distance from the bottom edge to the caption baseline
+    plan = plan or {}
     if layout == "split":
-        return 1020
+        band = _split_band(plan)
+        if plan.get("webcam_position") == "bottom":
+            return band + 90  # captions at the bottom of the gameplay, above the webcam
+        return max(420, H - band - 196) if plan.get("webcam_height_pct") else 1020
     if layout == "action":
         return 420
     return 600
@@ -319,7 +352,7 @@ async def render(spec: RenderSpec, workdir: Path) -> RenderResult:
     title = title if (spec.show_title and layout != "split") else ""
     want_subs = caption_style != "none" or bool(title)
     if want_subs:
-        ass = build_ass(words, style=caption_style, margin_v=caption_margin(layout), title=title,
+        ass = build_ass(words, style=caption_style, margin_v=caption_margin(layout, plan), title=title,
                         duration=duration, emphasis=set(plan.get("emphasis_words") or []),
                         opts=caption_options(spec.captions), notes=notes)
         (workdir / "subs.ass").write_text(ass, encoding="utf-8")
@@ -354,9 +387,11 @@ async def render(spec: RenderSpec, workdir: Path) -> RenderResult:
     filt = build_filter(layout, src_w, src_h, webcam, spec.fps, bool(want_subs), plan, duration)
     args = [
         media.FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-        "-ss", f"{offset:.3f}", "-i", str(spec.source.resolve()), "-t", f"{duration:.3f}",
-        "-filter_complex", filt, "-map", "[v]",
+        "-ss", f"{offset:.3f}", "-i", str(spec.source.resolve()),
     ]
+    if plan.get("badge_avatar"):
+        args += ["-i", str(Path(plan["badge_avatar"]).resolve())]  # input 1: our avatar (still image)
+    args += ["-t", f"{duration:.3f}", "-filter_complex", filt, "-map", "[v]"]
     if has_audio:
         args += ["-map", "0:a:0"]
         if audio_filters:

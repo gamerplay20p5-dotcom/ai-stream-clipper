@@ -64,6 +64,7 @@ export default function VersionsPanel({ clipId, version, onChanged }: { clipId: 
   const [blind, setBlind] = useState(true);
   const [flip, setFlip] = useState(() => Math.random() < 0.5);
   const [voted, setVoted] = useState<string | null>(null);
+  const [pick, setPick] = useState<string>("");
   const done = () => { qc.invalidateQueries({ queryKey: ["variants", clipId] }); onChanged(); };
   const restructure = useMutation({ mutationFn: () => api.post(`/api/clips/${clipId}/restructure`, { structure: key, teaser }), onSuccess: () => { setVoted(null); done(); } });
   const promote = useMutation({
@@ -76,7 +77,8 @@ export default function VersionsPanel({ clipId, version, onChanged }: { clipId: 
     onSuccess: (_d, w) => { setVoted(w); done(); },
   });
   const v = q.data;
-  const altName = v ? (["edit", "original"].find((n) => v.variants[n]?.video) ?? null) : null;
+  const ready = v ? ["format", "edit", "original"].filter((n) => v.variants[n]?.video) : [];
+  const altName = (pick && ready.includes(pick) ? pick : ready[0]) ?? null;
   const alt = altName ?? "edit";
   const all = useMemo(() => (v ? [v.main.segments, ...Object.values(v.variants).map((x) => x.segments)].flat() : []), [v]);
   if (!v) return <ErrorNote error={q.error} />;
@@ -126,6 +128,12 @@ export default function VersionsPanel({ clipId, version, onChanged }: { clipId: 
             <label className="flex items-center gap-1 text-xs"><input type="checkbox" className="accent-[#F2B33D]" checked={blind}
               onChange={(e) => { setBlind(e.target.checked); setVoted(null); setFlip(Math.random() < 0.5); }} /> às cegas</label>
             <span className="text-xs text-ink-muted">Assista às duas e escolha. Só comparações cegas contam como evidência de melhora.</span>
+            {ready.length > 1 && (
+              <select className="field w-auto py-0.5 text-xs" value={alt} aria-label="Variante a comparar"
+                onChange={(e) => { setPick(e.target.value); setVoted(null); setFlip(Math.random() < 0.5); }}>
+                {ready.map((n) => <option key={n} value={n}>{v!.variants[n]?.label ?? n}</option>)}
+              </select>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-3">
             {sides.map((n, i) => (

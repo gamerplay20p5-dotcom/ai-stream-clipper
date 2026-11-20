@@ -726,6 +726,12 @@ def render_spec(db: Session, clip_id: int, variant: str = "") -> dict:
         "crf": settings.export_crf,
         "fps": settings.export_fps,
     }
+    ep = clip.edit_plan or {}
+    if not variant and ep.get("format_params"):  # main video uses a promoted format profile
+        from .format_lab import apply_format
+
+        spec = apply_format(spec, {"format_params": ep["format_params"],
+                                   "format_profile_id": ep.get("format_profile_id")}, clip.id)
     if variant:
         from .pipeline_structure import variant_spec
 
