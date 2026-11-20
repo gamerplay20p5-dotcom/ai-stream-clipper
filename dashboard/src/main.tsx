@@ -21,6 +21,7 @@ import References from "./pages/References";
 import Settings from "./pages/Settings";
 import Storage from "./pages/Storage";
 import Streamers from "./pages/Streamers";
+import { t } from "./i18n";
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -44,7 +45,7 @@ function App() {
     return () => window.removeEventListener("asc:unauthorized", onUnauth);
   }, []);
 
-  if (me.isLoading) return <main className="mx-auto max-w-md p-6"><Skeleton label="Verificando sessão" /></main>;
+  if (me.isLoading) return <main className="mx-auto max-w-md p-6"><Skeleton label={t("Verificando sessão")} /></main>;
   const user = me.data;
   // External accounts only ever get their library: no staff navigation, no staff requests.
   // This is presentation only; every API route is authorized by the backend.

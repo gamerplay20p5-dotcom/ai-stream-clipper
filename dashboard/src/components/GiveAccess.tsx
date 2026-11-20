@@ -4,12 +4,13 @@ import { useMemo, useState } from "react";
 import { api, type AdminUser, type Clip, type ClipShareRow, type Streamer, type StreamerGrant } from "../api";
 import { ConfirmAction, ErrorNote, Notice, Status } from "./ui";
 import { shareDate } from "./SharePanel";
+import { t } from "../i18n";
 
 type Mode = "streamer" | "clips" | "role";
 const MODES: { key: Mode; label: string; icon: typeof Tv }[] = [
-  { key: "streamer", label: "Todos os cortes de um streamer", icon: Tv },
-  { key: "clips", label: "Escolher cortes", icon: Layers },
-  { key: "role", label: "Tipo de conta", icon: ShieldCheck },
+  { key: "streamer", label: t("Todos os cortes de um streamer"), icon: Tv },
+  { key: "clips", label: t("Escolher cortes"), icon: Layers },
+  { key: "role", label: t("Tipo de conta"), icon: ShieldCheck },
 ];
 const expiry = (day: string) => (day ? new Date(`${day}T23:59:00-03:00`).toISOString() : null);
 
@@ -19,15 +20,15 @@ export default function GiveAccess({ user, shares }: { user: AdminUser; shares: 
   if (!user.active) {
     return (
       <section className="give-access" aria-labelledby={`give-${user.id}`}>
-        <h3 id={`give-${user.id}`} className="text-sm font-semibold">Dar mais acesso</h3>
-        <p className="text-sm text-warning">Esta conta está desativada. Reative a conta para dar acesso a mais cortes.</p>
+        <h3 id={`give-${user.id}`} className="text-sm font-semibold">{t("Dar mais acesso")}</h3>
+        <p className="text-sm text-warning">{t("Esta conta está desativada. Reative a conta para dar acesso a mais cortes.")}</p>
       </section>
     );
   }
   return (
     <section className="give-access" aria-labelledby={`give-${user.id}`}>
-      <h3 id={`give-${user.id}`} className="text-sm font-semibold">Dar mais acesso</h3>
-      <div className="view-switch" role="tablist" aria-label="Tipo de acesso">
+      <h3 id={`give-${user.id}`} className="text-sm font-semibold">{t("Dar mais acesso")}</h3>
+      <div className="view-switch" role="tablist" aria-label={t("Tipo de acesso")}>
         {MODES.filter((m) => user.role === "viewer" || m.key === "role").map(({ key, label, icon: Icon }) => (
           <button key={key} type="button" role="tab" className="view-switch-item" aria-selected={mode === key}
             aria-pressed={mode === key} onClick={() => setMode(key)}><Icon size={15} aria-hidden /> {label}</button>
@@ -70,49 +71,48 @@ function ByStreamer({ user }: { user: AdminUser }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-ink-muted">
-        A conta passa a ver todos os cortes <strong className="text-ink">aprovados</strong> do streamer, inclusive os que forem
-        aprovados depois. Um corte rejeitado sai da biblioteca dela.
+        {t("A conta passa a ver todos os cortes")} <strong className="text-ink">{t("aprovados")}</strong> {t("do streamer, inclusive os que forem aprovados depois. Um corte rejeitado sai da biblioteca dela.")}
       </p>
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_12rem] sm:items-end">
-        <label><span className="label">Streamer</span>
+        <label><span className="label">{t("Streamer")}</span>
           <select className="field" value={streamerId} onChange={(e) => setStreamerId(e.target.value)}>
-            <option value="">Escolha um streamer</option>
+            <option value="">{t("Escolha um streamer")}</option>
             {(streamers.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
           </select></label>
         <label className="flex min-h-10 items-center gap-2 text-sm"><input type="checkbox" checked={download}
-          onChange={(e) => setDownload(e.target.checked)} /> Permitir download</label>
-        <label><span className="label">Disponível até (opcional)</span>
+          onChange={(e) => setDownload(e.target.checked)} /> {t("Permitir download")}</label>
+        <label><span className="label">{t("Disponível até (opcional)")}</span>
           <input type="date" className="field" value={until} onChange={(e) => setUntil(e.target.value)} /></label>
       </div>
       <ConfirmAction tone="quiet" disabled={!streamerId} pending={give.isPending}
-        title={`Dar acesso aos cortes de ${chosen?.display_name ?? "…"}?`}
-        description={<><p><strong className="text-ink">{user.email}</strong> passa a ver todos os cortes aprovados de{" "}
-          <strong className="text-ink">{chosen?.display_name}</strong>, agora e os próximos aprovados.</p>
-          <p>{download ? "Download liberado." : "Só assistir (sem download)."}{until ? ` Até ${until.split("-").reverse().join("/")}.` : " Sem prazo."}</p></>}
-        confirmLabel="Dar acesso" onConfirm={() => give.mutate()}>
-        <Tv size={15} aria-hidden /> Dar acesso ao streamer
+        title={t("Dar acesso aos cortes de {v}?", { v: chosen?.display_name ?? "…" })}
+        description={<><p><strong className="text-ink">{user.email}</strong> {t("passa a ver todos os cortes aprovados de")}{" "}
+          <strong className="text-ink">{chosen?.display_name}</strong>{t(", agora e os próximos aprovados.")}</p>
+          <p>{download ? t("Download liberado.") : t("Só assistir (sem download).")}{until ? t(" Até {join}.", { join: until.split("-").reverse().join("/") }) : t(" Sem prazo.")}</p></>}
+        confirmLabel={t("Dar acesso")} onConfirm={() => give.mutate()}>
+        <Tv size={15} aria-hidden /> {t("Dar acesso ao streamer")}
       </ConfirmAction>
-      {give.isSuccess && <Notice>Acesso dado: {give.data.shared_now} {give.data.shared_now === 1 ? "corte aprovado entrou" : "cortes aprovados entraram"} na biblioteca agora.</Notice>}
+      {give.isSuccess && <Notice>{t("Acesso dado: {shared_now} {v} na biblioteca agora.", { shared_now: give.data.shared_now, v: give.data.shared_now === 1 ? t("corte aprovado entrou") : t("cortes aprovados entraram") })}</Notice>}
       <ErrorNote error={give.error || revoke.error || grants.error} />
       {(grants.data ?? []).length > 0 && (
         <ul className="share-list">
           {grants.data!.map((g) => (
             <li key={g.id} className="share-row">
               <div className="min-w-0">
-                <p className="font-medium">Todos os cortes aprovados de {g.streamer}</p>
+                <p className="font-medium">{t("Todos os cortes aprovados de")} {g.streamer}</p>
                 <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-ink-muted">
                   <Status tone={g.state === "ativo" ? "success" : "neutral"}>{g.state}</Status>
-                  <span>{g.active_shares} {g.active_shares === 1 ? "corte" : "cortes"}</span>
-                  <span>· {g.can_download ? "pode baixar" : "só assistir"}</span>
-                  {g.expires_at && <span>· até {shareDate(g.expires_at)}</span>}
+                  <span>{t(g.active_shares === 1 ? "{n} corte" : "{n} cortes", { n: g.active_shares })}</span>
+                  <span>· {g.can_download ? t("pode baixar") : t("só assistir")}</span>
+                  {g.expires_at && <span>{t("· até")} {shareDate(g.expires_at)}</span>}
                 </p>
               </div>
-              <ConfirmAction title="Revogar o acesso ao streamer?" label={`Revogar o acesso de ${user.email} aos cortes de ${g.streamer}`}
-                description={<><p><strong className="text-ink">{user.email}</strong> deixa de ver os {g.active_shares} cortes de{" "}
-                  <strong className="text-ink">{g.streamer}</strong> que vieram por este acesso, na próxima ação.</p>
-                  <p>Cortes compartilhados um a um continuam disponíveis.</p></>}
-                confirmLabel="Revogar acesso" pending={revoke.isPending} onConfirm={() => revoke.mutate(g.id)}>
-                Revogar
+              <ConfirmAction title={t("Revogar o acesso ao streamer?")} label={t("Revogar o acesso de {email} aos cortes de {streamer}", { email: user.email, streamer: g.streamer })}
+                description={<><p><strong className="text-ink">{user.email}</strong> {t("deixa de ver os {active_shares} cortes de", { active_shares: g.active_shares })}{" "}
+                  <strong className="text-ink">{g.streamer}</strong> {t("que vieram por este acesso, na próxima ação.")}</p>
+                  <p>{t("Cortes compartilhados um a um continuam disponíveis.")}</p></>}
+                confirmLabel={t("Revogar acesso")} pending={revoke.isPending} onConfirm={() => revoke.mutate(g.id)}>
+                {t("Revogar")}
               </ConfirmAction>
             </li>
           ))}
@@ -148,27 +148,27 @@ function PickClips({ user, shares }: { user: AdminUser; shares: ClipShareRow[] }
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="min-w-[12rem] flex-1"><span className="label">Streamer</span>
+        <label className="min-w-[12rem] flex-1"><span className="label">{t("Streamer")}</span>
           <select className="field" value={streamerId} onChange={(e) => { setStreamerId(e.target.value); setPicked([]); }}>
-            <option value="">Todos os streamers</option>
+            <option value="">{t("Todos os streamers")}</option>
             {(streamers.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.display_name}</option>)}
           </select></label>
         <label className="flex min-h-10 items-center gap-2 text-sm"><input type="checkbox" checked={download}
-          onChange={(e) => setDownload(e.target.checked)} /> Permitir download</label>
+          onChange={(e) => setDownload(e.target.checked)} /> {t("Permitir download")}</label>
       </div>
-      <p className="text-xs text-ink-muted">Cortes aprovados que a conta ainda não tem. A conta recebe a versão de agora.</p>
+      <p className="text-xs text-ink-muted">{t("Cortes aprovados que a conta ainda não tem. A conta recebe a versão de agora.")}</p>
       <ErrorNote error={clips.error || share.error} />
-      {clips.data && available.length === 0 && <p className="text-sm text-ink-muted">Nenhum corte aprovado novo para esta conta.</p>}
+      {clips.data && available.length === 0 && <p className="text-sm text-ink-muted">{t("Nenhum corte aprovado novo para esta conta.")}</p>}
       <ul className="pick-grid">
         {available.map((c) => (
           <li key={c.id}>
             <label className="pick-card" data-picked={picked.includes(c.id) || undefined}>
               <input type="checkbox" className="pick-check" checked={picked.includes(c.id)} onChange={() => toggle(c.id)}
-                aria-label={`Escolher ${c.title || `Corte #${c.id}`}`} />
+                aria-label={`Escolher ${c.title || t("Corte #{id}", { id: c.id })}`} />
               <span className="pick-frame">{c.has_thumbnail
                 ? <img alt="" loading="lazy" src={`/api/clips/${c.id}/thumbnail?v=${c.version}`} />
                 : <Film size={18} aria-hidden />}</span>
-              <span className="line-clamp-2 text-xs font-semibold leading-tight">{c.title || `Corte #${c.id}`}</span>
+              <span className="line-clamp-2 text-xs font-semibold leading-tight">{c.title || t("Corte #{id}", { id: c.id })}</span>
               <span className="text-[11px] text-ink-muted">{c.streamer?.display_name}</span>
             </label>
           </li>
@@ -176,11 +176,11 @@ function PickClips({ user, shares }: { user: AdminUser; shares: ClipShareRow[] }
       </ul>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className="btn-take" disabled={!picked.length || share.isPending} onClick={() => share.mutate()}>
-          Compartilhar {picked.length || ""} {picked.length === 1 ? "corte" : "cortes"}
+          {picked.length ? t(picked.length === 1 ? "Compartilhar {n} corte" : "Compartilhar {n} cortes", { n: picked.length }) : t("Compartilhar cortes")}
         </button>
         {available.length > 0 && <button type="button" className="btn-quiet" onClick={() => setPicked(picked.length === available.length ? [] : available.map((c) => c.id))}>
-          {picked.length === available.length ? "Limpar seleção" : "Selecionar todos da lista"}</button>}
-        {share.isSuccess && <Notice>{share.data.shared.length} {share.data.shared.length === 1 ? "corte compartilhado" : "cortes compartilhados"}.</Notice>}
+          {picked.length === available.length ? t("Limpar seleção") : t("Selecionar todos da lista")}</button>}
+        {share.isSuccess && <Notice>{share.data.shared.length} {share.data.shared.length === 1 ? t("corte compartilhado") : t("cortes compartilhados")}.</Notice>}
       </div>
     </div>
   );
@@ -195,26 +195,24 @@ function AccountType({ user }: { user: AdminUser }) {
   return (
     <div className="space-y-3">
       <p className="text-sm text-ink-muted">
-        Hoje esta conta é <strong className="text-ink">{user.role === "admin" ? "da equipe" : "convidada"}</strong>.
-        {user.role === "admin" ? " Ela acessa o painel inteiro." : " Ela só vê a Minha Biblioteca."}
+        {t("Hoje esta conta é")} <strong className="text-ink">{user.role === "admin" ? t("da equipe") : t("convidada")}</strong>.
+        {user.role === "admin" ? t(" Ela acessa o painel inteiro.") : t(" Ela só vê a Minha Biblioteca.")}
       </p>
       {user.role === "viewer" ? (
-        <ConfirmAction title="Tornar esta conta da equipe?" pending={change.isPending}
-          description={<><p><strong className="text-ink">{user.email}</strong> terá acesso completo à operação da HTS: aprovar e publicar
-            cortes, mudar regras de publicação, conectar contas, compartilhar vídeos, criar e desativar contas e ver os servidores.</p>
-            <p>As sessões abertas dessa conta terminam; ela entra de novo com a mesma senha.</p></>}
-          confirmLabel="Tornar da equipe" onConfirm={() => change.mutate("admin")}>
-          <ShieldCheck size={15} aria-hidden /> Tornar da equipe
+        <ConfirmAction title={t("Tornar esta conta da equipe?")} pending={change.isPending}
+          description={<><p><strong className="text-ink">{user.email}</strong> {t("terá acesso completo à operação da HTS: aprovar e publicar cortes, mudar regras de publicação, conectar contas, compartilhar vídeos, criar e desativar contas e ver os servidores.")}</p>
+            <p>{t("As sessões abertas dessa conta terminam; ela entra de novo com a mesma senha.")}</p></>}
+          confirmLabel={t("Tornar da equipe")} onConfirm={() => change.mutate("admin")}>
+          <ShieldCheck size={15} aria-hidden /> {t("Tornar da equipe")}
         </ConfirmAction>
       ) : (
-        <ConfirmAction tone="quiet" title="Tornar esta conta convidada?" pending={change.isPending}
-          description={<p><strong className="text-ink">{user.email}</strong> perde o acesso ao painel e passa a ver só a Minha Biblioteca.
-            As sessões abertas terminam.</p>}
-          confirmLabel="Tornar convidada" onConfirm={() => change.mutate("viewer")}>
-          Tornar convidada
+        <ConfirmAction tone="quiet" title={t("Tornar esta conta convidada?")} pending={change.isPending}
+          description={<p><strong className="text-ink">{user.email}</strong> {t("perde o acesso ao painel e passa a ver só a Minha Biblioteca. As sessões abertas terminam.")}</p>}
+          confirmLabel={t("Tornar convidada")} onConfirm={() => change.mutate("viewer")}>
+          {t("Tornar convidada")}
         </ConfirmAction>
       )}
-      {change.isSuccess && <Notice>Tipo de conta alterado.</Notice>}
+      {change.isSuccess && <Notice>{t("Tipo de conta alterado.")}</Notice>}
       <ErrorNote error={change.error} />
     </div>
   );

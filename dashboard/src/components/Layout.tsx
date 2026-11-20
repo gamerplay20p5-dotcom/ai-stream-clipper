@@ -5,7 +5,8 @@ import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api, type Stats } from "../api";
 import { currentNav, staffNav } from "../lib/navigation";
 import { Brand } from "./Brand";
-import { ErrorNote } from "./ui";
+import { ErrorNote, LanguagePicker } from "./ui";
+import { t } from "../i18n";
 
 function readOpen(): Record<string, boolean> {
   try { return JSON.parse(localStorage.getItem("asc:nav-open") ?? "{}"); } catch { return {}; }
@@ -20,7 +21,7 @@ function WorkspaceNav({ path, aba, count, onNavigate }: { path: string; aba: str
     return next;
   });
   return (
-    <nav className="workspace-nav" aria-label="Navegação principal">
+    <nav className="workspace-nav" aria-label={t("Navegação principal")}>
       {staffNav.map((group) => {
         const groupId = `${id}-${group.key}`;
         const active = group.items.some((item) => item.match(path, aba));
@@ -41,7 +42,7 @@ function WorkspaceNav({ path, aba, count, onNavigate }: { path: string; aba: str
                     <Link to={to} className="workspace-link" aria-current={current ? "page" : undefined} onClick={onNavigate}>
                       <Icon size={16} strokeWidth={1.75} aria-hidden />
                       <span>{label}</span>
-                      {badge === "review" && count > 0 && <span className="nav-count" aria-label={`${count} cortes para revisar`}>{count}</span>}
+                      {badge === "review" && count > 0 && <span className="nav-count" aria-label={t("{count} cortes para revisar", { count: count })}>{count}</span>}
                     </Link>
                   </li>
                 );
@@ -77,7 +78,7 @@ export default function Layout({ email }: { email: string }) {
     queryKey: ["healthz"],
     queryFn: async () => {
       const response = await fetch("/healthz", { cache: "no-store" });
-      if (!response.ok) throw new Error("API indisponível");
+      if (!response.ok) throw new Error(t("API indisponível"));
       return response.json() as Promise<{ status?: string; version?: string }>;
     },
     refetchInterval: 60_000,
@@ -100,20 +101,20 @@ export default function Layout({ email }: { email: string }) {
 
   return (
     <div className="workspace">
-      <a className="skip-link" href="#conteudo">Ir para o conteúdo</a>
+      <a className="skip-link" href="#conteudo">{t("Ir para o conteúdo")}</a>
       <aside className="workspace-sidebar">
         <WorkspaceNav path={pathname} aba={aba} count={toReview} />
         <div className="sidebar-footer">
-          <Link to="/patch-notes" className="font-mono text-xs">v{__APP_VERSION__}</Link>
-          <span>HowTo.Software</span>
+          <Link to="/patch-notes" className="font-mono text-xs">{t("v")}{__APP_VERSION__}</Link>
+          <span>{t("HowTo.Software")}</span>
         </div>
       </aside>
 
       <div className="workspace-content">
         <header className="workspace-topbar">
           <div className="flex min-w-0 items-center gap-3">
-            <Link to="/" className="console-brand" aria-label="AI Stream Clipper, início"><Brand /></Link>
-            <button type="button" className="icon-action drawer-toggle" aria-label="Abrir navegação" aria-haspopup="dialog"
+            <Link to="/" className="console-brand" aria-label={t("AI Stream Clipper, início")}><Brand /></Link>
+            <button type="button" className="icon-action drawer-toggle" aria-label={t("Abrir navegação")} aria-haspopup="dialog"
               onClick={() => drawer.current?.showModal()}><Menu size={19} aria-hidden /></button>
             <div className="breadcrumb">
               <span>{group?.label}</span><ChevronRight size={14} aria-hidden /><strong>{page}</strong>
@@ -122,7 +123,7 @@ export default function Layout({ email }: { email: string }) {
           <div className="flex min-w-0 items-center gap-4">
             <Link to="/infra" className="topbar-health">
               <span className={health.isError ? "bg-tally" : health.data?.status === "ok" ? "bg-ok" : "bg-ink-faint"} />
-              {health.isError ? "API indisponível" : health.data?.status === "ok" ? "API online" : "Consultando API"}
+              {health.isError ? t("API indisponível") : health.data?.status === "ok" ? t("API online") : t("Consultando API")}
             </Link>
             <details className="account-menu" onBlur={(event) => {
               if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false;
@@ -132,19 +133,20 @@ export default function Layout({ email }: { email: string }) {
                 event.currentTarget.querySelector("summary")?.focus();
               }
             }}>
-              <summary aria-label="Conta e sessão">
+              <summary aria-label={t("Conta e sessão")}>
                 <span className="account-avatar" aria-hidden>{email.charAt(0).toUpperCase()}</span>
-                <span className="account-label">Minha conta</span>
+                <span className="account-label">{t("Minha conta")}</span>
                 <ChevronDown size={14} aria-hidden />
               </summary>
               <div className="account-popover">
-                <h2 className="display text-lg">Minha conta</h2>
+                <h2 className="display text-lg">{t("Minha conta")}</h2>
                 <div className="border-b border-suite-line pb-3">
                   <div className="break-all text-sm font-medium">{email}</div>
-                  <p className="mt-1 text-xs text-ink-muted">Administrador da equipe · HTS</p>
+                  <p className="mt-1 text-xs text-ink-muted">{t("Administrador da equipe · HTS")}</p>
                 </div>
+                <LanguagePicker className="mt-3" />
                 <button type="button" onClick={logout} disabled={isLoggingOut} className="btn-quiet mt-3 w-full">
-                  <LogOut size={15} aria-hidden />{isLoggingOut ? "Saindo…" : "Sair"}
+                  <LogOut size={15} aria-hidden />{isLoggingOut ? t("Saindo…") : t("Sair")}
                 </button>
                 <ErrorNote error={logoutError} />
               </div>
@@ -154,8 +156,8 @@ export default function Layout({ email }: { email: string }) {
         <main id="conteudo" tabIndex={-1} className="workspace-main">
           {stale && (
             <div role="alert" className="notice mb-5 flex-wrap items-center justify-between border-warning/60 bg-warning-dim text-warning">
-              <span>O servidor está na versão {health.data?.version}. Esta aba usa a {__APP_VERSION__}.</span>
-              <button className="btn-quiet" onClick={() => window.location.reload()}>Recarregar agora</button>
+              <span>{t("O servidor está na versão {version}. Esta aba usa a {__APP_VERSION__}.", { version: health.data?.version, __APP_VERSION__: __APP_VERSION__ })}</span>
+              <button className="btn-quiet" onClick={() => window.location.reload()}>{t("Recarregar agora")}</button>
             </div>
           )}
           <Outlet />
@@ -167,9 +169,9 @@ export default function Layout({ email }: { email: string }) {
       }}>
         <div className="drawer-sheet">
           <div className="drawer-heading">
-            <span id="drawer-title" className="sr-only">Menu do AI Stream Clipper</span>
+            <span id="drawer-title" className="sr-only">{t("Menu do AI Stream Clipper")}</span>
             <Link to="/" onClick={() => drawer.current?.close()}><Brand /></Link>
-            <button type="button" autoFocus className="icon-action" onClick={() => drawer.current?.close()} aria-label="Fechar navegação"><X size={18} aria-hidden /></button>
+            <button type="button" autoFocus className="icon-action" onClick={() => drawer.current?.close()} aria-label={t("Fechar navegação")}><X size={18} aria-hidden /></button>
           </div>
           <WorkspaceNav path={pathname} aba={aba} count={toReview} onNavigate={() => drawer.current?.close()} />
         </div>

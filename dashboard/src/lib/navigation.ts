@@ -2,6 +2,7 @@ import {
   Activity, AudioLines, CalendarDays, Clapperboard, ClipboardCheck, HardDrive, Library, Link2, Radio, ScrollText,
   Server, SlidersHorizontal, Sun, Users, type LucideIcon,
 } from "lucide-react";
+import { t } from "../i18n";
 
 export type NavItem = {
   to: string;
@@ -18,29 +19,29 @@ const publishTabs = ["contas", "regras"];
 
 /** Staff navigation, ordered by how often each task happens: daily work first, configuration and system last. */
 export const staffNav: NavGroup[] = [
-  { key: "dia", label: "Trabalho do dia", items: [
-    { to: "/", label: "Hoje", icon: Sun, match: (p) => p === "/" },
-    { to: "/cortes", label: "Central de cortes", icon: Clapperboard, match: at("/cortes"), badge: "review" },
-    { to: "/publicacao", label: "Agenda de publicações", icon: CalendarDays,
+  { key: "dia", label: t("Trabalho do dia"), items: [
+    { to: "/", label: t("Hoje"), icon: Sun, match: (p) => p === "/" },
+    { to: "/cortes", label: t("Central de cortes"), icon: Clapperboard, match: at("/cortes"), badge: "review" },
+    { to: "/publicacao", label: t("Agenda de publicações"), icon: CalendarDays,
       match: (p, aba) => at("/publicacao")(p) && !publishTabs.includes(aba ?? "") },
-    { to: "/diretor", label: "Diretor IA", icon: AudioLines, match: at("/diretor") },
+    { to: "/diretor", label: t("Diretor IA"), icon: AudioLines, match: at("/diretor") },
   ] },
-  { key: "acervo", label: "Acervo e pessoas", items: [
-    { to: "/referencias", label: "Referências", icon: Library, match: at("/referencias") },
-    { to: "/pessoas", label: "Pessoas e acesso", icon: Users, match: at("/pessoas") },
+  { key: "acervo", label: t("Acervo e pessoas"), items: [
+    { to: "/referencias", label: t("Referências"), icon: Library, match: at("/referencias") },
+    { to: "/pessoas", label: t("Pessoas e acesso"), icon: Users, match: at("/pessoas") },
   ] },
-  { key: "config", label: "Configuração", collapsible: true, items: [
-    { to: "/streamers", label: "Canais monitorados", icon: Radio, match: at("/streamers") },
-    { to: "/ia", label: "Parâmetros da IA", icon: SlidersHorizontal, match: at("/ia") },
-    { to: "/publicacao?aba=contas", label: "Contas e regras", icon: Link2,
+  { key: "config", label: t("Configuração"), collapsible: true, items: [
+    { to: "/streamers", label: t("Canais monitorados"), icon: Radio, match: at("/streamers") },
+    { to: "/ia", label: t("Parâmetros da IA"), icon: SlidersHorizontal, match: at("/ia") },
+    { to: "/publicacao?aba=contas", label: t("Contas e regras"), icon: Link2,
       match: (p, aba) => at("/publicacao")(p) && publishTabs.includes(aba ?? "") },
   ] },
-  { key: "sistema", label: "Sistema", collapsible: true, items: [
-    { to: "/avaliacao", label: "Avaliação editorial", icon: ClipboardCheck, match: at("/avaliacao") },
-    { to: "/diagnostico", label: "Diagnóstico", icon: Activity, match: at("/diagnostico") },
-    { to: "/infra", label: "Servidores", icon: Server, match: at("/infra") },
-    { to: "/armazenamento", label: "Armazenamento", icon: HardDrive, match: at("/armazenamento") },
-    { to: "/patch-notes", label: "Histórico de versões", icon: ScrollText, match: at("/patch-notes") },
+  { key: "sistema", label: t("Sistema"), collapsible: true, items: [
+    { to: "/avaliacao", label: t("Avaliação editorial"), icon: ClipboardCheck, match: at("/avaliacao") },
+    { to: "/diagnostico", label: t("Diagnóstico"), icon: Activity, match: at("/diagnostico") },
+    { to: "/infra", label: t("Servidores"), icon: Server, match: at("/infra") },
+    { to: "/armazenamento", label: t("Armazenamento"), icon: HardDrive, match: at("/armazenamento") },
+    { to: "/patch-notes", label: t("Histórico de versões"), icon: ScrollText, match: at("/patch-notes") },
   ] },
 ];
 

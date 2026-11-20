@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 export function timecode(s: number): string {
   const t = Math.max(0, s);
   const h = Math.floor(t / 3600);
@@ -22,42 +23,42 @@ export function bytes(n: number): string {
 export function ago(iso: string | null | undefined): string {
   if (!iso) return "nunca";
   const d = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (d < 45) return "agora";
-  if (d < 3600) return `há ${Math.round(d / 60)} min`;
-  if (d < 86400) return `há ${Math.round(d / 3600)} h`;
-  return `há ${Math.round(d / 86400)} d`;
+  if (d < 45) return t("agora");
+  if (d < 3600) return t("há {round} min", { round: Math.round(d / 60) });
+  if (d < 86400) return t("há {round} h", { round: Math.round(d / 3600) });
+  return t("há {round} d", { round: Math.round(d / 86400) });
 }
 
-export const platformName: Record<string, string> = { twitch: "Twitch", youtube: "YouTube", file: "Vídeo de teste", instagram: "Instagram", tiktok: "TikTok" };
+export const platformName: Record<string, string> = { twitch: t("Twitch"), youtube: t("YouTube"), file: t("Vídeo de teste"), instagram: t("Instagram"), tiktok: t("TikTok") };
 
 export const dimensionLabel: Record<string, string> = {
-  intensity: "Intensidade",
-  surprise: "Surpresa",
-  humor: "Humor",
-  reaction: "Reação",
-  narrative: "Clareza narrativa",
-  context: "Contexto",
-  uniqueness: "Singularidade",
-  audience: "Interesse do público",
-  visual: "Relevância visual",
-  chat: "Chat",
+  intensity: t("Intensidade"),
+  surprise: t("Surpresa"),
+  humor: t("Humor"),
+  reaction: t("Reação"),
+  narrative: t("Clareza narrativa"),
+  context: t("Contexto"),
+  uniqueness: t("Singularidade"),
+  audience: t("Interesse do público"),
+  visual: t("Relevância visual"),
+  chat: t("Chat"),
 };
 
 export const statusLabel: Record<string, string> = {
-  candidate: "Candidato",
-  analyzing: "Análise visual",
-  waiting: "Aguardando contexto",
-  rendering: "Renderizando",
-  ready: "Para revisar",
-  approved: "Aprovado",
-  rejected: "Rejeitado",
-  failed: "Falhou",
+  candidate: t("Candidato"),
+  analyzing: t("Análise visual"),
+  waiting: t("Aguardando contexto"),
+  rendering: t("Renderizando"),
+  ready: t("Para revisar"),
+  approved: t("Aprovado"),
+  rejected: t("Rejeitado"),
+  failed: t("Falhou"),
 };
 
 export const jobLabel: Record<string, string> = {
-  capture: "Captura",
-  audio_analyze: "Áudio e transcrição",
-  score: "Pontuação",
-  vision_analyze: "Análise visual",
-  render: "Renderização",
+  capture: t("Captura"),
+  audio_analyze: t("Áudio e transcrição"),
+  score: t("Pontuação"),
+  vision_analyze: t("Análise visual"),
+  render: t("Renderização"),
 };

@@ -3,8 +3,9 @@ import { RefreshCw, Share2, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api, type AdminUser, type ClipShareRow } from "../api";
 import { ConfirmAction, ErrorNote, Notice, Status } from "./ui";
+import { t, locale } from "../i18n";
 
-const day = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeZone: "America/Sao_Paulo" });
+const day = new Intl.DateTimeFormat(locale, { dateStyle: "short", timeZone: "America/Sao_Paulo" });
 export const shareDate = (iso: string | null) => (iso ? day.format(new Date(iso)) : "");
 
 /** One share row with the actions that keep sense for it: download permission, re-approval and revocation. */
@@ -18,49 +19,49 @@ export function ShareRow({ share, showClip, showEmail }: { share: ClipShareRow; 
   const reapprove = useMutation({ mutationFn: () => api.post(`/api/shares/${share.id}/reapprove`), onSuccess: done });
   const revoke = useMutation({ mutationFn: () => api.del(`/api/shares/${share.id}`), onSuccess: done });
   const active = share.state === "ativo";
-  const who = share.email ?? `conta #${share.user_id}`;
-  const what = share.clip_title || `Corte #${share.clip_id}`;
+  const who = share.email ?? t("conta #{user_id}", { user_id: share.user_id });
+  const what = share.clip_title || t("Corte #{clip_id}", { clip_id: share.clip_id });
   return (
     <li className="share-row">
       <div className="min-w-0">
         <p className="truncate font-medium">
-          {showClip && (share.clip_title || `Corte #${share.clip_id}`)}
+          {showClip && (share.clip_title || t("Corte #{clip_id}", { clip_id: share.clip_id }))}
           {showClip && showEmail && " · "}
           {showEmail && share.email}
         </p>
         <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-ink-muted">
           <Status tone={active ? "success" : share.state === "expirado" ? "warning" : "neutral"}>{share.state}</Status>
-          <span>{share.can_download ? "pode baixar" : "só assistir"}</span>
-          {share.expires_at && <span>· até {shareDate(share.expires_at)}</span>}
-          <span>· {share.follow_latest ? "acompanha a versão mais recente" : `versão ${share.shared_version ?? "—"}`}</span>
-          {share.grant_id != null && <span>· via acesso ao streamer</span>}
+          <span>{share.can_download ? t("pode baixar") : t("só assistir")}</span>
+          {share.expires_at && <span>{t("· até")} {shareDate(share.expires_at)}</span>}
+          <span>· {share.follow_latest ? t("acompanha a versão mais recente") : t("versão {v}", { v: share.shared_version ?? "—" })}</span>
+          {share.grant_id != null && <span>{t("· via acesso ao streamer")}</span>}
         </p>
         {active && share.outdated && (
           <p className="mt-1.5 text-xs text-warning">
-            O corte foi reeditado. A conta ainda assiste à versão aprovada antes.
+            {t("O corte foi reeditado. A conta ainda assiste à versão aprovada antes.")}
           </p>
         )}
       </div>
       {active && (
         <div className="flex flex-wrap items-center gap-2">
           {share.outdated && (
-            <ConfirmAction tone="quiet" title="Enviar a versão atual?" label={`Enviar a versão atual de ${what} para ${who}`}
-              description={<><p><strong className="text-ink">{who}</strong> passa a assistir à versão atual de <strong className="text-ink">{what}</strong>.</p>
-                <p>A versão aprovada antes deixa de aparecer para essa conta.</p></>}
-              confirmLabel="Enviar a versão atual" pending={reapprove.isPending} onConfirm={() => reapprove.mutate()}>
-              <RefreshCw size={14} aria-hidden /> Enviar a versão atual
+            <ConfirmAction tone="quiet" title={t("Enviar a versão atual?")} label={t("Enviar a versão atual de {what} para {who}", { what: what, who: who })}
+              description={<><p><strong className="text-ink">{who}</strong> {t("passa a assistir à versão atual de")} <strong className="text-ink">{what}</strong>.</p>
+                <p>{t("A versão aprovada antes deixa de aparecer para essa conta.")}</p></>}
+              confirmLabel={t("Enviar a versão atual")} pending={reapprove.isPending} onConfirm={() => reapprove.mutate()}>
+              <RefreshCw size={14} aria-hidden /> {t("Enviar a versão atual")}
             </ConfirmAction>
           )}
           <label className="inline-flex items-center gap-2 text-xs">
             <input type="checkbox" checked={share.can_download} disabled={patch.isPending}
               onChange={(e) => patch.mutate({ can_download: e.target.checked })} />
-            Permitir download
+            {t("Permitir download")}
           </label>
-          <ConfirmAction title="Revogar o acesso?" label={`Revogar o acesso de ${who} a ${what}`}
-            description={<><p><strong className="text-ink">{who}</strong> deixa de ver <strong className="text-ink">{what}</strong> na próxima ação, inclusive com a página aberta.</p>
-              <p>O registro fica no histórico. Para liberar de novo, compartilhe outra vez.</p></>}
-            confirmLabel="Revogar acesso" pending={revoke.isPending} onConfirm={() => revoke.mutate()}>
-            <X size={14} aria-hidden /> Revogar
+          <ConfirmAction title={t("Revogar o acesso?")} label={t("Revogar o acesso de {who} a {what}", { who: who, what: what })}
+            description={<><p><strong className="text-ink">{who}</strong> {t("deixa de ver")} <strong className="text-ink">{what}</strong> {t("na próxima ação, inclusive com a página aberta.")}</p>
+              <p>{t("O registro fica no histórico. Para liberar de novo, compartilhe outra vez.")}</p></>}
+            confirmLabel={t("Revogar acesso")} pending={revoke.isPending} onConfirm={() => revoke.mutate()}>
+            <X size={14} aria-hidden /> {t("Revogar")}
           </ConfirmAction>
         </div>
       )}
@@ -100,40 +101,39 @@ export default function SharePanel({ clipId, clipTitle }: { clipId: number; clip
   return (
     <section className="space-y-5" aria-labelledby="share-title">
       <div>
-        <h3 id="share-title" className="display text-lg">Compartilhar “{clipTitle}”</h3>
+        <h3 id="share-title" className="display text-lg">{t("Compartilhar “{clipTitle}”", { clipTitle: clipTitle })}</h3>
         <p className="mt-1 max-w-[62ch] text-sm text-ink-muted">
-          A conta convidada vê só este vídeo na Minha Biblioteca. Ela recebe a versão de agora. Uma reedição não muda o que
-          ela assiste até você enviar a versão nova.
+          {t("A conta convidada vê só este vídeo na Minha Biblioteca. Ela recebe a versão de agora. Uma reedição não muda o que ela assiste até você enviar a versão nova.")}
         </p>
       </div>
       <form className="share-form" onSubmit={submit}>
         <div className="sm:col-span-2">
-          <label className="label" htmlFor="share-email">E-mail da conta convidada</label>
+          <label className="label" htmlFor="share-email">{t("E-mail da conta convidada")}</label>
           <input id="share-email" className="field" type="email" required list="share-accounts" value={email}
-            onChange={(e) => setEmail(e.target.value)} placeholder="nome@empresa.com" autoComplete="off" />
+            onChange={(e) => setEmail(e.target.value)} placeholder={t("nome@empresa.com")} autoComplete="off" />
           <datalist id="share-accounts">{viewers.map((u) => <option key={u.id} value={u.email} />)}</datalist>
-          <p className="mt-1.5 text-xs text-ink-muted">A conta precisa existir. Crie em Pessoas e acesso.</p>
+          <p className="mt-1.5 text-xs text-ink-muted">{t("A conta precisa existir. Crie em Pessoas e acesso.")}</p>
         </div>
         <label className="share-option"><input type="checkbox" checked={download} onChange={(e) => setDownload(e.target.checked)} />
-          <span><strong>Permitir download</strong><small>Sem isso, a conta só assiste no navegador.</small></span></label>
+          <span><strong>{t("Permitir download")}</strong><small>{t("Sem isso, a conta só assiste no navegador.")}</small></span></label>
         <label className="share-option"><input type="checkbox" checked={variants} onChange={(e) => setVariants(e.target.checked)} />
-          <span><strong>Mostrar outras versões</strong><small>Original e formatos que já estavam prontos.</small></span></label>
+          <span><strong>{t("Mostrar outras versões")}</strong><small>{t("Original e formatos que já estavam prontos.")}</small></span></label>
         <label className="share-option"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
-          <span><strong>Sempre a versão mais recente</strong><small>Reedições passam a valer para a conta sem nova aprovação.</small></span></label>
+          <span><strong>{t("Sempre a versão mais recente")}</strong><small>{t("Reedições passam a valer para a conta sem nova aprovação.")}</small></span></label>
         <div>
-          <label className="label" htmlFor="share-expires">Disponível até (opcional)</label>
+          <label className="label" htmlFor="share-expires">{t("Disponível até (opcional)")}</label>
           <input id="share-expires" className="field" type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
         </div>
         <div className="sm:col-span-2 flex flex-wrap items-center gap-3">
-          <button className="btn-take" disabled={create.isPending || !email}><Share2 size={16} aria-hidden /> Compartilhar</button>
-          {create.isSuccess && <Notice>Compartilhado. O vídeo já aparece na Minha Biblioteca da conta.</Notice>}
+          <button className="btn-take" disabled={create.isPending || !email}><Share2 size={16} aria-hidden /> {t("Compartilhar")}</button>
+          {create.isSuccess && <Notice>{t("Compartilhado. O vídeo já aparece na Minha Biblioteca da conta.")}</Notice>}
         </div>
         <div className="sm:col-span-2"><ErrorNote error={create.error} /></div>
       </form>
       <div>
-        <h4 className="mb-2 text-sm font-semibold">Quem tem acesso</h4>
+        <h4 className="mb-2 text-sm font-semibold">{t("Quem tem acesso")}</h4>
         <ErrorNote error={shares.error} />
-        {shares.data?.length === 0 && <p className="text-sm text-ink-muted">Ninguém de fora da equipe tem acesso a este corte.</p>}
+        {shares.data?.length === 0 && <p className="text-sm text-ink-muted">{t("Ninguém de fora da equipe tem acesso a este corte.")}</p>}
         <ul className="share-list">{shares.data?.map((s) => <ShareRow key={s.id} share={s} showEmail />)}</ul>
       </div>
     </section>

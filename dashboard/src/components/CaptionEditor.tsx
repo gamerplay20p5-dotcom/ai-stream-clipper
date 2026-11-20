@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { speakerName } from "./VoicePanel";
 import { ErrorNote } from "./ui";
+import { t, locale } from "../i18n";
 
 type W = { start: number; end: number; text: string; speaker: string };
 type Caps = { clip_id: number; start: number; end: number; override: boolean; edited_by: string | null; edited_at: string | null;
@@ -58,23 +59,23 @@ export default function CaptionEditor({ clipId, videoVersion, onSaved }: { clipI
 
   return (
     <section className="mt-6">
-      <h3 className="mb-1 text-sm font-semibold">Legendas</h3>
+      <h3 className="mb-1 text-sm font-semibold">{t("Legendas")}</h3>
       <p className="mb-2 text-xs text-ink-muted">
-        Texto fiel à fala, por quem falou. Corrija palavras ou o locutor e salve: o vídeo é renderizado de novo.
-        {c.override && c.edited_at && <> Corrigida por {c.edited_by} em {new Date(c.edited_at).toLocaleString("pt-BR")}.</>}
+        {t("Texto fiel à fala, por quem falou. Corrija palavras ou o locutor e salve: o vídeo é renderizado de novo.")}
+        {c.override && c.edited_at && <> {t("Corrigida por {edited_by} em {toLocaleString}.", { edited_by: c.edited_by, toLocaleString: new Date(c.edited_at).toLocaleString(locale) })}</>}
       </p>
       <div className="mb-3 min-h-[44px] rounded-md bg-black/80 p-2 text-center text-sm font-bold uppercase" aria-live="polite">
         {live ? <span style={{ color: isOther(live.speaker) && c.options.mode !== "all" ? c.options.other_color : "#fff",
           fontSize: isOther(live.speaker) && c.options.mode !== "all" ? "0.8em" : undefined }}>
-          {hidden && isOther(live.speaker) ? <span className="text-ink-faint normal-case">(outra voz — oculta)</span> : live.text}</span>
-          : <span className="text-xs font-normal normal-case text-ink-faint">Dê play no vídeo para ver a prévia aqui.</span>}
+          {hidden && isOther(live.speaker) ? <span className="text-ink-faint normal-case">{t("(outra voz — oculta)")}</span> : live.text}</span>
+          : <span className="text-xs font-normal normal-case text-ink-faint">{t("Dê play no vídeo para ver a prévia aqui.")}</span>}
       </div>
-      {!lines.length && <p className="text-sm text-ink-muted">Sem fala neste corte.</p>}
+      {!lines.length && <p className="text-sm text-ink-muted">{t("Sem fala neste corte.")}</p>}
       <ol className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
         {lines.map((l, i) => (
           <li key={i} className={`grid grid-cols-[3rem_minmax(0,1fr)] sm:grid-cols-[3rem_minmax(0,1fr)_7rem] items-center gap-2 rounded px-1 ${live === l ? "bg-take-dim" : ""}`}>
-            <button type="button" className="text-left text-xs text-ink-muted hover:text-ink" onClick={() => seek(l.start)} title="Ir para este trecho">
-              {Math.max(0, l.start - c.start).toFixed(1)}s
+            <button type="button" className="text-left text-xs text-ink-muted hover:text-ink" onClick={() => seek(l.start)} title={t("Ir para este trecho")}>
+              {t("{toFixed}s", { toFixed: Math.max(0, l.start - c.start).toFixed(1) })}
             </button>
             <input className="field py-1 text-sm" value={l.text} aria-label={`Legenda ${i + 1}`}
               onChange={(e) => setLines(lines.map((x, k) => (k === i ? { ...x, text: e.target.value } : x)))} />
@@ -87,13 +88,13 @@ export default function CaptionEditor({ clipId, videoVersion, onSaved }: { clipI
       </ol>
       <div className="mt-3 flex flex-wrap gap-2">
         <button className="btn-take" disabled={!dirty || save.isPending} onClick={() => save.mutate(lines.flatMap(fromLine))}>
-          {save.isPending ? "Salvando…" : "Salvar legendas e renderizar"}
+          {save.isPending ? t("Salvando…") : t("Salvar legendas e renderizar")}
         </button>
-        {dirty && <button className="btn-quiet" onClick={() => setLines(toLines(c.words))}>Desfazer</button>}
+        {dirty && <button className="btn-quiet" onClick={() => setLines(toLines(c.words))}>{t("Desfazer")}</button>}
         {c.override && (
           <button className="btn-quiet" disabled={reset.isPending}
-            onClick={() => window.confirm("Voltar para a transcrição automática? A sua correção deixa de ser usada.") && reset.mutate()}>
-            Voltar à transcrição automática
+            onClick={() => window.confirm(t("Voltar para a transcrição automática? A sua correção deixa de ser usada.")) && reset.mutate()}>
+            {t("Voltar à transcrição automática")}
           </button>
         )}
       </div>

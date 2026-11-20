@@ -6,9 +6,10 @@ import type { CalendarData } from "../components/EditorialOps";
 import { ClipFrame, DecisionChip, PageHeader, Skeleton, Tally } from "../components/ui";
 import { ago, jobLabel, platformName, timecode } from "../lib/format";
 import { decisionLabel, decisionOf } from "../lib/publishing";
+import { t, locale, tx } from "../i18n";
 
-const number = new Intl.NumberFormat("pt-BR");
-const date = new Intl.DateTimeFormat("pt-BR", { weekday: "long", day: "numeric", month: "long", timeZone: "America/Sao_Paulo" });
+const number = new Intl.NumberFormat(locale);
+const date = new Intl.DateTimeFormat(locale, { weekday: "long", day: "numeric", month: "long", timeZone: "America/Sao_Paulo" });
 const plural = (n: number, one: string, many: string) => `${number.format(n)} ${n === 1 ? one : many}`;
 type Control = { paused: boolean; reason?: string; by?: string };
 type Attention = { key: string; tone: "danger" | "warning" | "take"; text: string; detail?: string; to: string; action: string };
@@ -18,14 +19,14 @@ function Activity({ values }: { values: number[] }) {
   const total = values.reduce((sum, value) => sum + value, 0);
   return (
     <div className="space-y-3">
-      <p className="text-sm text-ink-muted"><strong className="text-ink">{number.format(total)}</strong> {total === 1 ? "corte encontrado" : "cortes encontrados"} nas últimas 24 horas</p>
-      <div className="grid h-10 auto-cols-fr grid-flow-col items-end gap-1 border-b border-suite-line" role="img" aria-label="Volume de cortes por hora, da mais antiga à mais recente">
+      <p className="text-sm text-ink-muted"><strong className="text-ink">{number.format(total)}</strong> {t("{v} nas últimas 24 horas", { v: total === 1 ? t("corte encontrado") : t("cortes encontrados") })}</p>
+      <div className="grid h-10 auto-cols-fr grid-flow-col items-end gap-1 border-b border-suite-line" role="img" aria-label={t("Volume de cortes por hora, da mais antiga à mais recente")}>
         {values.map((value, index) => (
           <span key={index} title={`${value} corte(s)`} className={value ? "bg-ink-muted" : "bg-suite-line"}
             style={{ height: `${Math.max(5, 100 * value / peak)}%` }} />
         ))}
       </div>
-      <div className="flex justify-between text-xs text-ink-muted"><span>24 h atrás</span><span>Agora</span></div>
+      <div className="flex justify-between text-xs text-ink-muted"><span>{t("24 h atrás")}</span><span>{t("Agora")}</span></div>
     </div>
   );
 }
@@ -65,8 +66,8 @@ export default function Overview() {
   // Every check that feeds "Precisa de você". Missing data is never read as zero: a check is either
   // verified (data, no error), still loading, or failed; "nothing pending" needs ALL of them verified.
   const checks = [
-    { name: "cortes", q: stats }, { name: "revisão humana", q: human }, { name: "publicações", q: totals },
-    { name: "envios recentes", q: calendar }, { name: "pausa dos envios", q: control }, { name: "servidores", q: infra },
+    { name: t("cortes"), q: stats }, { name: t("revisão humana"), q: human }, { name: t("publicações"), q: totals },
+    { name: t("envios recentes"), q: calendar }, { name: t("pausa dos envios"), q: control }, { name: t("servidores"), q: infra },
   ];
   const verifying = checks.filter((c) => c.q.isLoading).map((c) => c.name);
   const failed = checks.filter((c) => c.q.isError).map((c) => c.name);
@@ -75,32 +76,32 @@ export default function Overview() {
   const checkedAt = Math.max(...checks.map((c) => c.q.dataUpdatedAt));
 
   const attention: Attention[] = [];
-  if (control.data?.paused) attention.push({ key: "paused", tone: "danger", text: "As publicações estão pausadas",
-    detail: control.data.reason ? `Motivo: ${control.data.reason}` : undefined, to: "/publicacao", action: "Ver agenda" });
+  if (control.data?.paused) attention.push({ key: "paused", tone: "danger", text: t("As publicações estão pausadas"),
+    detail: control.data.reason ? t("Motivo: {reason}", { reason: control.data.reason }) : undefined, to: "/publicacao", action: t("Ver agenda") });
   const ready = s?.clips_by_status?.ready ?? 0;
-  if (ready) attention.push({ key: "ready", tone: "take", text: plural(ready, "corte pronto para revisar", "cortes prontos para revisar"),
-    to: "/cortes?status=ready", action: "Revisar" });
+  if (ready) attention.push({ key: "ready", tone: "take", text: plural(ready, t("corte pronto para revisar"), t("cortes prontos para revisar")),
+    to: "/cortes?status=ready", action: t("Revisar") });
   if (human.data?.total) attention.push({ key: "human", tone: "warning",
-    text: plural(human.data.total, "corte pede revisão humana", "cortes pedem revisão humana"),
-    detail: "A IA não teve evidência suficiente para decidir sozinha.", to: "/cortes?status=gate%3AHUMAN_REVIEW", action: "Decidir" });
+    text: plural(human.data.total, t("corte pede revisão humana"), t("cortes pedem revisão humana")),
+    detail: t("A IA não teve evidência suficiente para decidir sozinha."), to: "/cortes?status=gate%3AHUMAN_REVIEW", action: t("Decidir") });
   if (counts?.proposed) attention.push({ key: "proposed", tone: "take",
-    text: plural(counts.proposed, "sugestão de publicação aguarda você", "sugestões de publicação aguardam você"),
-    detail: "Total pendente. Nada é enviado sem a sua confirmação.", to: "/publicacao", action: "Revisar sugestões" });
+    text: plural(counts.proposed, t("sugestão de publicação aguarda você"), t("sugestões de publicação aguardam você")),
+    detail: t("Total pendente. Nada é enviado sem a sua confirmação."), to: "/publicacao", action: t("Revisar sugestões") });
   if (counts?.uncertain) attention.push({ key: "uncertain", tone: "warning",
-    text: plural(counts.uncertain, "envio com resultado incerto", "envios com resultado incerto"),
-    detail: "Total pendente. Confira no perfil se o vídeo foi publicado.", to: "/publicacao?aba=envios", action: "Conferir" });
+    text: plural(counts.uncertain, t("envio com resultado incerto"), t("envios com resultado incerto")),
+    detail: t("Total pendente. Confira no perfil se o vídeo foi publicado."), to: "/publicacao?aba=envios", action: t("Conferir") });
   if (count("failed")) attention.push({ key: "failed", tone: "danger", text: plural(count("failed"), "envio falhou", "envios falharam"),
-    detail: "Envios agendados a partir de 2 dias atrás (janela da agenda).", to: "/publicacao?aba=envios", action: "Ver motivo" });
+    detail: t("Envios agendados a partir de 2 dias atrás (janela da agenda)."), to: "/publicacao?aba=envios", action: t("Ver motivo") });
   if (s?.dead_jobs) attention.push({ key: "dead", tone: "danger",
-    text: plural(s.dead_jobs, "tarefa parou com falha", "tarefas pararam com falha"), to: "/infra#falhas", action: "Ver falhas" });
+    text: plural(s.dead_jobs, t("tarefa parou com falha"), t("tarefas pararam com falha")), to: "/infra#falhas", action: t("Ver falhas") });
   if (silentHosts.length) attention.push({ key: "hosts", tone: "danger",
-    text: `${silentHosts.map((h) => h.label).join(", ")} sem nenhum worker online`, to: "/infra", action: "Ver servidores" });
+    text: t("{join} sem nenhum worker online", { join: silentHosts.map((h) => h.label).join(", ") }), to: "/infra", action: t("Ver servidores") });
   const retry = () => checks.forEach((c) => c.q.isError && c.q.refetch());
 
   return (
     <div>
       <div className="overview-masthead today-masthead">
-        <PageHeader title="Hoje">
+        <PageHeader title={t("Hoje")}>
           <time className="text-sm text-ink-muted first-letter:uppercase">{date.format(new Date())}</time>
         </PageHeader>
       </div>
@@ -108,26 +109,26 @@ export default function Overview() {
       <div className="grid grid-cols-1 gap-[var(--space-section)] pt-5 xl:grid-cols-[minmax(0,1fr)_minmax(17rem,0.38fr)] xl:pt-6">
         <div className="min-w-0 space-y-[var(--space-section)]">
           <section aria-labelledby="attention-title">
-            <h2 id="attention-title" className="display mb-3 text-xl">Precisa de você</h2>
+            <h2 id="attention-title" className="display mb-3 text-xl">{t("Precisa de você")}</h2>
             {verifying.length > 0 && (
               <p className="check-state" role="status">
-                <Loader2 size={15} className="motion-safe:animate-spin" aria-hidden /> Ainda verificando: {verifying.join(", ")}.
+                <Loader2 size={15} className="motion-safe:animate-spin" aria-hidden /> {t("Ainda verificando: {join}.", { join: verifying.join(", ") })}
               </p>
             )}
             {failed.length > 0 && (
               <div className="check-state check-failed" role="alert">
                 <CircleAlert size={16} aria-hidden />
-                <p className="min-w-0 flex-1">Não foi possível verificar: <strong>{failed.join(", ")}</strong>. Pendências dessas áreas podem não aparecer aqui.</p>
-                <button type="button" className="btn-quiet" onClick={retry}><RefreshCw size={14} aria-hidden /> Tentar de novo</button>
+                <p className="min-w-0 flex-1">{t("Não foi possível verificar:")} <strong>{failed.join(", ")}</strong>{t(". Pendências dessas áreas podem não aparecer aqui.")}</p>
+                <button type="button" className="btn-quiet" onClick={retry}><RefreshCw size={14} aria-hidden /> {t("Tentar de novo")}</button>
               </div>
             )}
-            {verifying.length === checks.length && <Skeleton label="Conferindo o que precisa de atenção" lines={2} />}
+            {verifying.length === checks.length && <Skeleton label={t("Conferindo o que precisa de atenção")} lines={2} />}
             {allVerified && attention.length === 0 && (
               <div className="all-clear" role="status">
                 <CircleCheck size={22} className="text-ok" aria-hidden />
-                <div><p className="font-semibold">Tudo verificado e sem pendências</p>
-                  <p className="text-sm text-ink-muted">Nenhum corte, sugestão ou falha esperando por alguém.
-                    {checkedAt > 0 && ` Verificado às ${new Date(checkedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" })}.`}</p></div>
+                <div><p className="font-semibold">{t("Tudo verificado e sem pendências")}</p>
+                  <p className="text-sm text-ink-muted">{t("Nenhum corte, sugestão ou falha esperando por alguém.")}
+                    {checkedAt > 0 && t(" Verificado às {toLocaleTimeString}.", { toLocaleTimeString: new Date(checkedAt).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" }) })}</p></div>
               </div>
             )}
             {attention.length > 0 && (
@@ -147,10 +148,10 @@ export default function Overview() {
           {review.data && review.data.items.length > 0 && (
             <section aria-labelledby="review-queue-title">
               <header className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-                <h2 id="review-queue-title" className="display text-lg">Melhores cortes da fila</h2>
-                <Link className="text-sm font-medium text-take hover:underline" to="/cortes?status=ready">Abrir a central</Link>
+                <h2 id="review-queue-title" className="display text-lg">{t("Melhores cortes da fila")}</h2>
+                <Link className="text-sm font-medium text-take hover:underline" to="/cortes?status=ready">{t("Abrir a central")}</Link>
               </header>
-              <ul className="today-reel" aria-label="Cortes prontos com maior pontuação">
+              <ul className="today-reel" aria-label={t("Cortes prontos com maior pontuação")}>
                 {review.data.items.map((clip) => (
                   <li key={clip.id}><ClipFrame clip={clip} onOpen={() => navigate(`/cortes/${clip.id}`)} /></li>
                 ))}
@@ -160,11 +161,11 @@ export default function Overview() {
 
           <section aria-labelledby="next-title">
             <header className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-              <h2 id="next-title" className="display text-lg">Próximos envios</h2>
-              <Link className="text-sm font-medium text-take hover:underline" to="/publicacao">Ver agenda</Link>
+              <h2 id="next-title" className="display text-lg">{t("Próximos envios")}</h2>
+              <Link className="text-sm font-medium text-take hover:underline" to="/publicacao">{t("Ver agenda")}</Link>
             </header>
-            {calendar.isError && <p className="py-2 text-sm text-warning">Não foi possível carregar a agenda agora.</p>}
-            {calendar.data && !calendar.isError && upcoming.length === 0 && <p className="py-2 text-sm text-ink-muted">Nada agendado para os próximos 14 dias.</p>}
+            {calendar.isError && <p className="py-2 text-sm text-warning">{t("Não foi possível carregar a agenda agora.")}</p>}
+            {calendar.data && !calendar.isError && upcoming.length === 0 && <p className="py-2 text-sm text-ink-muted">{t("Nada agendado para os próximos 14 dias.")}</p>}
             <ul className="divide-y divide-suite-line">
               {upcoming.map((i) => {
                 const kind = decisionOf(i);
@@ -172,7 +173,7 @@ export default function Overview() {
                   <li key={i.id} className="flex flex-wrap items-center justify-between gap-3 py-2.5">
                     <span className="min-w-0">
                       <span className="font-mono text-xs text-ink-muted">{i.when?.slice(8, 10)}/{i.when?.slice(5, 7)} {i.when?.slice(11, 16)}</span>
-                      <strong className="ml-2 text-sm">{i.title || `Corte #${i.clip_id}`}</strong>
+                      <strong className="ml-2 text-sm">{i.title || t("Corte #{clip_id}", { clip_id: i.clip_id })}</strong>
                       <span className="block text-xs text-ink-muted">{platformName[i.platform] ?? i.platform} · {i.account}</span>
                     </span>
                     {kind && <DecisionChip kind={kind} label={decisionLabel[kind]} />}
@@ -186,12 +187,12 @@ export default function Overview() {
         <div className="operation-rail">
           <section aria-labelledby="live-overview-title">
             <header className="mb-2 flex flex-wrap items-center justify-between gap-3">
-              <h2 id="live-overview-title" className="display text-lg">Ao vivo agora</h2>
-              <Link className="text-xs font-medium text-take hover:underline" to="/streamers">Canais</Link>
+              <h2 id="live-overview-title" className="display text-lg">{t("Ao vivo agora")}</h2>
+              <Link className="text-xs font-medium text-take hover:underline" to="/streamers">{t("Canais")}</Link>
             </header>
-            {streamers.isLoading && <Skeleton label="Carregando transmissões" lines={1} />}
-            {streamers.isError && <p className="py-2 text-sm text-warning">Não foi possível consultar as lives agora.</p>}
-            {streamers.data && !streamers.isError && !live.length && <p className="py-2 text-sm text-ink-muted">Nenhum canal monitorado está ao vivo.</p>}
+            {streamers.isLoading && <Skeleton label={t("Carregando transmissões")} lines={1} />}
+            {streamers.isError && <p className="py-2 text-sm text-warning">{t("Não foi possível consultar as lives agora.")}</p>}
+            {streamers.data && !streamers.isError && !live.length && <p className="py-2 text-sm text-ink-muted">{t("Nenhum canal monitorado está ao vivo.")}</p>}
             <ul className="divide-y divide-suite-line">
               {live.map((st) => {
                 const session = st.live_session!;
@@ -199,9 +200,9 @@ export default function Overview() {
                 return (
                   <li key={st.id} className="py-2.5">
                     <div className="flex flex-wrap items-center gap-2"><strong className="text-sm">{st.display_name}</strong><Tally live /></div>
-                    <p className="mt-1 break-words text-xs text-ink-muted">{platformName[st.platform]} · {session.title || "Sem título"}</p>
+                    <p className="mt-1 break-words text-xs text-ink-muted">{platformName[st.platform]} · {session.title || t("Sem título")}</p>
                     <p className={`mt-1 text-xs ${lag > 60 ? "text-warning" : "text-ink-muted"}`}>
-                      {timecode(session.covered_until)} capturados · {lag > 1 ? `análise ${Math.round(lag)} s atrás` : "análise em dia"}
+                      {t("{timecode} capturados · {v}", { timecode: timecode(session.covered_until), v: lag > 1 ? t("análise {round} s atrás", { round: Math.round(lag) }) : t("análise em dia") })}
                     </p>
                   </li>
                 );
@@ -210,9 +211,9 @@ export default function Overview() {
           </section>
 
           <section aria-labelledby="services-title" className="border-t border-suite-line pt-4">
-            <h2 id="services-title" className="display mb-2 text-lg">Servidores</h2>
-            {infra.isError && <p className="py-2 text-sm text-warning">Não foi possível consultar os servidores agora.</p>}
-            {infra.isLoading && <Skeleton label="Carregando status dos servidores" lines={1} />}
+            <h2 id="services-title" className="display mb-2 text-lg">{t("Servidores")}</h2>
+            {infra.isError && <p className="py-2 text-sm text-warning">{t("Não foi possível consultar os servidores agora.")}</p>}
+            {infra.isLoading && <Skeleton label={t("Carregando status dos servidores")} lines={1} />}
             <ul className="divide-y divide-suite-line">
               {infra.data?.hosts.map((host) => {
                 const online = host.workers.filter((worker) => worker.status === "online").length;
@@ -220,9 +221,9 @@ export default function Overview() {
                 return (
                   <li key={host.label} className="flex items-center justify-between gap-3 py-2 text-xs">
                     <span className="min-w-0"><span className="text-sm font-medium">{host.label}</span>
-                      <span className="block truncate text-ink-muted">{host.role || host.hostname}</span></span>
+                      <span className="block truncate text-ink-muted">{tx(host.role) || host.hostname}</span></span>
                     <span className={`shrink-0 ${healthy ? "text-ok" : "text-warning"}`}>
-                      {online ? `${online}/${host.workers.length} online` : "sem workers online"}
+                      {online ? `${online}/${host.workers.length} online` : t("sem workers online")}
                     </span>
                   </li>
                 );
@@ -231,9 +232,9 @@ export default function Overview() {
           </section>
 
           <section aria-labelledby="activity-title" className="border-t border-suite-line pt-4">
-            <h2 id="activity-title" className="display mb-3 text-lg">Atividade</h2>
+            <h2 id="activity-title" className="display mb-3 text-lg">{t("Atividade")}</h2>
             {s && <Activity values={s.clips_last_24h} />}
-            {stats.isLoading && <Skeleton label="Carregando atividade" lines={2} />}
+            {stats.isLoading && <Skeleton label={t("Carregando atividade")} lines={2} />}
             {(infra.data?.failures ?? []).slice(0, 3).map((failure) => (
               <Link key={failure.id} to="/infra#falhas" className="mt-2 flex justify-between gap-2 border-t border-suite-line py-2 text-xs hover:text-take">
                 <span><CircleAlert size={12} className="mr-1 inline text-tally" aria-hidden />{jobLabel[failure.type] ?? failure.type} #{failure.id}</span>

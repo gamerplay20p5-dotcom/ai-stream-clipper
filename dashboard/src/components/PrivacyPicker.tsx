@@ -1,6 +1,7 @@
+import { t } from "../i18n";
 export const privacyLabel: Record<string, string> = {
-  private: "Privado", unlisted: "Não listado", public: "Público", SELF_ONLY: "Só eu (TikTok)",
-  MUTUAL_FOLLOW_FRIENDS: "Amigos", FOLLOWER_OF_CREATOR: "Seguidores", PUBLIC_TO_EVERYONE: "Público (TikTok)",
+  private: t("Privado"), unlisted: t("Não listado"), public: t("Público"), SELF_ONLY: t("Só eu (TikTok)"),
+  MUTUAL_FOLLOW_FRIENDS: t("Amigos"), FOLLOWER_OF_CREATOR: t("Seguidores"), PUBLIC_TO_EVERYONE: t("Público (TikTok)"),
 };
 const PUBLIC = new Set(["public", "PUBLIC_TO_EVERYONE"]);
 
@@ -23,16 +24,16 @@ export default function PrivacyPicker({ options, value, onChange, platform }: {
   if (publicOnly(options)) {
     return (
       <label className="flex items-start gap-2 rounded-md border border-tally/50 bg-tally/10 p-2 text-xs">
-        <input type="checkbox" className="mt-0.5" checked={valid} aria-label="Confirmar publicação pública"
+        <input type="checkbox" className="mt-0.5" checked={valid} aria-label={t("Confirmar publicação pública")}
           onChange={(e) => onChange(e.target.checked ? options[0] : "")} />
-        <span>{platform === "instagram" ? "Reels do Instagram são sempre públicos. " : "Esta conta só permite publicação pública. "}
-          <b>Confirmo que este vídeo será publicado como PÚBLICO.</b></span>
+        <span>{platform === "instagram" ? t("Reels do Instagram são sempre públicos. ") : t("Esta conta só permite publicação pública. ")}
+          <b>{t("Confirmo que este vídeo será publicado como PÚBLICO.")}</b></span>
       </label>
     );
   }
   return (
-    <select className="field" value={valid ? value : ""} onChange={(e) => onChange(e.target.value)} aria-label="Privacidade">
-      <option value="" disabled>Escolha a privacidade…</option>
+    <select className="field" value={valid ? value : ""} onChange={(e) => onChange(e.target.value)} aria-label={t("Privacidade")}>
+      <option value="" disabled>{t("Escolha a privacidade…")}</option>
       {options.map((p) => <option key={p} value={p}>{privacyLabel[p] ?? p}</option>)}
     </select>
   );
