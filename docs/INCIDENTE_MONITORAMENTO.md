@@ -19,6 +19,8 @@ O SSH para 201, 206 e 210 deu *timeout* a partir desta máquina. A API pública 
 - Não é a API nem a rede do 206 até o 210, porque os outros workers do 206 seguem com heartbeat.
 - O **processo do worker de captura inteiro** parou de responder: heartbeat, busca de jobs, renovação de *lease*, servidor de segmentos e monitor. Quem viu o incidente como "monitor parado" estava vendo o sintoma mais visível de um worker parado.
 
+**Linha do tempo exata** ([evidências](incidentes/2026-11-19-monitoramento-evidencias.md)): os 10 canais foram verificados entre 10:22:58 e 10:23:51 UTC. O último heartbeat foi às 10:23:50, e o seguinte, esperado por volta de 10:24:00, não chegou. A última rodada **terminou**, então o processo parou de uma vez logo depois dela.
+
 **A hipótese inicial não explica sozinha o que se observou.** No `monitor_loop` da v0.6.2, `asyncio.gather` sobre `asyncio.to_thread(probe_live)` congela apenas a tarefa do monitor quando uma probe trava. O heartbeat é outra tarefa do mesmo event loop e continuaria. Como o heartbeat também parou, aconteceu uma de duas coisas:
 
 1. **o event loop do processo travou** (alguma chamada síncrona bloqueante dentro do loop, ou um travamento nativo do interpretador). O contêiner continua "de pé" e o Docker não reinicia contêiner *unhealthy*; ou
