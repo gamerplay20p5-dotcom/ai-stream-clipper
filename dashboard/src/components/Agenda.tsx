@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, ExternalLink, Pause, Play } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, Pause, Play, Wand2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
@@ -46,6 +46,10 @@ export default function Agenda() {
   const [filter, setFilter] = useState<Decision | "todas">("todas");
   const dialog = useRef<HTMLDialogElement>(null);
   const review = useRef<HTMLDialogElement>(null);
+  const fill = useRef<HTMLDialogElement>(null);
+  const [fillRound, setFillRound] = useState(0);
+  const [dragging, setDragging] = useState<Item | null>(null);
+  const [dropDay, setDropDay] = useState<string | null>(null);
   const [round, setRound] = useState(0); // a fresh review (unchecked) every time the dialog opens
   const totals = useQuery({
     queryKey: ["publish-overview"], queryFn: () => api.get<{ counts: Record<string, number> }>("/api/publish/overview"), refetchInterval: 20_000,
@@ -60,6 +64,20 @@ export default function Agenda() {
     onSuccess: done,
   });
   const dismiss = useMutation({ mutationFn: (ids: number[]) => api.post("/api/publish/proposals/dismiss", { ids }), onSuccess: done });
+  // drag a post to another day: same time of day; a time already past today becomes "in 5 minutes"
+  const drop = useMutation({
+    mutationFn: ({ item, day }: { item: Item; day: string }) => {
+      let at = `${day}T${item.when ? item.when.slice(11, 16) : "12:00"}`;
+      if (at <= localNow()) {
+        const soon = new Date(Date.now() + 5 * 60_000);
+        at = new Intl.DateTimeFormat("sv-SE", { timeZone: TZ, dateStyle: "short", timeStyle: "short" }).format(soon).replace(" ", "T");
+        if (at.slice(0, 10) !== day) throw new Error(t("Esse dia já passou: solte o envio em hoje ou num dia futuro."));
+      }
+      return api.patch(`/api/publish/publications/${item.id}`, { scheduled_at: at + offsetOf(q.data?.timezone ?? TZ, at) });
+    },
+    onSuccess: done,
+  });
+  const movable = (i: Item) => ["proposed", "scheduled", "failed"].includes(i.status);
 
   const items = q.data?.items ?? [];
   const proposals = items.filter((i) => i.status === "proposed");
@@ -114,7 +132,9 @@ export default function Agenda() {
       {refused.length > 0 && <Notice tone="danger"><ul>{refused.map(([k, v]) => <li key={k}>#{k}: {v.join("; ")}</li>)}</ul></Notice>}
       {confirm.isSuccess && confirm.data.confirmed.length > 0 && <Notice>{confirm.data.confirmed.length === 1 ? t("Sugestão confirmada.") : t("{length} sugestões confirmadas.", { length: confirm.data.confirmed.length })}</Notice>}
       {dismiss.isSuccess && <Notice>{t("Sugestões recusadas.")}</Notice>}
-      <ErrorNote error={q.error || confirm.error || dismiss.error} />
+      <ErrorNote error={q.error || confirm.error || dismiss.error || drop.error} />
+      {drop.isSuccess && <Notice>{t("Envio movido.")}</Notice>}
+      <p className="text-xs text-ink-muted">{t("Arraste um envio para outro dia para mudar a data (o horário é mantido). Envios que falharam antes de ir ao ar também podem ser arrastados de volta para a agenda.")}</p>
 
       <div className="agenda-toolbar">
         <div className="flex items-center gap-1">
@@ -125,6 +145,8 @@ export default function Agenda() {
             <span className="ml-2 font-normal text-ink-muted">{days[0].slice(8, 10)}{t("/{slice} a {slice2}/", { slice: days[0].slice(5, 7), slice2: days[6].slice(8, 10) })}{days[6].slice(5, 7)}</span>
           </h2>
         </div>
+        <button type="button" className="btn-quiet" onClick={() => { setFillRound((r) => r + 1); fill.current?.showModal(); }}>
+          <Wand2 size={15} aria-hidden /> {t("Reorganizar automaticamente")}</button>
         <fieldset className="agenda-legend">
           <legend className="sr-only">{t("Mostrar")}</legend>
           {(["todas", "sugestao", "confirmado", "automatico"] as const).map((k) => (
@@ -145,7 +167,16 @@ export default function Agenda() {
           {days.map((day) => {
             const list = byDay(day);
             return (
-              <li key={day} className="week-day" data-today={day === today || undefined} data-empty={!list.length || undefined}>
+              <li key={day} className="week-day" data-today={day === today || undefined} data-empty={!list.length || undefined}
+                data-drop={(dragging && dropDay === day) || undefined}
+                onDragOver={(e) => { if (dragging && day >= today) { e.preventDefault(); setDropDay(day); } }}
+                onDragLeave={() => setDropDay((d) => (d === day ? null : d))}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const sameDay = dragging?.when?.slice(0, 10) === day;
+                  if (dragging && (!sameDay || dragging.status === "failed")) drop.mutate({ item: dragging, day });
+                  setDragging(null); setDropDay(null);
+                }}>
                 <h3 className="week-day-head">
                   <span className="capitalize">{weekday.format(new Date(`${day}T12:00:00Z`)).replace(".", "")}</span>
                   <strong>{day.slice(8, 10)}</strong>
@@ -158,7 +189,10 @@ export default function Agenda() {
                       const kind = decisionOf(it);
                       const status = STATUS[it.status];
                       return (
-                        <li key={it.id} className="agenda-event" data-kind={kind ?? "other"}>
+                        <li key={it.id} className="agenda-event" data-kind={kind ?? "other"} draggable={movable(it)}
+                          data-dragging={dragging?.id === it.id || undefined}
+                          onDragStart={(e) => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(it.id)); setDragging(it); }}
+                          onDragEnd={() => { setDragging(null); setDropDay(null); }}>
                           {it.status === "proposed" && (
                             <input type="checkbox" className="agenda-check" checked={sel.includes(it.id)} aria-label={t("Selecionar sugestão: {title}", { title: it.title })}
                               onChange={() => setSel(sel.includes(it.id) ? sel.filter((x) => x !== it.id) : [...sel, it.id])} />
@@ -183,9 +217,64 @@ export default function Agenda() {
         </ol>
       )}
 
+      <dialog ref={fill} className="confirmation-modal bulk-review" aria-labelledby="autofill-title">
+        <AutoFill key={fillRound} active={fillRound > 0} onClose={() => fill.current?.close()} onApplied={done} />
+      </dialog>
       <dialog ref={dialog} className="confirmation-modal agenda-dialog" aria-labelledby="agenda-item-title" onClose={() => setOpen(null)}>
         {open && <EventDetail key={open.id} item={open} timezone={q.data?.timezone ?? TZ} onClose={() => dialog.current?.close()} onChanged={done} />}
       </dialog>
+    </div>
+  );
+}
+
+/** "+HH:MM" offset of a time zone at a local "YYYY-MM-DDTHH:MM". */
+function offsetOf(timezone: string, local: string) {
+  const zone = new Intl.DateTimeFormat("en", { timeZone: timezone, timeZoneName: "longOffset" });
+  return zone.formatToParts(new Date(local + "Z")).find((part) => part.type === "timeZoneName")?.value.slice(3) || "+00:00";
+}
+
+type FillItem = { id: number; clip_id: number | null; platform: string; title: string; from?: string | null; to?: string; reason?: string };
+type FillPlan = { moved: FillItem[]; retried: FillItem[]; new: FillItem[]; skipped: FillItem[] };
+const hm = (iso?: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 16)}` : "—");
+
+/** Preview, then fill the schedule: late and failed posts to the next peak slots, then approved clips never scheduled. */
+function AutoFill({ active, onClose, onApplied }: { active: boolean; onClose: () => void; onApplied: () => void }) {
+  const preview = useQuery({
+    queryKey: ["autofill-preview", active], enabled: active, staleTime: 0, gcTime: 0,
+    queryFn: () => api.post<FillPlan>("/api/publish/autofill", { dry_run: true }),
+  });
+  const apply = useMutation({
+    mutationFn: () => api.post<FillPlan>("/api/publish/autofill", { dry_run: false }),
+    onSuccess: () => { onApplied(); onClose(); },
+  });
+  const p = preview.data;
+  const total = p ? p.moved.length + p.retried.length + p.new.length : 0;
+  const group = (title: string, list: FillItem[]) => list.length > 0 && (
+    <section className="mt-3">
+      <h3 className="text-sm font-semibold">{title} ({list.length})</h3>
+      <ul className="mt-1 max-h-40 overflow-auto text-xs">
+        {list.map((m) => <li key={`${m.id}-${m.clip_id}`} className="py-0.5">
+          <span className="font-mono">{m.reason ? "" : `${hm(m.from)} → ${hm(m.to)}`}</span> {platformName[m.platform] ?? m.platform} · {m.title || t("Corte #{clip_id}", { clip_id: m.clip_id })}
+          {m.reason && <span className="block text-ink-muted">{m.reason}</span>}</li>)}
+      </ul>
+    </section>
+  );
+  return (
+    <div className="space-y-2">
+      <h2 id="autofill-title" className="display text-lg">{t("Reorganizar automaticamente")}</h2>
+      <p className="text-sm text-ink-muted">{t("Procura o que não foi lançado e encaixa nos próximos horários de pico de cada conta, seguindo as regras (vídeos por horário e limite por dia). Os melhores cortes vão primeiro. Nada é enviado agora: os envios seguem a agenda. Sugestões que esperam confirmação não mudam.")}</p>
+      {preview.isLoading && <Skeleton label={t("Calculando…")} />}
+      <ErrorNote error={preview.error || apply.error} />
+      {p && total === 0 && <p className="text-sm">{t("Nada a reorganizar: a agenda já está em dia.")}</p>}
+      {p && group(t("Atrasados que vão para o próximo horário"), p.moved)}
+      {p && group(t("Falhas que voltam para a fila"), p.retried)}
+      {p && group(t("Cortes aprovados que ainda não foram agendados"), p.new)}
+      {p && group(t("Não dá para reenviar automaticamente"), p.skipped)}
+      <div className="flex flex-wrap justify-end gap-2 pt-2">
+        <button type="button" className="btn-quiet" onClick={onClose}>{t("Voltar")}</button>
+        {total > 0 && <button type="button" className="btn-take" disabled={apply.isPending} onClick={() => apply.mutate()}>
+          {apply.isPending ? t("Aplicando…") : t("Aplicar {total} mudança(s)", { total })}</button>}
+      </div>
     </div>
   );
 }

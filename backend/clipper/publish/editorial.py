@@ -228,11 +228,100 @@ def repack(db: Session, account_id: int, user: str, dry_run: bool = True) -> lis
     return _move_to_next_slots(db, pubs, now, user, "repack")
 
 
+def revive_blockers(db: Session, p: Publication) -> list[str]:
+    """Why a FAILED publication cannot go back to the queue (empty = it can)."""
+    blockers = service.reuse_blockers(p)
+    if blockers:
+        return blockers
+    if p.remote_id and p.platform not in ("tiktok", "instagram"):
+        return ["esta publicação já tem um vídeo na plataforma; verifique-o lá antes de reenviar"]
+    clip = db.get(Clip, p.clip_id) if p.clip_id else None
+    acct = db.get(PublishAccount, p.account_id)
+    if clip is None or acct is None:
+        return ["o corte ou a conta não existe mais"]
+    rule = db.get(PublishRule, p.rule_id) if p.rule_id else None
+    return service.eligibility(db, clip, acct, auto=p.origin in ("auto", "semi"), rule=rule, privacy=p.privacy,
+                               rights_confirmed=True, semi=p.origin == "semi")
+
+
+def revive(p: Publication, user: str) -> None:
+    """A failed publication (that never went live) back to "scheduled", as a new round."""
+    if (p.remote_status or {}).get("failure") == "rejected_by_platform":
+        service.archive_attempt(p, f"recusado pela plataforma; nova sessão por {user}")
+    p.status, p.attempts, p.last_error = "scheduled", 0, ""
+    service.log_event(p, "retry_admin", f"por {user}")
+
+
+def autofill(db: Session, user: str, dry_run: bool = True, account_id: int | None = None,
+             new_per_account: int = 40) -> dict:
+    """Fill the schedule of every account with an automatic rule: late posts and failed posts that can be
+    retried go to the next free peak slots, then approved clips that were never scheduled on that account
+    (any age) take the following slots. Best clips first. Proposals waiting for a human are not touched."""
+    now = utcnow()
+    out = {"moved": [], "retried": [], "new": [], "skipped": []}
+    sp = db.begin_nested() if dry_run else None
+    rules = db.scalars(select(PublishRule).where(PublishRule.enabled.is_(True), PublishRule.mode != "manual")
+                       .order_by(PublishRule.id))
+    seen: set[int] = set()
+    for rule in rules:
+        acct = db.get(PublishAccount, rule.account_id)
+        if acct is None or acct.status != "connected" or acct.id in seen or (account_id and acct.id != account_id):
+            continue
+        seen.add(acct.id)
+        revived = []
+        for p in db.scalars(select(Publication).where(Publication.account_id == acct.id, Publication.status == "failed")):
+            why = revive_blockers(db, p)
+            if why:
+                out["skipped"].append({"id": p.id, "clip_id": p.clip_id, "platform": p.platform, "title": p.title,
+                                       "reason": why[0]})
+                continue
+            revive(p, user)
+            revived.append(p.id)
+        db.flush()
+        # only what is late or comes back from a failure: future posts (and manual moves) keep their time
+        late_or_retry = [p for p in db.scalars(select(Publication).where(Publication.account_id == acct.id,
+                                                                         Publication.status == "scheduled"))
+                         if p.id in revived or (p.scheduled_at is not None and p.scheduled_at < now)]
+        for m in _move_to_next_slots(db, late_or_retry, now, user, "repack", dry_run=dry_run):
+            if m["id"] in revived:
+                out["retried"].append(m)
+            elif m["from"] != m["to"]:
+                out["moved"].append(m)
+        q = select(Clip).where(Clip.is_test.is_(False), Clip.status.in_(("ready", "approved")), Clip.score >= rule.min_score)
+        if rule.streamer_id:
+            q = q.where(Clip.streamer_id == rule.streamer_id)
+        made = 0
+        for clip in db.scalars(q.order_by(Clip.score.desc())):
+            if made >= new_per_account:
+                break
+            if db.scalar(select(Publication.id).where(Publication.clip_id == clip.id, Publication.account_id == acct.id,
+                                                      Publication.status.not_in(("expired", "cancelled")))):
+                continue
+            try:
+                when = service.next_slot(db, acct, rule, now)
+                with db.begin_nested():
+                    pub = service.create_publication(db, clip, acct, origin="semi" if rule.mode == "semi" else "auto",
+                                                     user=user, rule=rule, scheduled_at=when, privacy=rule.privacy)
+            except PublishRefused:
+                continue
+            made += 1
+            out["new"].append({"id": pub.id, "clip_id": clip.id, "platform": acct.platform, "title": pub.title,
+                               "from": None, "to": _local(when)})
+    if sp is not None:
+        sp.rollback()
+    return out
+
+
 def reschedule(db: Session, pid: int, when: datetime | None, user: str) -> Publication:
     p = db.get(Publication, pid)
     if p is None:
         raise LookupError("publication not found")
-    if p.status not in ("proposed", "scheduled"):
+    if p.status == "failed":  # dragged back onto the calendar: a new round, if it never went live
+        why = revive_blockers(db, p)
+        if why:
+            raise PublishRefused(why)
+        revive(p, user)
+    elif p.status not in ("proposed", "scheduled"):
         raise PublishRefused(["só é possível mudar o horário antes do envio começar"])
     if when is not None and when < utcnow() - timedelta(minutes=1):
         raise PublishRefused(["o horário escolhido já passou: escolha um horário a partir de agora ou use "

@@ -6,6 +6,17 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.7.6", "date": "2026-11-20", "title": "Agenda: arrastar e reorganizar automaticamente", "items": [
+        "Arraste um envio para outro dia da agenda para mudar a data; o horário é mantido.",
+        "Envios que falharam antes de ir ao ar podem ser arrastados de volta para a agenda (os que talvez já estejam no perfil continuam bloqueados até você conferir).",
+        "Novo botão “Reorganizar automaticamente” na agenda: encaixa atrasados, falhas reenviáveis e cortes aprovados que nunca foram agendados nos próximos horários de pico, com prévia antes de aplicar.",
+        "Envios futuros e mudanças feitas à mão não são mexidos pelo automático.",
+    ], "title_en": "Schedule: drag and reorganize automatically", "items_en": [
+        "Drag a post to another day of the schedule to change its date; the time is kept.",
+        "Posts that failed before going live can be dragged back onto the schedule (those that may already be on the profile stay blocked until you check).",
+        "New “Reorganize automatically” button on the schedule: fits late posts, retryable failures and approved clips never scheduled into the next peak slots, with a preview before applying.",
+        "Future posts and manual changes are not touched by the automatic option.",
+    ]},
     {"version": "0.7.5", "date": "2026-11-20", "title": "Painel em inglês", "items": [
         "Todo o painel, a tela de entrada e a biblioteca dos convidados agora também existem em inglês.",
         "O idioma segue o navegador (português para pt, inglês para os demais) e pode ser trocado no menu Minha conta, na tela de entrada e no rodapé da biblioteca.",

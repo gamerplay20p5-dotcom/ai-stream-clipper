@@ -499,6 +499,23 @@ def repack(body: RepackIn, request: Request, db: Session = Depends(get_db), user
     return {"dry_run": body.dry_run, "moved": plan}
 
 
+class AutofillIn(BaseModel):
+    account_id: int | None = None
+    dry_run: bool = True
+
+
+@router.post("/autofill")
+def autofill(body: AutofillIn, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
+    """Preview (dry_run) or apply: late and retryable posts to the next peak slots, then never-scheduled
+    approved clips. Nothing is sent by this call; uploads follow the schedule."""
+    res = ed.autofill(db, user.email, dry_run=body.dry_run, account_id=body.account_id)
+    if not body.dry_run:
+        audit(db, request, user, "publish.autofill", f"account:{body.account_id or 'all'}",
+              {k: len(v) for k, v in res.items()})
+        db.commit()
+    return {"dry_run": body.dry_run, **res}
+
+
 class RescheduleIn(BaseModel):
     scheduled_at: datetime | None = None
 

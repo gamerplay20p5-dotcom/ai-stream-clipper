@@ -90,6 +90,9 @@
   .week-grid { @apply grid gap-2; grid-template-columns: minmax(0, 1fr); }
   .week-day { @apply min-w-0 rounded-lg border border-suite-line bg-suite-panel p-2.5; }
   .week-day[data-today] { @apply border-take/70; }
+  .week-day[data-drop] { @apply border-dashed border-take bg-take/10; }
+  .agenda-event[draggable="true"] { @apply cursor-grab; }
+  .agenda-event[data-dragging] { @apply opacity-50; }
   .week-day-head { @apply mb-2 flex items-baseline gap-2 text-xs text-ink-muted; }
   .week-day-head strong { @apply text-lg font-semibold text-ink; }
   .week-day[data-today] .week-day-head strong { @apply text-take; }

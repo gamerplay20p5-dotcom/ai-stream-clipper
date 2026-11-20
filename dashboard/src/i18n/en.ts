@@ -1642,6 +1642,17 @@ const en: Record<string, string> = {
   "Por horário": "Per slot",
   "Vídeos por horário (1 a 6)": "Videos per time slot (1 to 6)",
   "Shorts e Reels: 3 ou 4 no mesmo horário de pico alimentam mais o algoritmo. Os envios saem com 1 minuto de intervalo.": "Shorts and Reels: 3 or 4 in the same peak slot feed the algorithm more. Uploads go out 1 minute apart.",
+  "Esse dia já passou: solte o envio em hoje ou num dia futuro.": "That day has passed: drop the post on today or a future day.",
+  "Envio movido.": "Post moved.",
+  "Arraste um envio para outro dia para mudar a data (o horário é mantido). Envios que falharam antes de ir ao ar também podem ser arrastados de volta para a agenda.": "Drag a post to another day to change its date (the time is kept). Posts that failed before going live can also be dragged back onto the schedule.",
+  "Reorganizar automaticamente": "Reorganize automatically",
+  "Procura o que não foi lançado e encaixa nos próximos horários de pico de cada conta, seguindo as regras (vídeos por horário e limite por dia). Os melhores cortes vão primeiro. Nada é enviado agora: os envios seguem a agenda. Sugestões que esperam confirmação não mudam.": "Finds what hasn't been posted and fits it into each account's next peak slots, following the rules (videos per slot and daily limit). The best clips go first. Nothing is uploaded now: uploads follow the schedule. Suggestions waiting for confirmation don't change.",
+  "Nada a reorganizar: a agenda já está em dia.": "Nothing to reorganize: the schedule is up to date.",
+  "Atrasados que vão para o próximo horário": "Late posts moving to the next slot",
+  "Falhas que voltam para a fila": "Failed posts going back to the queue",
+  "Cortes aprovados que ainda não foram agendados": "Approved clips not scheduled yet",
+  "Não dá para reenviar automaticamente": "Can't be resent automatically",
+  "Aplicar {total} mudança(s)": "Apply {total} change(s)",
 };
 
 export default en;
