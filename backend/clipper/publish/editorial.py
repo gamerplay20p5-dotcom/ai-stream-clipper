@@ -161,6 +161,73 @@ def calendar(db: Session, days: int = 14) -> dict:
     return {"timezone": TZ, "items": items, "control": control(db)}
 
 
+STALE_AFTER = timedelta(hours=2)  # later than this, a slot is lost: move to the next free slots
+
+
+def _rule_for(db: Session, p: Publication) -> PublishRule | None:
+    rule = db.get(PublishRule, p.rule_id) if p.rule_id else None
+    if rule is None:
+        rule = db.scalar(select(PublishRule).where(PublishRule.account_id == p.account_id, PublishRule.enabled.is_(True))
+                         .order_by(PublishRule.id))
+    return rule
+
+
+def _move_to_next_slots(db: Session, pubs: list[Publication], now: datetime, user: str, event: str,
+                        dry_run: bool = False) -> list[dict]:
+    """Give each publication the next free slot of its account rule (per_slot and daily limit respected).
+    Best clips first. An account without a rule uses the default slots."""
+    def score(p: Publication) -> float:
+        c = db.get(Clip, p.clip_id) if p.clip_id else None
+        return -(c.editorial_score if c and c.editorial_score is not None else (c.score if c else 0.0))
+
+    moved = []
+    for p in sorted(pubs, key=score):
+        acct = db.get(PublishAccount, p.account_id)
+        if acct is None:
+            continue
+        rule = _rule_for(db, p) or default_rule(acct)
+        before = p.scheduled_at
+        p.scheduled_at = None  # frees its own slot before looking for one
+        db.flush()
+        try:
+            when = service.next_slot(db, acct, rule, now)
+        except PublishRefused:
+            p.scheduled_at = before
+            continue
+        p.scheduled_at = when
+        db.flush()
+        moved.append({"id": p.id, "clip_id": p.clip_id, "platform": p.platform, "title": p.title,
+                      "from": _local(before) if before else None, "to": _local(when)})
+        if not dry_run:
+            service.log_event(p, event, f"{before.isoformat() if before else '-'} -> {when.isoformat()} por {user}")
+    return moved
+
+
+def respread_stale(db: Session, now: datetime | None = None) -> int:
+    """Scheduled publications whose time passed long ago (publisher down, old queue bug) are NOT sent in a
+    burst: they get the next free slots of their rule."""
+    now = now or utcnow()
+    stale = list(db.scalars(select(Publication).where(Publication.status == "scheduled",
+                                                      Publication.scheduled_at.is_not(None),
+                                                      Publication.scheduled_at < now - STALE_AFTER)))
+    return len(_move_to_next_slots(db, stale, now, "sistema", "respread")) if stale else 0
+
+
+def repack(db: Session, account_id: int, user: str, dry_run: bool = True) -> list[dict]:
+    """Bring this account's scheduled (not yet sending) publications forward into the next free slots of
+    its rule, e.g. after raising "videos per slot". Proposals waiting for a human are left alone."""
+    now = utcnow()
+    pubs = list(db.scalars(select(Publication).where(Publication.account_id == account_id,
+                                                     Publication.status == "scheduled",
+                                                     Publication.scheduled_at.is_not(None))))
+    if dry_run:
+        with db.begin_nested() as sp:
+            plan = _move_to_next_slots(db, pubs, now, user, "repack", dry_run=True)
+            sp.rollback()
+        return plan
+    return _move_to_next_slots(db, pubs, now, user, "repack")
+
+
 def reschedule(db: Session, pid: int, when: datetime | None, user: str) -> Publication:
     p = db.get(Publication, pid)
     if p is None:
@@ -168,7 +235,8 @@ def reschedule(db: Session, pid: int, when: datetime | None, user: str) -> Publi
     if p.status not in ("proposed", "scheduled"):
         raise PublishRefused(["só é possível mudar o horário antes do envio começar"])
     if when is not None and when < utcnow() - timedelta(minutes=1):
-        raise PublishRefused(["o horário já passou"])
+        raise PublishRefused(["o horário escolhido já passou: escolha um horário a partir de agora ou use "
+                              "“Enviar agora”"])
     p.scheduled_at = when
     service.log_event(p, "rescheduled", f"{when.isoformat() if when else 'imediato'} por {user}")
     db.flush()

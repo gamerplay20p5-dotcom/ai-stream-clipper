@@ -6,6 +6,14 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.7.3", "date": "2026-11-20", "title": "Envios destravados e vários vídeos por horário", "items": [
+        "Correção: um envio adiado por “intervalo mínimo entre envios” ficava parado para sempre (15 Reels do dia 19). Agora todo adiamento ou mudança de horário volta para a fila.",
+        "O intervalo entre envios passa a contar só envios reais; consultar o status de um Reel não bloqueia mais os próximos.",
+        "Vídeos por horário (1 a 6) em cada regra: 3 ou 4 Shorts/Reels no mesmo horário de pico, com 1 minuto entre eles.",
+        "Envios atrasados mais de 2 horas não saem todos de uma vez: vão para os próximos horários livres da regra.",
+        "Botão “Reorganizar agenda” mostra antes o que muda e traz os envios para os próximos horários livres.",
+        "“Enviar agora” na agenda e mensagens de erro legíveis (antes apareciam em JSON).",
+    ]},
     {"version": "0.7.2", "date": "2026-11-20", "title": "Mais acesso para contas convidadas", "items": [
         "Acesso por streamer: a conta vê todos os cortes aprovados de um streamer, inclusive os aprovados depois; um corte rejeitado sai da biblioteca.",
         "Escolha cortes específicos para uma conta já criada, com miniaturas e filtro por streamer.",
