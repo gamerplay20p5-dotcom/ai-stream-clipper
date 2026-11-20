@@ -12,7 +12,13 @@ O SSH para 201, 206 e 210 deu *timeout* a partir desta máquina. A API pública 
 | Falhas recentes | Job `capture` 17633 com "lease expired (worker 206-capture lost)", e `vision_analyze` com "segment server unreachable" (o servidor de segmentos roda dentro do worker de captura). |
 | `GET /api/diagnostics` | Fila de `capture` com **2 jobs `queued` sem nenhum worker para pegá-los**. |
 
-## 2. Causa raiz: o que está provado e o que falta provar
+## 2. Causa raiz: PROVADA em 2026-11-20 (diagnóstico no 206)
+
+**O worker de captura travou o próprio event loop ao encerrar a captura do SPEED no limite de 12 h** (sessão 14, iniciada em 18/11 às 22:23:54; prazo às 10:23:54). Em `_watch`, `await procs.terminate()` (sem nenhum await interno) seguido de `continue` nunca devolvia o controle ao loop. A saída do ffmpeg nunca era registrada, e a thread principal girou a 100% de CPU por ~15 h. Evidências: [diagnóstico do 206](incidentes/2026-11-20-diagnostico-206.md). Correção no **hotfix.2**: a parada espera os processos de forma assíncrona, e uma sessão retomada depois do prazo termina sem iniciar processos.
+
+O monitor (hotfix.1) **não** era a causa, mas as melhorias continuam valendo. O watchdog do event loop teria reiniciado o worker 5 minutos depois, com a pilha registrada no log.
+
+### Análise anterior ao acesso ao 206
 
 **Provado:**
 - A parada não é de uma plataforma. Twitch e YouTube pararam juntos, no mesmo segundo.

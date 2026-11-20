@@ -80,6 +80,10 @@ class CaptureManager:
 
         while True:
             ctx.check_cancel()
+            if time.time() >= deadline:  # e.g. resumed after an outage: do not start processes just to stop them
+                end_reason = "max_duration"
+                log.info("capture reached the maximum session duration", extra={"session_id": sid})
+                break
             run_id += 1
             elapsed = time.time() - started_at.timestamp()
             if p["platform"] == "file":
@@ -196,8 +200,12 @@ class CaptureManager:
                 except InternalError as exc:
                     log.warning("state poll failed", extra={"err": str(exc)})
             if reason:
+                # Incident 2026-11-19: `terminate()` never yields, and the old `continue` jumped back without any
+                # await, so the event loop never registered the exit of ffmpeg: a 100% CPU spin that froze the whole
+                # worker (heartbeat, monitor, other captures). Waiting here yields and escalates to kill after 15 s.
                 await procs.terminate()
-                continue  # loop once more to register the final segments
+                await procs.wait()
+                continue  # loop once more to register the final segments (now `done` is true)
             if now - last_evict > 15:
                 last_evict = now
                 await self._evict(ctx, sid, covered)
@@ -257,6 +265,7 @@ class _Procs:
                     p.terminate()
                 except ProcessLookupError:
                     pass
+        await asyncio.sleep(0)  # always give the event loop a turn (child exits are registered there)
 
     async def wait(self) -> None:
         for p in (self.ffmpeg, self.streamlink):

@@ -6,6 +6,11 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.6.2-hotfix.2", "date": "2026-11-20", "title": "Fim de captura sem travar o worker", "items": [
+        "Causa do incidente de 19/11: ao atingir o limite de 12 h, a captura parava os processos sem devolver o controle ao worker, que travava inteiro (monitor, heartbeat e outras capturas).",
+        "Agora a parada espera os processos terminarem (e os encerra à força após 15 s) sem bloquear nada.",
+        "Uma captura retomada depois do limite de 12 h é encerrada na hora, sem reiniciar o streamlink/ffmpeg.",
+    ]},
     {"version": "0.6.2-hotfix.1", "date": "2026-11-19", "title": "Monitoramento de lives que não trava", "items": [
         "Cada canal é verificado de forma independente, num processo próprio com tempo limite: um canal travado não para os outros.",
         "O monitoramento é supervisionado e reinicia sozinho se parar de avançar; as capturas em andamento não são interrompidas.",
