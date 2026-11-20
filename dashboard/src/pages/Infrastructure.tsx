@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { api, type Host, type Infra, type ModelInfo } from "../api";
+import { api, type DbStats, type Host, type Infra, type ModelInfo } from "../api";
 import { Disclosure, Empty, ErrorNote, Meter, Notice, PageHeader, Skeleton, Status } from "../components/ui";
 import { ago, bytes, jobLabel } from "../lib/format";
 import { t, tx } from "../i18n";
@@ -35,6 +35,38 @@ function HostMetric({ label, value, percent, warning = false }: {
   );
 }
 
+const days = (s: number) => (s >= 86400 ? t("{n} d", { n: Math.floor(s / 86400) }) : t("{n} h", { n: Math.floor(s / 3600) }));
+
+/** Health of the PostgreSQL the API uses, read from the database itself (no agent on the host). */
+function DatabaseBlock({ d }: { d: DbStats }) {
+  const pct = d.max_connections ? (d.connections_total / d.max_connections) * 100 : null;
+  return (
+    <div className="mt-4 space-y-3 text-xs">
+      <Status tone="success">{t("Banco em uso pela API")}</Status>
+      <dl className="space-y-3">
+        <HostMetric label={t("Conexões")} value={`${d.connections_total} / ${d.max_connections}`} percent={pct} warning={(pct ?? 0) > 80} />
+        <HostMetric label={t("Leituras atendidas pela memória (cache)")} value={d.cache_hit_pct == null ? t("n/d") : `${d.cache_hit_pct}%`}
+          percent={d.cache_hit_pct} warning={(d.cache_hit_pct ?? 100) < 90} />
+        <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+          <dt className="text-ink-muted">{t("Tamanho do banco")}</dt><dd className="text-right">{bytes(d.size_bytes)}</dd>
+          <dt className="text-ink-muted">{t("Resposta da 210 até o banco")}</dt><dd className="text-right">{d.latency_ms} ms</dd>
+          <dt className="text-ink-muted">{t("No ar há")}</dt><dd className="text-right">{days(d.uptime_s)}</dd>
+          <dt className="text-ink-muted">{t("Endereço")}</dt><dd className="text-right font-mono">{d.host}:{d.port}</dd>
+          <dt className="text-ink-muted">{t("Versão")}</dt><dd className="text-right">PostgreSQL {d.version}</dd>
+          <dt className="text-ink-muted">{t("Travamentos (deadlocks)")}</dt><dd className="text-right">{d.deadlocks}</dd>
+        </div>
+      </dl>
+      <Disclosure title={t("Maiores tabelas")}>
+        <ul className="space-y-1">
+          {d.tables.map((x) => <li key={x.name} className="flex justify-between gap-2"><span className="font-mono">{x.name}</span>
+            <span className="text-ink-muted">{bytes(x.bytes)} · {t("{n} linhas", { n: x.rows.toLocaleString() })}</span></li>)}
+        </ul>
+      </Disclosure>
+      <p className="text-ink-muted">{t("CPU e memória da máquina não aparecem aqui: ela é compartilhada com outros projetos e o clipper só lê o próprio banco.")}</p>
+    </div>
+  );
+}
+
 function HostColumn({ h }: { h: Host }) {
   const m = h.metrics;
   const online = h.workers.filter((w) => w.status === "online");
@@ -43,9 +75,10 @@ function HostColumn({ h }: { h: Host }) {
     <section className="panel">
       <div className="panel-heading">
         <h2 className="display text-lg">{h.label}</h2>
+        {h.workers.length === 0 && h.database ? <Status tone="success">{t("Banco de dados")}</Status> : (
         <Status tone={online.length === 0 ? "warning" : online.length === h.workers.length ? "success" : "warning"}>
           {online.length ? `${online.length}/${h.workers.length} online` : t("Sem workers online")}
-        </Status>
+        </Status>)}
       </div>
       <div className="panel-body">
       <p className="text-xs text-ink-muted">{h.hostname} {h.ip && `(${h.ip})`}</p>
@@ -60,9 +93,10 @@ function HostColumn({ h }: { h: Host }) {
               percent={m.gpu_busy_pct ?? null} />
           )}
         </dl>
-      ) : (
+      ) : !h.database && (
         <p className="mt-4 text-sm text-ink-muted">{t("Nenhuma métrica recebida. Os workers desta máquina ainda não foram implantados ou estão desligados.")}</p>
       )}
+      {h.database && <DatabaseBlock d={h.database} />}
       {h.workers.length > 0 && (
         <div className="mt-4"><Disclosure title={h.workers.length + " workers"}>
           <ul className="space-y-3 text-xs">

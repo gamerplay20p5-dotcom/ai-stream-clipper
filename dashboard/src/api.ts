@@ -326,6 +326,14 @@ export type Host = {
   gpu: string | null;
   workers: WorkerInfo[];
   metrics: Record<string, number> | null;
+  database?: DbStats;
+};
+
+export type DbStats = {
+  host: string; port: number; version: string; uptime_s: number; size_bytes: number;
+  connections: Record<string, number>; connections_total: number; max_connections: number;
+  cache_hit_pct: number | null; commits: number; rollbacks: number; deadlocks: number; latency_ms: number;
+  tables: { name: string; bytes: number; rows: number }[];
 };
 
 export type Infra = {

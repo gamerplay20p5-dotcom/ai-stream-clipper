@@ -275,7 +275,7 @@ def test_every_api_route_is_closed_to_an_external_account(app, admin, store):
     Positive control: the same requests as admin never get 403, so the 403 comes from the role."""
     _account("crawler@externo.com")
     u = _login(app, "crawler@externo.com")
-    allow = re.compile(r"^/api/(auth/(login|logout|me|config)|library(/.*)?|publish/oauth/\{platform\}/callback)$")
+    allow = re.compile(r"^/api/(auth/(login|logout|me|config|password|password-link|forgot)|library(/.*)?|publish/oauth/\{platform\}/callback)$")
     spec = app.openapi()
     checked, admin_403 = 0, []
     for path, ops in spec["paths"].items():

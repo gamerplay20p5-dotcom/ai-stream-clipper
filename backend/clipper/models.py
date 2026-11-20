@@ -42,6 +42,19 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class PasswordToken(Base):
+    """Single-use password link (invite or reset). Only the SHA-256 of the token is stored."""
+    __tablename__ = "password_tokens"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    purpose: Mapped[str] = mapped_column(String(16))  # invite | reset
+    created_by: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class Streamer(Base):
     __tablename__ = "streamers"
     __table_args__ = (UniqueConstraint("platform", "channel", name="uq_streamer_platform_channel"),)

@@ -146,6 +146,7 @@ export default function LibraryApp({ email }: { email: string }) {
         <span>{t("AI Stream Clipper by HTS · HowTo.Software")}</span>
         <a href="/privacidade">{t("Privacidade")}</a>
         <a href="/termos">{t("Termos de uso")}</a>
+        <a href="/conta/senha">{t("Trocar senha")}</a>
         <LanguagePicker />
       </footer>
     </div>

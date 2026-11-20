@@ -25,7 +25,42 @@ KNOWN_HOSTS = {
             "role": "Monitoramento, captura, áudio/transcrição, renderização", "gpu": None},
     "210": {"hostname": "2htswebserver", "ip": "192.168.1.210",
             "role": "API, dashboard, orquestração, IA principal (GPU Intel Arc A750)", "gpu": "Intel Arc A750"},
+    "212": {"hostname": "hts-sql", "ip": "192.168.1.212",
+            "role": "Banco de dados PostgreSQL dedicado (máquina compartilhada com outros projetos)", "gpu": None},
 }
+
+
+def database_stats(db: Session) -> dict | None:
+    """Read-only health of the PostgreSQL the API uses (None on SQLite). Never returns credentials."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return None
+    import time as _t
+
+    from sqlalchemy import text
+
+    t0 = _t.perf_counter()
+    db.execute(text("select 1"))
+    latency = (_t.perf_counter() - t0) * 1000
+    q = lambda sql: db.execute(text(sql)).first()  # noqa: E731
+    ver = q("select current_setting('server_version')")[0]
+    up = q("select extract(epoch from now() - pg_postmaster_start_time())")[0]
+    size = q("select pg_database_size(current_database())")[0]
+    conns = {r[0] or "outro": r[1] for r in db.execute(text(
+        "select state, count(*) from pg_stat_activity where datname = current_database() group by 1"))}
+    maxc = int(q("select current_setting('max_connections')")[0])
+    st = q("select blks_hit, blks_read, xact_commit, xact_rollback, deadlocks, temp_bytes from pg_stat_database "
+           "where datname = current_database()")
+    hit = (st[0] / (st[0] + st[1]) * 100) if st and (st[0] + st[1]) else None
+    tables = [{"name": r[0], "bytes": int(r[1]), "rows": int(r[2] or 0)} for r in db.execute(text(
+        "select relname, pg_total_relation_size(relid), n_live_tup from pg_stat_user_tables "
+        "order by 2 desc limit 6"))]
+    url = bind.url
+    return {"host": url.host or "local", "port": url.port or 5432, "version": ver, "uptime_s": int(up or 0),
+            "size_bytes": int(size), "connections": conns, "connections_total": sum(conns.values()),
+            "max_connections": maxc, "cache_hit_pct": round(hit, 2) if hit is not None else None,
+            "commits": int(st[2]) if st else 0, "rollbacks": int(st[3]) if st else 0,
+            "deadlocks": int(st[4]) if st else 0, "latency_ms": round(latency, 2), "tables": tables}
 
 
 @router.get("/stats")
@@ -122,6 +157,13 @@ def infrastructure(db: Session = Depends(get_db), _: CurrentUser = Depends(curre
     avg = {t: {"avg_s": round(sum(v) / len(v), 2), "count": len(v), "max_s": round(max(v), 2)}
            for t, v in timing.items()}
     failures = db.scalars(select(Job).where(Job.status == "dead").order_by(Job.id.desc()).limit(20)).all()
+    try:
+        dbs = database_stats(db)
+    except Exception:  # monitoring must never break the page
+        dbs = None
+    if dbs is not None:
+        label = "212" if dbs["host"] == "192.168.1.212" else "210"
+        hosts[label]["database"] = dbs
     return {
         "hosts": list(hosts.values()),
         "queues": queue.queue_stats(db),

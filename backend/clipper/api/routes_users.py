@@ -15,11 +15,12 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import sharing
+from .. import accounts, sharing
 from ..db import get_db
 from ..models import Clip, ClipShare, Streamer, StreamerGrant, User
 from ..security import hash_password
 from .deps import CurrentUser, audit, require_admin
+from .routes_auth import public_origin
 
 router = APIRouter(tags=["users"])
 EMAIL_RE = r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$"
@@ -69,6 +70,9 @@ def _admins_left(db: Session, excluding: int) -> int:
 class UserIn(BaseModel):
     email: str = Field(..., max_length=255, pattern=EMAIL_RE)
     role: Literal["viewer", "admin"] = "viewer"
+    # how the person gets access: a link to create the password (recommended), the link by e-mail, or an
+    # initial password shown once to the admin (previous behaviour)
+    delivery: Literal["password", "link", "email"] = "password"
 
 
 class UserPatch(BaseModel):
@@ -87,14 +91,97 @@ def create_user(body: UserIn, request: Request, db: Session = Depends(get_db),
     email = sharing.normalize_email(body.email)
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(409, "já existe uma conta com este e-mail")
+    if body.delivery == "email" and not accounts.smtp_ready(db):
+        raise HTTPException(409, "o envio de e-mail não está configurado: use o link ou a senha inicial")
     pw = _initial_password()
     u = User(email=email, password_hash=hash_password(pw), role=body.role, active=True, session_version=0)
     db.add(u)
     db.flush()
-    audit(db, request, admin, "users.create", f"user:{u.id}", {"role": u.role})  # never the password
+    audit(db, request, admin, "users.create", f"user:{u.id}", {"role": u.role, "delivery": body.delivery})
+    if body.delivery == "password":
+        db.commit()
+        return {**_user(db, u), "initial_password": pw,
+                "note": "Entregue esta senha pessoalmente. Ela não é guardada nem enviada por e-mail."}
+    u.password_hash = ""  # nobody knows a password until the person creates one with the link
+    raw = accounts.issue_link(db, u, "invite", admin.email)
+    url = f"{public_origin(request)}/definir-senha?t={raw}"
     db.commit()
-    return {**_user(db, u), "initial_password": pw,
-            "note": "Entregue esta senha pessoalmente. Ela não é guardada nem enviada por e-mail."}
+    sent = _maybe_send(db, u.email, url, "invite", body.delivery == "email")
+    return {**_user(db, u), "setup_url": url, "emailed": sent}
+
+
+def _maybe_send(db: Session, to: str, url: str, purpose: str, wanted: bool) -> bool:
+    if not wanted:
+        return False
+    subject, text = accounts.link_mail(url, purpose)
+    try:
+        accounts.send_mail(db, to, subject, text)
+    except Exception as exc:
+        raise HTTPException(502, f"o link foi criado, mas o e-mail não saiu: {type(exc).__name__}: {exc}"[:300]) from exc
+    return True
+
+
+class LinkIn(BaseModel):
+    send_email: bool = False
+
+
+@router.post("/api/admin/users/{uid}/password-link")
+def password_link(uid: int, body: LinkIn, request: Request, db: Session = Depends(get_db),
+                  admin: CurrentUser = Depends(require_admin)):
+    """Single-use link for the person to create a new password (the current one keeps working until then)."""
+    u = db.get(User, uid)
+    if u is None:
+        raise HTTPException(404, "conta não encontrada")
+    if not u.active:
+        raise HTTPException(409, "a conta está desativada: reative antes de gerar o link")
+    if body.send_email and not accounts.smtp_ready(db):
+        raise HTTPException(409, "o envio de e-mail não está configurado")
+    purpose = "invite" if not u.password_hash else "reset"
+    raw = accounts.issue_link(db, u, purpose, admin.email)
+    url = f"{public_origin(request)}/definir-senha?t={raw}"
+    audit(db, request, admin, "users.password_link", f"user:{uid}", {"purpose": purpose, "email": body.send_email})
+    db.commit()
+    sent = _maybe_send(db, u.email, url, purpose, body.send_email)
+    return {"id": u.id, "email": u.email, "setup_url": url, "emailed": sent, "purpose": purpose,
+            "expires_hours": 72 if purpose == "invite" else 2}
+
+
+class SmtpIn(BaseModel):
+    host: str = Field("", max_length=255)
+    port: int = Field(587, ge=1, le=65535)
+    username: str = Field("", max_length=255)
+    password: str | None = Field(None, max_length=512)  # None keeps the stored one, "" removes it
+    from_addr: str = Field("", max_length=255)
+    security: Literal["starttls", "ssl", "none"] = "starttls"
+
+
+@router.get("/api/admin/smtp")
+def get_smtp(db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
+    return accounts.smtp_public(db)  # the password never leaves the server
+
+
+@router.put("/api/admin/smtp")
+def put_smtp(body: SmtpIn, request: Request, db: Session = Depends(get_db), admin: CurrentUser = Depends(require_admin)):
+    accounts.save_smtp(db, host=body.host, port=body.port, username=body.username, password=body.password,
+                       from_addr=body.from_addr, security=body.security)
+    audit(db, request, admin, "smtp.update", "smtp", {"host": body.host, "password_changed": body.password is not None})
+    db.commit()
+    return accounts.smtp_public(db)
+
+
+class SmtpTestIn(BaseModel):
+    to: str = Field(..., max_length=255, pattern=EMAIL_RE)
+
+
+@router.post("/api/admin/smtp/test")
+def test_smtp(body: SmtpTestIn, db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
+    try:
+        accounts.send_mail(db, body.to, "Teste de e-mail / E-mail test (AI Stream Clipper)",
+                           "Se você recebeu esta mensagem, o envio de e-mail do AI Stream Clipper está funcionando.\n"
+                           "If you got this message, AI Stream Clipper e-mail sending works.\n")
+    except Exception as exc:
+        raise HTTPException(502, f"falhou: {type(exc).__name__}: {exc}"[:300]) from exc
+    return {"ok": True}
 
 
 @router.patch("/api/admin/users/{uid}")
