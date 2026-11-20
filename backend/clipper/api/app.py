@@ -18,7 +18,7 @@ from ..db import get_db, init_engine, session_scope
 from ..migrate import upgrade_db
 from ..models import Clip, StreamSession, User, Worker
 from ..security import hash_password
-from . import routes_refs, routes_speakers
+from . import routes_library, routes_refs, routes_speakers, routes_users
 from . import (routes_admin, routes_auth, routes_clips, routes_director, routes_internal, routes_publish,
                routes_review, routes_storage, routes_streamers)
 
@@ -101,6 +101,8 @@ def create_app(run_maintenance: bool = True) -> FastAPI:
     app.include_router(routes_director.router)
     app.include_router(routes_speakers.router)
     app.include_router(routes_refs.router)
+    app.include_router(routes_users.router)
+    app.include_router(routes_library.router)
     app.include_router(routes_storage.router)
     app.include_router(routes_internal.router)
 

@@ -159,6 +159,10 @@ def reject(cid: int, request: Request, db: Session = Depends(get_db), user: Curr
 @router.delete("/{cid}")
 def delete_clip(cid: int, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
     c = _get(db, cid)
+    from ..sharing import active_shares_of_clip
+
+    if active_shares_of_clip(db, cid):
+        raise HTTPException(409, "este corte está compartilhado com contas: revogue os compartilhamentos antes de excluir")
     db.delete(c)
     audit(db, request, user, "clip.delete", f"clip:{cid}", {"title": c.title})
     db.commit()

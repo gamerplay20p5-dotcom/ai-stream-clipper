@@ -28,13 +28,16 @@ def verify_password(password_hash: str, password: str) -> bool:
         return False
 
 
-def create_user_token(secret: str, email: str, role: str, ttl_minutes: int) -> str:
+def create_user_token(secret: str, email: str, ttl_minutes: int, session_version: int = 0,
+                      user_id: int | None = None) -> str:
+    """Session token. It identifies the account only: privileges (role, active, shares) are ALWAYS
+    read from the database on each request, and ``sv`` must match ``users.session_version``."""
     now = int(time.time())
-    return jwt.encode(
-        {"sub": email, "role": role, "iat": now, "exp": now + ttl_minutes * 60, "jti": secrets.token_hex(8)},
-        secret,
-        algorithm="HS256",
-    )
+    claims = {"sub": email, "sv": int(session_version), "iat": now, "exp": now + ttl_minutes * 60,
+              "jti": secrets.token_hex(8)}
+    if user_id is not None:
+        claims["uid"] = int(user_id)
+    return jwt.encode(claims, secret, algorithm="HS256")
 
 
 def decode_user_token(secret: str, token: str) -> dict | None:

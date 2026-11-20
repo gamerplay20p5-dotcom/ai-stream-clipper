@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,8 +31,13 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), default="")
-    role: Mapped[str] = mapped_column(String(20), default="admin")  # admin | viewer
+    # admin = HTS staff (whole panel); viewer = external account (ONLY the clips shared with it).
+    # Never admin by default: an account is admin only when someone sets it explicitly.
+    role: Mapped[str] = mapped_column(String(20), default="viewer")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # bumped on deactivation, role change, password reset or "end sessions": every token issued
+    # before stops working on the next request (tokens carry the version, the DB has the truth)
+    session_version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -576,6 +582,43 @@ class EditComparison(Base):
     reviewer: Mapped[str] = mapped_column(String(255), default="")
     note: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Multi-user (HTS SaaS, stage 1): clips the admin shares with specific accounts
+# ---------------------------------------------------------------------------
+
+
+class ClipShare(Base):
+    """One clip made available to one account. History is kept: revoking sets ``revoked_at``
+    (at most ONE active share per clip+user, enforced by a partial unique index)."""
+
+    __tablename__ = "clip_shares"
+    __table_args__ = (
+        Index("uq_clip_shares_active", "clip_id", "user_id", unique=True,
+              postgresql_where=text("revoked_at IS NULL"), sqlite_where=text("revoked_at IS NULL")),
+        Index("ix_clip_shares_user_active", "user_id", "revoked_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    clip_id: Mapped[int] = mapped_column(ForeignKey("clips.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    can_view: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_download: Mapped[bool] = mapped_column(Boolean, default=False)
+    can_variants: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # immutable media snapshot: the exact file the admin approved for this account. A later re-edit,
+    # re-render or promoted variant never changes what is shared (unless follow_latest is chosen).
+    video_path: Mapped[str] = mapped_column(String(512), default="")
+    video_sha256: Mapped[str] = mapped_column(String(64), default="")
+    video_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    thumb_path: Mapped[str] = mapped_column(String(512), default="")
+    clip_version: Mapped[int] = mapped_column(Integer, default=0)
+    variants: Mapped[dict] = mapped_column(JSON, default=dict)  # {name: {video_path, sha256, label}}
+    follow_latest: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 # ---------------------------------------------------------------------------
