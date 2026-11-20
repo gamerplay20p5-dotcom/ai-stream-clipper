@@ -439,6 +439,7 @@ class PublishRule(Base):
     allow_public_auto: Mapped[bool] = mapped_column(Boolean, default=False)  # explicit admin opt-in
     max_per_day: Mapped[int] = mapped_column(Integer, default=3)
     slots: Mapped[list] = mapped_column(JSON, default=list)  # ["12:00", "18:30"] local time
+    per_slot: Mapped[int] = mapped_column(Integer, default=1, server_default="1")  # videos sharing one slot
     timezone: Mapped[str] = mapped_column(String(64), default="America/Sao_Paulo")
     templates: Mapped[dict] = mapped_column(JSON, default=dict)  # title/description/hashtags per platform
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

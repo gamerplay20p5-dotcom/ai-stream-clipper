@@ -1,4 +1,4 @@
-# Fase 7: escola editorial / Phase 7: editorial school (v0.7.3)
+# Fase 7: escola editorial / Phase 7: editorial school (v0.7.4)
 
 **PT.** Esta fase transforma critérios de um editor profissional de vídeos curtos em verificações medíveis e
 explicáveis, aplicadas a cada corte depois do Diretor IA. Código: `backend/clipper/ai/playbook.py`.

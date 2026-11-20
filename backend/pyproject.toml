@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-stream-clipper"
-version = "0.7.3"
+version = "0.7.4"
 description = "AI Stream Clipper - live stream monitoring, moment detection and automatic vertical clip rendering"
 requires-python = ">=3.12"
 dependencies = [
