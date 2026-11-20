@@ -31,6 +31,8 @@ class LoopWatchdog:
 
     The heartbeat is a task of that same loop, so a blocked loop silences the heartbeat, the job claims, the lease
     renewals and the monitor at once: the worker looks "lost" but its container stays up and is never restarted.
+    It is armed only by the first tick, i.e. once a loop task is feeding it; it never measures time before that
+    (a slow or failing registration is a healthy await, not a blocked loop).
     After `stall_s` without a tick the watchdog dumps every thread's stack to stderr (the evidence for the logs)
     and exits the process with code 70, so the container restart policy brings a clean worker back. In-flight jobs
     are recovered by lease expiry, exactly like a crash. `stall_s <= 0` disables it.
@@ -40,7 +42,7 @@ class LoopWatchdog:
         self.stall_s = stall_s
         self.exit_fn = exit_fn or os._exit
         self.check_every_s = check_every_s
-        self.last_tick = time.monotonic()
+        self.last_tick: float | None = None  # None = not armed yet
         self.fired = False
         self._halt = threading.Event()
         self._thread: threading.Thread | None = None
@@ -50,7 +52,7 @@ class LoopWatchdog:
 
     def check(self) -> bool:
         """True when the loop is considered stuck (and the exit was triggered)."""
-        if self.stall_s <= 0 or self.fired:
+        if self.stall_s <= 0 or self.fired or self.last_tick is None or self._halt.is_set():
             return False
         blocked = time.monotonic() - self.last_tick
         if blocked < self.stall_s:
@@ -78,7 +80,7 @@ class LoopWatchdog:
         self._thread.start()
 
     def stop(self) -> None:
-        self._halt.set()
+        self._halt.set()  # disarmed: shutdown waits are never reported as a blocked loop
 
 
 def enable_stack_dumps() -> None:
@@ -268,16 +270,28 @@ class WorkerRuntime:
         except InternalError:
             log.warning("could not report failure; lease expiry will recover", extra={"job_id": ctx.id})
 
-    async def _tick_loop(self) -> None:
+    async def _tick_loop(self, every_s: float = 2.0) -> None:
         while True:
             self.watchdog.tick()
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(every_s)
 
     async def run(self) -> None:
         enable_stack_dumps()
+        # The tick task exists BEFORE the watchdog starts and keeps ticking during registration, so any await
+        # (API down for minutes, retries with backoff) is seen as a live loop. Only a loop that stops running
+        # the tick task (a real block) can trigger the exit.
+        stall = self.watchdog.stall_s
+        ticker = asyncio.create_task(self._tick_loop(min(2.0, max(0.02, stall / 5)) if stall > 0 else 2.0))
+        await asyncio.sleep(0)  # let the first tick arm the watchdog
         self.watchdog.start()
-        await self.register()
-        bg = [asyncio.create_task(self._tick_loop()), asyncio.create_task(self._heartbeat_loop())]
+        try:
+            await self.register()
+        except BaseException:
+            self.watchdog.stop()
+            ticker.cancel()
+            await asyncio.gather(ticker, return_exceptions=True)
+            raise
+        bg = [ticker, asyncio.create_task(self._heartbeat_loop())]
         bg += [asyncio.create_task(fn(self)) for fn in self.background]
         loops = [asyncio.create_task(self._claim_loop(s)) for s in self.specs]
         try:
@@ -290,10 +304,10 @@ class WorkerRuntime:
             for t in jobs:  # in-flight jobs report "worker shutting down" -> re-queued at once
                 t.cancel()
             await asyncio.gather(*jobs, return_exceptions=True)
+            self.watchdog.stop()
             for t in bg:
                 t.cancel()
             await asyncio.gather(*bg, return_exceptions=True)
-            self.watchdog.stop()
             await self.client.aclose()
 
     def stop(self) -> None:

@@ -43,7 +43,7 @@ Se o contêiner estiver em execução mas *unhealthy*, o caso é o 1. Se os logs
 | Concorrência configurável | `ASC_MONITOR_CONCURRENCY` (4) |
 | Rede, DNS, Streamlink e plataformas | Exceções e travamentos viram erro reportado **por canal**. A falha de um canal não afeta os outros. |
 | Supervisão e recuperação | `run_supervised` reinicia o loop se ele cair ou ficar `ASC_MONITOR_STALL_S` (600 s) sem tentar consultar, cancelando e encerrando as probes em andamento. As capturas não são tocadas. |
-| Worker inteiro travado (o caso observado) | `LoopWatchdog` em uma thread comum, fora do event loop. Se o loop ficar `ASC_LOOP_STALL_EXIT_S` (300 s) sem rodar, ele grava a pilha de todas as threads no stderr e encerra o processo com código 70. O `restart: unless-stopped` sobe um worker limpo, e os jobs voltam pela expiração do *lease*, como depois de um crash. `kill -USR1` grava a pilha sem parar o worker. |
+| Worker inteiro travado (o caso observado) | `LoopWatchdog` em uma thread comum, fora do event loop. Ele só passa a contar depois do primeiro tique de uma tarefa do loop, que roda inclusive durante o registro. Por isso a API fora do ar, mesmo por muito tempo, não é confundida com travamento. Se o loop ficar `ASC_LOOP_STALL_EXIT_S` (300 s) sem rodar, ele grava a pilha de todas as threads no stderr e encerra o processo com código 70. O `restart: unless-stopped` sobe um worker limpo, e os jobs voltam pela expiração do *lease*, como depois de um crash. `kill -USR1` grava a pilha sem parar o worker. |
 | Métricas | O heartbeat passa a levar `monitor`: última consulta, última consulta com sucesso, último relatório, probes em andamento, timeouts, falhas e reinícios. |
 | Atraso visível mesmo com heartbeat saudável | `GET /api/streamers` ganha `monitor.state` (`live`, `offline`, `checking`, `stale`, `error`, `paused`) e a idade da última verificação. A tela de Streamers mostra "Monitoramento atrasado" com o texto pedido e um alerta no topo. O último resultado conhecido aparece separado. |
 | "Verificar agora" com retorno real | Mostra "solicitada, aguardando o monitor", "concluída: …" (só quando o monitor de fato reportou), "falhou" ou "solicitada há N s e ainda não executada". |
@@ -52,7 +52,7 @@ Se o contêiner estiver em execução mas *unhealthy*, o caso é o 1. Se os logs
 
 Não há migração nem mudança de esquema. O contrato da API só **ganha** campos.
 
-## 4. Testes (`tests/test_monitor_hotfix.py`, 18)
+## 4. Testes (`tests/test_monitor_hotfix.py`, 22, e `dashboard/scripts/check_streamers_ui.py`, 5 cenários)
 
 - **Probes e processos:**
   - probe bloqueada para sempre é encerrada no prazo;
@@ -68,6 +68,15 @@ Não há migração nem mudança de esquema. O contrato da API só **ganha** cam
   - supervisor reinicia um monitor sem progresso e **preserva a captura ativa**;
   - monitor com erro continua consultando;
   - event loop travado leva a uma saída controlada (código 70, uma vez só).
+- **Watchdog no runtime real:**
+  - registro indisponível por mais de 3 vezes o limite **não** encerra o processo (o teste falha com a ordem antiga);
+  - um bloqueio real do event loop é detectado (código 70);
+  - o watchdog não conta antes do primeiro tique nem durante o desligamento.
+- **"Verificar agora":**
+  - a API devolve o horário em que aceitou o pedido;
+  - na tela (com a API simulada no navegador), o pedido recusado mostra a falha;
+  - um pedido aceito e não executado, ou um resultado anterior ao aceite, **nunca** aparece como concluído;
+  - um resultado registrado depois do aceite conclui o pedido.
 - **Painel e recuperação:**
   - estado antigo sinalizado como atrasado, mesmo se o último resultado era "ao vivo";
   - solicitação manual não processada fica visível;
@@ -86,22 +95,74 @@ Suíte completa: 314 passaram e 3 foram pulados (modelos reais de IA ausentes ne
 
 ## 6. Procedimento seguro para produção (só com autorização)
 
-1. **Diagnóstico** (seção 2): `asc-ctl status` e `asc-ctl logs worker-capture` no 206. Guardar o log, que é a evidência da causa.
-2. **Mitigação imediata, se autorizada:** `sudo -n asc-ctl compose restart worker-capture` no 206 (só o contêiner `asc-worker-capture` do projeto `asc`). Nada do Hank é tocado, e nenhum comando global do Docker é usado.
-3. **Hotfix:**
-   - build da imagem `0.6.2-hotfix.1` no 206;
+**Pré-condição:** acesso pelos caminhos autorizados (SSH com a chave `asc` e `sudo -n asc-ctl`). **Se o SSH continuar indisponível, nada é feito remotamente por caminhos improvisados** (painel, túnel, API ou outra máquina). O procedimento espera o acesso voltar.
+
+### 6.1 Diagnóstico somente leitura no 206 (antes de qualquer reinício)
+
+```
+sudo -n asc-ctl status                       # asc-worker-capture: Up / Up (unhealthy) / Restarting / Exited (código)
+sudo -n asc-ctl compose ps worker-capture    # estado e saúde do serviço
+sudo -n asc-ctl compose logs worker-capture  # últimas linhas: o que aconteceu antes de parar
+```
+
+Guardar a saída: é a evidência da causa original. Como interpretar:
+- `Up (unhealthy)` com logs que param de repente → event loop travado;
+- `Exited (137)` → falta de memória (limite de 3 GB);
+- `Restarting` → falha ao iniciar.
+
+### 6.2 O que precisa ser atualizado (e o que não)
+
+| Servidor | Serviço | Atualizar? | Motivo |
+|---|---|---|---|
+| 206 | `worker-capture` | **sim** | monitor novo, watchdog e probe isolada |
+| 210 | `api` | **sim** | `monitor.state` em `/api/streamers` e a tela de Streamers (o painel vem na imagem da API) |
+| 206 | `worker-audio`, `worker-render` | não | código sem mudança relevante |
+| 210 | `worker-scoring`, `worker-publisher`, `worker-vision`, `postgres`, `tunnel` | não | o publisher não é recriado: as publicações agendadas seguem com o processo atual |
+| 201 | `worker-vision` | não | sem mudança |
+
+**Cuidado com o `set-tag`.** `asc-ctl set-tag` (no 210, `env-install` do `asc.env`) grava **uma** `ASC_IMAGE_TAG` usada por **todos** os serviços do servidor, inclusive `ai-stream-clipper-vision` no 210. Por isso:
+- o `compose up` é sempre feito **com o nome do serviço**: `asc-ctl compose up worker-capture` recria só aquele contêiner. Os outros continuam com a imagem 0.6.2 até um `compose up` futuro;
+- **as duas imagens com a tag nova são geradas antes** (`app` e `vision`), mesmo sem iniciar a visão agora. Assim, um `compose up` completo acidental ou futuro não falha por imagem ausente (o `up` usa `--no-build`);
+- **não** se usa `compose up` sem nomes de serviço nesta implantação.
+
+### 6.3 Passos
+
+1. **Código e imagens.** O pacote do código é a tag do hotfix, gerada com `git archive`, como nos deploys anteriores. No 206:
+   - `asc-ctl build app 0.6.2-hotfix.1` e `asc-ctl build vision 0.6.2-hotfix.1`;
+   - `image-save` dos dois e `asc-send` para o 210 (e, se quiser manter a tag consistente, a de visão também para o 201);
+   - no 210, `image-load` dos dois.
+2. **Conferir as imagens antes de iniciar qualquer serviço.** `asc-ctl images` no 206 e no 210 deve listar `ai-stream-clipper:0.6.2-hotfix.1` e `ai-stream-clipper-vision:0.6.2-hotfix.1`. Se faltar alguma, parar aqui.
+3. **206, primeiro, porque restaura a detecção:**
    - `asc-ctl set-tag 0.6.2-hotfix.1`;
-   - `compose up` dos serviços do ASC.
+   - `asc-ctl compose up worker-capture`.
 
-   Não há migração de banco, então não é preciso backup antes deste passo; mesmo assim, o backup diário deve estar válido.
-4. **Verificação:**
-   - `206-capture` online;
-   - `GET /api/streamers` com `monitor.state` diferente de `stale` em até 2 minutos;
-   - métricas `monitor.last_report_ok_at` avançando;
+   Conferir:
+   - `compose ps worker-capture` com `healthy`;
+   - no painel, `206-capture` online;
+   - em `GET /api/streamers` (API ainda 0.6.2), `last_checked_at` avançando em todos os canais habilitados em até 2 minutos.
+4. **210:**
+   - escolher um momento **sem publicação agendada nos 15 minutos seguintes** (ver a agenda), porque a API fica alguns segundos fora durante a troca;
+   - atualizar a tag no `asc.env` e rodar `asc-ctl env-install`;
+   - `asc-ctl compose up api`. O Postgres não é recriado: a configuração dele não muda e ele só é conferido como dependência.
+
+   A API roda `alembic upgrade head` ao iniciar; **não há migração** (fica em 0010). Conferir:
+   - `/healthz` com versão `0.6.2-hotfix.1`;
+   - `monitor.state` presente;
+   - a tela de Streamers sem "atrasado" para os canais recém-verificados;
+   - as publicações agendadas iguais às de antes (comparar id, horário, privacidade e conta).
+5. **Acompanhar por 30 minutos:**
+   - métricas `monitor.last_report_ok_at` avançando no heartbeat do `206-capture`;
+   - nenhum `stalled`;
    - "Verificar agora" concluindo.
-5. **Rollback:** `asc-ctl set-tag 0.6.2` e `compose up`. Não há esquema novo.
 
-Nenhuma publicação, agendamento, OAuth ou serviço do Hank é alterado.
+### 6.4 Rollback (por serviço, sem migração)
+
+- **206:** `asc-ctl set-tag 0.6.2` e `asc-ctl compose up worker-capture`.
+- **210:** tag 0.6.2 no `asc.env`, `env-install` e `asc-ctl compose up api`.
+
+A API 0.6.2 ignora os campos novos, e o worker 0.6.2 funciona com a API do hotfix (os contratos internos não mudaram).
+
+Nenhuma publicação, agendamento, OAuth ou serviço do Hank é alterado. Nenhum comando global do Docker é usado.
 
 ## EN summary
 

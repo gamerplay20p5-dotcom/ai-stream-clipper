@@ -75,23 +75,24 @@ function StreamerRow({ s }: { s: Streamer }) {
   const [testing, setTesting] = useState(false);
   const refresh = () => qc.invalidateQueries({ queryKey: ["streamers"] });
   const patch = useMutation({ mutationFn: (b: object) => api.patch(`/api/streamers/${s.id}`, b), onSuccess: refresh });
-  const [requestedAt, setRequestedAt] = useState<number | null>(null);
-  const [baseline, setBaseline] = useState<string | null>(null);  // last check BEFORE the request (server clock only)
+  // Manual check: "sent" -> "accepted" (server time) -> "done" only when a result is recorded after acceptance.
+  const [clickedAt, setClickedAt] = useState<number | null>(null);
   const check = useMutation({
-    mutationFn: () => api.post(`/api/streamers/${s.id}/check`),
-    onMutate: () => setBaseline(s.last_checked_at),
-    onSuccess: () => { setRequestedAt(Date.now()); refresh(); },
+    mutationFn: () => api.post<{ ok: boolean; requested_at?: string }>(`/api/streamers/${s.id}/check`),
+    onMutate: () => setClickedAt(Date.now()),  // the attempt is shown even if the request is refused
+    onSuccess: refresh,
   });
-  // Done only when the monitor really reported: a new last_checked_at and the request flag cleared.
-  const done = requestedAt !== null && s.last_checked_at !== baseline && !s.monitor?.check_requested;
-  const waiting = requestedAt !== null && !done;
-  useEffect(() => {  // poll while a manual check is pending; give up after 3 minutes
+  const acceptedAt = check.data?.requested_at ? Date.parse(check.data.requested_at) : null;
+  const checkedAt = s.last_checked_at ? Date.parse(s.last_checked_at) : null;
+  const done = check.isSuccess && acceptedAt !== null && checkedAt !== null && checkedAt >= acceptedAt && !s.monitor?.check_requested;
+  const waiting = check.isSuccess && !done;
+  useEffect(() => {  // poll while an accepted check is pending; give up after 3 minutes
     if (!waiting) return;
     const t = setInterval(refresh, 3000);
     const stopAt = setTimeout(() => clearInterval(t), 180_000);
     return () => { clearInterval(t); clearTimeout(stopAt); };
   }, [waiting]);
-  const pendingFor = requestedAt ? Math.round((Date.now() - requestedAt) / 1000) : 0;
+  const pendingFor = clickedAt ? Math.round((Date.now() - clickedAt) / 1000) : 0;
   const del = useMutation({ mutationFn: () => api.del(`/api/streamers/${s.id}`), onSuccess: refresh });
   const stop = useMutation({ mutationFn: (sid: number) => api.post(`/api/sessions/${sid}/stop`), onSuccess: refresh });
   const detail = useQuery({ queryKey: ["streamer", s.id], queryFn: () => api.get<Streamer>(`/api/streamers/${s.id}`), enabled: open });
@@ -120,7 +121,7 @@ function StreamerRow({ s }: { s: Streamer }) {
         </label>
         <div className="flex gap-1">
           <button className="btn-quiet p-2" title="Gerar corte de teste" aria-label="Gerar corte de teste" onClick={() => setTesting(!testing)}><FlaskConical className="h-4 w-4" /></button>
-          <button className="btn-quiet p-2" title="Verificar agora" aria-label="Verificar agora" onClick={() => check.mutate()}><RefreshCw className="h-4 w-4" /></button>
+          <button className="btn-quiet p-2" title="Verificar agora" aria-label="Verificar agora" disabled={check.isPending} onClick={() => check.mutate()}><RefreshCw className="h-4 w-4" /></button>
           {live && (
             <button className="btn-quiet p-2" title="Parar a captura desta transmissão" aria-label="Parar captura"
               onClick={() => stop.mutate(s.live_session!.id)}><Square className="h-4 w-4" /></button>
@@ -137,9 +138,10 @@ function StreamerRow({ s }: { s: Streamer }) {
           {s.status === "live" || live ? " (o último resultado conhecido era ao vivo)" : ""}.
         </p>
       )}
-      {requestedAt !== null && (
+      {clickedAt !== null && (
         <p className="mt-2 text-xs" role="status">
-          {check.isError ? <span className="text-tally">A solicitação de verificação falhou.</span>
+          {check.isPending ? <span className="text-ink-muted">Enviando a solicitação…</span>
+            : check.isError ? <span className="text-tally">A solicitação não foi aceita ({check.error instanceof Error ? check.error.message : "erro"}). Nenhuma verificação foi feita.</span>
             : done ? <span className="text-ok">Verificação concluída: {s.status === "error" ? "erro na verificação" : live || s.status === "live" ? "ao vivo" : "offline"}.</span>
             : pendingFor < 90 ? <span className="text-ink-muted">Verificação solicitada, aguardando o monitor…</span>
             : <span className="text-[#F2B33D]">Solicitada há {pendingFor} s e ainda não executada. O monitoramento pode estar parado.</span>}

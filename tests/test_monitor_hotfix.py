@@ -309,3 +309,95 @@ def test_settings_defaults_are_bounded():
     s = Settings()
     assert 0 < s.monitor_probe_timeout_s < s.monitor_stall_s and s.monitor_concurrency >= 1
     assert s.loop_stall_exit_s > s.monitor_probe_timeout_s  # a slow probe never looks like a blocked loop
+
+
+# ---------------------------------------------------------------- watchdog inside the real runtime
+class RegistryAPI:
+    """Internal API double for WorkerRuntime: registration can be down for a while."""
+
+    def __init__(self, down_for_s: float):
+        self.up_at = time.monotonic() + down_for_s
+        self.registered = False
+
+    async def post(self, path, body=None, **params):
+        if path == "/internal/workers/register":
+            if time.monotonic() < self.up_at:
+                raise InternalError(0, "connection refused")
+            self.registered = True
+        return {}
+
+    async def get(self, path, **params):
+        return []
+
+    async def aclose(self):
+        return None
+
+
+def _runtime(tmp_path, api, stall_s: float, exits: list):
+    from clipper.config import Settings
+    from clipper.workers.runtime import WorkerRuntime
+
+    rt = WorkerRuntime(Settings(loop_stall_exit_s=stall_s, work_dir=tmp_path, worker_id="wd-test"), ["monitor"], [])
+    rt.client = api
+    rt.watchdog = LoopWatchdog(stall_s, exit_fn=exits.append, check_every_s=0.05)
+    return rt
+
+
+def test_registration_down_longer_than_the_limit_does_not_exit(tmp_path):
+    """API unavailable for 3x the stall limit: awaiting it is a healthy loop, never a reason to exit."""
+    exits: list[int] = []
+    api = RegistryAPI(down_for_s=10)  # never comes back during the test
+
+    async def scenario():
+        rt = _runtime(tmp_path, api, stall_s=0.5, exits=exits)
+        task = asyncio.create_task(rt.run())
+        await asyncio.sleep(1.6)  # > 3x stall_s while register() keeps failing and backing off
+        rt.stop()
+        await asyncio.wait_for(task, timeout=10)
+
+    asyncio.run(scenario())
+    assert not api.registered and exits == []
+
+
+def test_real_event_loop_block_is_detected_by_the_runtime(tmp_path):
+    exits: list[int] = []
+    api = RegistryAPI(down_for_s=0)
+
+    async def scenario():
+        rt = _runtime(tmp_path, api, stall_s=0.5, exits=exits)
+        task = asyncio.create_task(rt.run())
+        await asyncio.sleep(0.3)
+        assert api.registered and exits == []
+        time.sleep(1.2)  # blocking call inside the loop: nothing else can run
+        await asyncio.sleep(0.2)
+        rt.stop()
+        await asyncio.wait_for(task, timeout=10)
+
+    asyncio.run(scenario())
+    assert exits == [70]
+
+
+def test_watchdog_is_not_armed_before_the_first_tick():
+    exits: list[int] = []
+    dog = LoopWatchdog(stall_s=0.01, exit_fn=exits.append)
+    time.sleep(0.05)
+    assert dog.check() is False and exits == []  # no tick yet: nothing to measure
+    dog.tick()
+    dog.stop()
+    dog.last_tick -= 1
+    assert dog.check() is False and exits == []  # stopped (shutdown): disarmed
+
+
+def test_check_now_returns_the_server_acceptance_time(admin, client):
+    r = admin.post("/api/streamers", json={"url": "file://gameplay_event.mp4"}, headers=CSRF)
+    sid = r.json()["id"]
+    try:
+        body = admin.post(f"/api/streamers/{sid}/check", headers=CSRF).json()
+        assert body["ok"] is True and body["check_requested"] is True and body["requested_at"].endswith("Z")
+        s = next(x for x in admin.get("/api/streamers").json() if x["id"] == sid)
+        assert s["monitor"]["check_requested"] is True  # accepted, not executed yet: never "done"
+        _signed(client, "POST", "/internal/monitor/report", {"streamer_id": sid, "live": False})
+        s = next(x for x in admin.get("/api/streamers").json() if x["id"] == sid)
+        assert s["last_checked_at"] >= body["requested_at"] and s["monitor"]["check_requested"] is False
+    finally:
+        admin.delete(f"/api/streamers/{sid}", headers=CSRF)
