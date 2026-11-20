@@ -67,9 +67,9 @@
 .plan-features { display: grid; gap: 11px; margin-bottom: var(--space-6); }
 .plan-features li { display: grid; grid-template-columns: 18px 1fr; gap: 10px; align-items: start; color: var(--text-soft); font-size: .94rem; }
 .plan-features svg { margin-top: 3px; color: var(--coral); }
-.plan-card .button { margin-top: auto; width: 100%; }
+.plan-card .button { margin-top: auto; width: 100%; font-size: 1.1875rem; font-weight: 700; }
 .plan-creator { border-color: var(--coral); background: linear-gradient(180deg, rgb(255 79 98 / 12%), var(--surface) 34%, #10121a); box-shadow: var(--glow-coral), inset 0 0 0 1px rgb(255 79 98 / 35%); }
-.plan-badge { position: absolute; top: 0; left: 50%; display: inline-flex; align-items: center; gap: 5px; translate: -50% -50%; padding: 5px 12px; border-radius: 999px; background: var(--action); color: var(--on-action); font-size: .74rem; font-weight: 700; white-space: nowrap; }
+.plan-badge { position: absolute; top: 0; left: 50%; display: inline-flex; align-items: center; gap: 5px; translate: -50% -50%; padding: 5px 12px; border-radius: 999px; background: var(--action); color: var(--on-action-small); font-size: .74rem; font-weight: 700; white-space: nowrap; }
 .plan-pro { border-color: rgb(118 64 200 / 60%); background: linear-gradient(180deg, rgb(118 64 200 / 20%), var(--surface) 38%, #10121a); }
 .plan-pro h3 svg { color: var(--coral); }
 .pricing-notes { display: grid; gap: 6px; margin-top: var(--space-5); color: var(--muted); font-size: .86rem; }
@@ -125,7 +125,7 @@
 .form-note { color: var(--muted); font-size: .84rem; }
 .consent { display: grid; grid-template-columns: 22px 1fr; gap: 12px; align-items: start; font-size: .92rem; }
 .consent input { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--action); }
-.waitlist-form .button { width: 100%; min-height: 54px; font-size: 1rem; }
+.waitlist-form .button { width: 100%; min-height: 54px; }
 .form-spinner { animation: spin 900ms linear infinite; }
 @keyframes spin { to { rotate: 360deg; } }
 .form-feedback:not(:empty) { margin-top: 14px; }
@@ -135,7 +135,7 @@
 .waitlist-confirmation h3 { font-size: var(--step-2); }
 .waitlist-confirmation h3:focus { outline: none; }
 .waitlist-confirmation p { color: var(--muted); }
-.confirm-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; background: var(--action); color: var(--on-action); }
+.confirm-icon { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; background: var(--action); color: var(--on-action-small); }
 
 @media (max-width: 1000px) {
   .feature-signals, .feature-framing, .feature-library, .feature-export { grid-column: 1 / -1; }

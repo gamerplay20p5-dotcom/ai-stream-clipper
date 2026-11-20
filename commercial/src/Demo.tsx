@@ -5,7 +5,7 @@ import type { Editorial } from './editorial'
 import { Waveform } from './Waveform'
 
 const stepIcons = [Radio, ScanSearch, Scissors, Clapperboard]
-const momentImages = { live: '/media/live-wide-small.webp', ramp: '/media/moment-ramp.webp', turn: '/media/moment-turn.webp' } as const
+const momentImages = { live: '/media/live-wide-small.webp', chase: '/media/moment-chase.webp', palms: '/media/moment-palms.webp' } as const
 // Where each detected moment sits on the illustrative timeline (fractions of the width).
 const momentRanges: [number, number][] = [[0.52, 0.7], [0.3, 0.44], [0.08, 0.2]]
 const cropPositions = [22, 50, 78]

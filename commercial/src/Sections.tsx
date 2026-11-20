@@ -37,9 +37,9 @@ export function Features({ t }: { t: Editorial }) {
 
           <article className="feature feature-framing">
             <figure className="framing-pair" role="img" aria-label={framing.alt}>
-              <span className="framing-source"><img src="/media/moment-turn.webp" width="640" height="360" alt="" loading="lazy" /><i /></span>
+              <span className="framing-source"><img src="/media/moment-palms.webp" width="640" height="360" alt="" loading="lazy" /><i /></span>
               <ArrowRight size={18} aria-hidden="true" />
-              <span className="framing-output"><img src="/media/short-turn.webp" width="450" height="800" alt="" loading="lazy" /><b>{framing.caption}</b></span>
+              <span className="framing-output"><img src="/media/short-palms.webp" width="450" height="800" alt="" loading="lazy" /><b>{framing.caption}</b></span>
             </figure>
             <div className="feature-copy"><h3>{framing.title}</h3><p>{framing.detail}</p></div>
           </article>

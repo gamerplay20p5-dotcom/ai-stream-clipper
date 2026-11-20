@@ -6,7 +6,7 @@
   linear-gradient(180deg, rgb(9 11 16 / 10%) 0%, transparent 46%, rgb(9 11 16 / 55%) 66%, rgb(9 11 16 / 92%) 84%, var(--bg) 100%); }
 .hero::after { content: ''; position: absolute; z-index: -1; right: 4%; top: 18%; width: 46%; height: 60%; border-radius: 50%; background: var(--violet); opacity: .22; filter: blur(90px); pointer-events: none; }
 
-.hero-grid { display: grid; grid-template-columns: minmax(0, .82fr) minmax(0, 1.18fr); align-items: center; gap: clamp(32px, 4vw, 64px); padding-block: clamp(28px, 3vw, 48px) clamp(28px, 2.6vw, 40px); }
+.hero-grid { display: grid; grid-template-columns: minmax(0, .86fr) minmax(0, 1.14fr); align-items: center; gap: clamp(32px, 4vw, 64px); padding-block: clamp(28px, 3vw, 48px) clamp(28px, 2.6vw, 40px); }
 .hero-status { display: inline-flex; align-items: center; gap: var(--space-2); padding: 6px 14px; border: 1px solid rgb(255 255 255 / 14%); border-radius: 999px; background: rgb(21 23 34 / 72%); color: var(--text-soft); font-size: var(--step--1); font-weight: 600; }
 .hero-status svg { color: var(--coral); }
 .hero-copy { position: relative; z-index: 1; }
@@ -15,7 +15,8 @@
 .hero h1 span { display: block; color: var(--coral); }
 .hero-lede { max-width: 46ch; margin-top: var(--space-5); color: var(--text-soft); font-size: var(--step-1); line-height: 1.6; }
 .hero-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-6); }
-.hero-actions .button { min-height: 54px; padding-inline: 24px; font-size: 1rem; }
+.hero-actions .button { min-height: 54px; padding-inline: 20px; }
+.hero-actions .button.ghost { font-size: 1rem; font-weight: 650; }
 
 /* Product preview (illustrative, aria-hidden inside a labelled figure) */
 .hero-product { position: relative; padding: 5% 22% 0 0; }
@@ -28,7 +29,7 @@
 .device-main { display: grid; gap: 8px; min-width: 0; }
 .device-bar { display: flex; align-items: center; gap: 8px; }
 .device-title { flex: 1; color: var(--text-soft); font-weight: 600; }
-.live-badge { padding: 2px 7px; border-radius: 4px; background: var(--action); color: var(--on-action); font-size: .62rem; font-weight: 700; letter-spacing: .04em; }
+.live-badge { padding: 2px 7px; border-radius: 4px; background: var(--action); color: var(--on-action-small); font-size: .62rem; font-weight: 700; letter-spacing: .04em; }
 .device-video { overflow: hidden; border-radius: 9px; aspect-ratio: 16 / 9; background: #1a0f22; }
 .device-video img { width: 100%; height: 100%; object-fit: cover; }
 .device-wave { height: 30px; }
@@ -43,7 +44,7 @@
 .device-detect li b { color: var(--muted); font: 600 .64rem/1 var(--mono); }
 .device-detect li.is-active { border-color: rgb(255 79 98 / 55%); background: var(--coral-wash); }
 .device-detect li.is-active svg, .device-detect li.is-active b { color: var(--coral-text); }
-.fake-button { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: auto; padding: 8px; border-radius: 7px; background: var(--action); color: var(--on-action); font-weight: 650; }
+.fake-button { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: auto; padding: 8px; border-radius: 7px; background: var(--action); color: var(--on-action-small); font-weight: 700; }
 
 .short-card { position: absolute; top: 0; right: 0; width: 23%; aspect-ratio: 9 / 16; overflow: hidden; border: 1px solid rgb(255 79 98 / 60%); border-radius: var(--radius-l); background: #12091a; box-shadow: var(--shadow-panel), 0 0 0 5px rgb(9 11 16 / 70%), var(--glow-coral); }
 .short-card img { width: 100%; height: 100%; object-fit: cover; }

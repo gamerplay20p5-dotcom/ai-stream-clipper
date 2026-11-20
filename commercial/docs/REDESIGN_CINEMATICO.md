@@ -15,10 +15,42 @@ O backend da lista de espera (`server/`) e o catálogo (`catalog.json`) não for
 
 ## Comparação com a referência aprovada
 
+O mockup aprovado está versionado em [reference.webp](qa/cinematic/reference.webp).
+
 | Área | Comparação |
 | --- | --- |
-| Hero | [compare-hero.webp](qa/cinematic/compare-hero.webp) |
+| Primeira tela no tamanho do mockup (1536×1024) | [compare-1536.webp](qa/cinematic/compare-1536.webp) |
+| Hero em 1440 px | [compare-hero.webp](qa/cinematic/compare-hero.webp) |
 | Planos | [compare-plans.webp](qa/cinematic/compare-plans.webp) |
+
+### Critério reproduzível
+
+[browser-tests/reference.spec.js](../browser-tests/reference.spec.js) roda no viewport do mockup (1536×1024) e compara com o arquivo de referência.
+
+**Estrutura:**
+- texto à esquerda;
+- janela do produto à direita, com o Short ultrapassando o topo dela;
+- benefícios dentro da primeira tela;
+- título em duas linhas;
+- CTAs na mesma linha;
+- navegação na ordem do mockup;
+- três planos alinhados.
+
+**Tokens computados no navegador:**
+- fundo `#090B10`;
+- texto `#F5F6FA` e `#ADB1C0`;
+- destaque e CTA `#FF4F62` com texto branco;
+- borda do Creator coral;
+- superfície `#151722`.
+
+**Pixels:** a primeira tela (cabeçalho, hero e benefícios) é normalizada para a região equivalente do mockup. O teste calcula a similaridade da cor média numa grade de 12×4 células e a sobreposição da distribuição de paleta (escuros, coral, magenta e roxo, quentes e outros). A versão editorial rejeitada serve de controle negativo.
+
+| Versão | Similaridade da grade | Sobreposição de paleta |
+| --- | --- | --- |
+| Cinematográfica (esta) | 0,944 | 0,890 |
+| Editorial rejeitada | 0,461 | 0,269 |
+
+Limites do teste: grade > 0,90 e paleta > 0,85, e cada métrica precisa superar o controle por pelo menos 0,10 e 0,25. Os valores medidos ficam em `test-results/**/reference-fidelity.json`.
 
 O que segue o mockup:
 - **Hero:**
@@ -33,9 +65,9 @@ O que segue o mockup:
   - "/ Planos para o seu ritmo de live" com seletor BRL/USD, três cards, Creator destacado e Pro com coroa.
 
 Refinamentos em relação ao mockup:
-- O fundo dos botões usa `#D92D45` no lugar de `#FF4F62`, para que o texto branco atinja 4,8:1.
+- Os botões usam exatamente `#FF4F62` com texto branco em tamanho grande (≥ 18,67 px em negrito), o que atende o WCAG AA para texto grande. Selos e o CTA do cabeçalho, que são menores, usam texto escuro.
 - O selo do Creator diz **"Recomendado"**, não "Mais escolhido". Ainda não há clientes, e a frase seria uma afirmação sem dado.
-- O "VI" grande do mockup e qualquer arte ou marca de GTA VI foram omitidos (ver Mídia).
+- O "VI" grande do mockup foi omitido. É o logotipo de GTA VI, e o pedido proíbe usar marcas protegidas sem autorização. Qualquer outra arte do jogo também ficou de fora.
 - Os marcadores de acerto viraram coral, no lugar do verde, para não introduzir uma cor fora da paleta.
 - "Como funciona" virou uma demonstração interativa ao lado do estúdio. Os planos ficaram numa seção própria com comparação completa, em vez de dividirem a mesma faixa. Com as duas lado a lado, a demonstração ficaria pequena demais para operar.
 
@@ -77,13 +109,13 @@ Tudo é original. Nada vem de GTA VI, da Rockstar Games ou de capturas reais de 
 | --- | --- |
 | `live-wide*.webp` | Imagem gerada pelo ForgeGUI (prompt abaixo). O emblema traseiro do carro foi desfocado localmente. Os letreiros mostram texto ilegível |
 | `short-vertical.webp`, `short-demo.mp4` | Recorte 9:16 e aproximação lenta (5 s, sem áudio) da mesma imagem, gerados com ImageMagick e ffmpeg |
-| `moment-ramp.webp`, `moment-turn.webp`, `short-turn.webp` | Tomadas originais da direção anterior, regradas para magenta e coral. Aparecem como outros momentos da live de exemplo |
+| `moment-chase.webp`, `moment-palms.webp`, `short-palms.webp` | Outros momentos da mesma live: aproximação no carro, e a avenida espelhada com inclinação e tom mais rosado. Mantêm o mesmo carro e a mesma cidade em toda a página |
 | Cena do hero | SVG desenhado no código (`HeroScene`) |
 | `short-pt.vtt`, `short-en.vtt` | Legendas da demonstração |
 
 Prompt da imagem: *original open-world video game capture still, 16:9, third-person chase camera behind a sleek dark cherry-red 1990s sports coupe speeding down a wide wet boulevard at night in a fictional tropical city; neon signs in magenta and coral, palm trees, art-deco buildings, purple night sky; no text, logos, plate text, HUD, watermark, people or police*.
 
-Outras três imagens planejadas (céu, segundo ângulo e controle) não foram geradas porque os créditos do ForgeGUI acabaram. O céu virou o SVG, e o segundo ângulo veio do recorte e das tomadas regradas.
+Outras três imagens planejadas (céu, segundo ângulo e controle) não foram geradas porque os créditos do ForgeGUI acabaram. O céu virou o SVG. Os outros ângulos saem da imagem gerada, sempre com o mesmo carro vermelho.
 
 A demonstração e o preview trazem o aviso "Demonstração ilustrativa". Notas como 92 e 9,1, canais e armazenamento são valores de exemplo, marcados como tal. Os recursos mostrados existem no produto: monitoramento de canais, detecção multimodal, recorte vertical com legendas, revisão, biblioteca com nota, limpeza por nota e exportação.
 
@@ -93,7 +125,7 @@ A demonstração e o preview trazem o aviso "Demonstração ilustrativa". Notas 
 | --- | --- |
 | `npm run build` (tsc, Vite e pré-render das 4 combinações) | Aprovado |
 | `npm test` (HTTP: validação, deduplicação, payload, formato, rate limit e persistência) | Aprovado |
-| `npx playwright test` em Chromium, Firefox e WebKit | 20 aprovados, 4 ignorados por desenho (capturas e métricas só no Chromium) |
+| `npx playwright test` em Chromium, Firefox e WebKit | 21 aprovados, incluindo o teste de fidelidade à referência. Os ignorados são intencionais: capturas, métricas e comparação rodam só no Chromium |
 | axe-core, WCAG A/AA 2.0, 2.1 e 2.2 | Zero violações em PT-BR desktop, EN nas etapas Revisar, Editar e Analisar, menu mobile aberto e fechado |
 | Sem ponto final em títulos, subtítulos, cards, botões, navegação, rótulos e legendas | Verificado em PT-BR e EN, de 320 a 1920 px |
 | Rolagem horizontal | Zero em 320, 375, 390, 768, 1024, 1280, 1440, 1600 e 1920 px |

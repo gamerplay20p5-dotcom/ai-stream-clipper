@@ -26,11 +26,12 @@ Direção cinematográfica noturna aprovada pela HTS em 20/11/2026. O mockup de 
 | `--line` / `--line-strong` | `#23263A` / `#343849` | Divisórias e bordas |
 | `--coral` | `#FF4F62` | Destaque, trecho, ícones ativos e headline |
 | `--coral-text` | `#FF8A97` | Texto coral pequeno e foco |
-| `--action` | `#D92D45` | Fundo dos botões primários com texto branco |
+| `--action` | `#FF4F62` | Fundo dos botões primários, idêntico à referência |
+| `--on-action-small` | `#1A0609` | Texto de elementos coral pequenos (CTA do cabeçalho, selos) |
 | `--magenta` | `#DF3D83` | Luz ambiente na seção de planos |
 | `--violet` | `#7640C8` | Luz ambiente do hero, halos e plano Pro |
 
-O texto branco sobre `#FF4F62` tem contraste de 3,2:1, abaixo do mínimo de 4,5:1 para texto normal. Por isso o fundo dos botões usa o coral mais profundo `--action` (4,8:1), com brilho coral ao redor para manter a leitura do mockup. O coral puro fica para títulos, bordas e ícones.
+Os botões usam exatamente o coral da referência, `#FF4F62`. O texto branco sobre ele tem contraste de 3,2:1, o que atende o WCAG AA só para texto grande. Por isso todo botão coral com texto branco usa ≥ 18,67 px em negrito (1,1875rem, peso 700), e os elementos coral pequenos usam texto escuro `#1A0609` (5,9:1). O hover escurece para `#EE4458` (3,7:1).
 
 ## Tipografia
 
@@ -74,4 +75,4 @@ Estados interativos: hover com borda coral ou fundo `--coral-wash`, foco visíve
 
 ## English summary
 
-Night-time cinematic direction approved by HTS. Coral marks action and the selected clip. Magenta and violet are ambient light only. Space Grotesk handles headings and Instrument Sans the body copy, both self-hosted. Sections show fragments of the software rather than icon cards. Headings, subtitles, cards, buttons, navigation and labels never end with a period, and the browser suite enforces this. Primary buttons use `#D92D45` behind white text for 4.8:1 contrast, and pure coral `#FF4F62` is reserved for headlines, borders and icons.
+Night-time cinematic direction approved by HTS. Coral marks action and the selected clip. Magenta and violet are ambient light only. Space Grotesk handles headings and Instrument Sans the body copy, both self-hosted. Sections show fragments of the software rather than icon cards. Headings, subtitles, cards, buttons, navigation and labels never end with a period, and the browser suite enforces this. Primary buttons use the exact reference coral `#FF4F62`. White text on it is set at large bold size (≥ 18.67 px) to meet WCAG AA, and small coral elements use dark `#1A0609` text.

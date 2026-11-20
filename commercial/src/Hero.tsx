@@ -140,9 +140,9 @@ function ProductPreview({ t }: { t: Editorial }) {
           </div>
           <Waveform className="device-wave" selection={[0.46, 0.66]} />
           <div className="device-strip">
-            <img src="/media/moment-ramp.webp" width="640" height="360" alt="" loading="lazy" />
+            <img src="/media/moment-chase.webp" width="640" height="360" alt="" loading="lazy" />
             <img src="/media/live-wide-small.webp" width="640" height="360" alt="" className="is-current" />
-            <img src="/media/moment-turn.webp" width="640" height="360" alt="" loading="lazy" />
+            <img src="/media/moment-palms.webp" width="640" height="360" alt="" loading="lazy" />
           </div>
         </div>
         <div className="device-detect">
