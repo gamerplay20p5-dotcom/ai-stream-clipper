@@ -6,6 +6,13 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.7.3", "date": "2026-11-20", "title": "A IA aprendeu critérios de edição profissional", "items": [
+        "Conversa sobre a live ou a plataforma (Discord, assinatura, configurações, “vou mostrar pra vocês”) não conta mais como acontecimento: o corte perde nota e é barrado na revisão de qualidade.",
+        "A IA verifica se o corte tem desfecho (fugiu, foi preso, deu certo, risada) e se a fala é compreensível; cortes só com energia na voz descem na fila.",
+        "Começo lento e final arrastado viram sugestões de edição (onde começar e onde terminar), sem rejeitar o corte.",
+        "Títulos mais concretos: quem fez o quê, sem prometer o que o corte não entrega.",
+        "Medido nas suas aprovações e rejeições: a nota passou a separar melhor bons e ruins (AUC 0,851 → 0,877), sem perder nenhum corte aprovado.",
+    ]},
     {"version": "0.7.2", "date": "2026-11-20", "title": "Mais acesso para contas convidadas", "items": [
         "Acesso por streamer: a conta vê todos os cortes aprovados de um streamer, inclusive os aprovados depois; um corte rejeitado sai da biblioteca.",
         "Escolha cortes específicos para uma conta já criada, com miniaturas e filtro por streamer.",

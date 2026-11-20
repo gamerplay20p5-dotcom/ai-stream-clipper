@@ -227,6 +227,7 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
         clip.reasons = list(dict.fromkeys(decision.reasons + decision.adjustments))[:14]
         tr = _words(db, clip.session_id, clip.start, clip.end)
         clip.transcript = " ".join(w[2] for w in tr).strip() or clip.transcript
+        _apply_playbook(db, clip, visual)
     else:
         clip.score = round(weighted_total(breakdown, settings), 1)
     if narrative is not None and not narrative.fallback and narrative.titles and not clip.is_test:
@@ -432,6 +433,47 @@ def _deep_reason(decision: DirectorDecision, judgement: dict, settings: AISettin
     return "a situação começa antes do corte"
 
 
+def _apply_playbook(db: Session, clip: Clip, visual: VisualAnalysis | None) -> None:
+    """Phase 7: professional editing checks (ai/playbook.py) adjust the score and propose edit fixes.
+    Never blocks the pipeline; the evidence is kept in provenance['playbook']."""
+    try:
+        from .ai import playbook
+        from .pipeline_story import story_context
+
+        words = _words(db, clip.session_id, clip.start - 5.0, clip.end + 3.0)
+        story = story_context(db, clip)["situation"]
+        vis = visual.model_dump() if visual is not None else None
+        craft = playbook.assess(words=words, start=clip.start, end=clip.end, peak=clip.peak, kinds=clip.kinds,
+                                story=story, visual=vis)
+        fixes = playbook.edit_fixes(craft, start=clip.start, end=clip.end, peak=clip.peak, words=words)
+        before = float(clip.score)
+        clip.score = playbook.adjust(before, craft)
+        prov = dict(clip.provenance or {})
+        prov["playbook"] = {"version": playbook.VERSION, "score_before": before, "score_after": clip.score,
+                            "offgame": craft.offgame, "fixes": fixes,
+                            "criteria": {k: {"value": v, "evidence": ev} for k, (v, ev) in craft.criteria.items()}}
+        clip.provenance = prov
+        if craft.offgame:
+            clip.reasons = (craft.notes + list(clip.reasons or []))[:14]
+    except Exception:
+        log.exception("playbook failed (clip unaffected)")
+
+
+def _playbook_inputs(db: Session, clip: Clip, visual: VisualAnalysis | None):
+    try:
+        from .ai import playbook
+        from .pipeline_story import story_context
+
+        words = _words(db, clip.session_id, clip.start - 5.0, clip.end + 3.0)
+        craft = playbook.assess(words=words, start=clip.start, end=clip.end, peak=clip.peak, kinds=clip.kinds,
+                                story=story_context(db, clip)["situation"],
+                                visual=visual.model_dump() if visual is not None else None)
+        return craft, (clip.provenance or {}).get("playbook", {}).get("fixes") or []
+    except Exception:
+        log.exception("playbook inputs failed")
+        return None, []
+
+
 def _editorial_final(db: Session, clip: Clip, decision: DirectorDecision, visual: VisualAnalysis | None,
                      settings: AISettings) -> None:
     try:
@@ -439,6 +481,7 @@ def _editorial_final(db: Session, clip: Clip, decision: DirectorDecision, visual
         from .pipeline_story import story_context
 
         ctx = story_context(db, clip)
+        craft, fixes = _playbook_inputs(db, clip, visual)
         sib = 0
         if clip.situation_id:
             sib = db.query(Clip).filter(Clip.situation_id == clip.situation_id, Clip.id != clip.id,
@@ -446,7 +489,7 @@ def _editorial_final(db: Session, clip: Clip, decision: DirectorDecision, visual
         j = judge(start=decision.start_abs, end=decision.end_abs, peak=decision.peak_abs,
                   breakdown=clip.score_breakdown or {}, kinds=clip.kinds or [], story=ctx["situation"],
                   visual=visual.model_dump() if visual is not None else None, director=decision.model_dump(),
-                  same_story_clips=sib, min_score=settings.min_score)
+                  same_story_clips=sib, min_score=settings.min_score, craft=craft, fixes=fixes)
         clip.editorial_score, clip.confidence = j.final, j.confidence
         d = dict(clip.decision or {})
         d["editorial"] = j.as_dict()
