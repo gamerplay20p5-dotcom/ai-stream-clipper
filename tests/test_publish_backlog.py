@@ -14,7 +14,7 @@ from clipper.models import Clip, Job, Publication, PublishAccount, PublishRule
 from clipper.publish import editorial as ed, runner, service
 from clipper.publish.base import PublishError
 from conftest import CSRF
-from test_editorial_ops import _setup
+from test_editorial_ops import _SID, _setup
 
 
 def _keys(db, pid):
@@ -175,3 +175,47 @@ def test_migration_0014_adds_per_slot_and_rolls_back(tmp_path):
         assert "per_slot" not in {x["name"] for x in sa.inspect(c).get_columns("publish_rules")}
         assert c.execute(sa.text("select max_per_day from publish_rules")).scalar() == 5  # rule kept
     upgrade_db(url)
+
+
+def test_autofill_previews_then_fills_late_failed_and_never_scheduled(admin):
+    ids, aid = _setup("fill", n=4)
+    with session_scope() as db:
+        db.add(PublishRule(account_id=aid, enabled=True, mode="scheduled", slots=["12:00", "18:00", "21:00"],
+                           max_per_day=12, per_slot=4, min_score=0, privacy="private", timezone="America/Sao_Paulo",
+                           streamer_id=_SID[aid]))
+        for i in ids:
+            db.get(Clip, i).created_at = utcnow() - timedelta(days=10)  # older than the 48 h automatic scan
+        late = _pub(db, ids[0], aid, utcnow() - timedelta(days=1))
+        bad = _pub(db, ids[1], aid, utcnow() - timedelta(days=1))
+        bad.status, bad.last_error = "failed", "HTTP 500"
+        bad.remote_status = {"failure": "before_publish"}
+        future = _pub(db, ids[3], aid, utcnow() + timedelta(days=9))  # moved by hand: must keep its time
+        late_id, bad_id, future_id, future_at = late.id, bad.id, future.id, future.scheduled_at
+    prev = admin.post("/api/publish/autofill", json={"account_id": aid, "dry_run": True}, headers=CSRF).json()
+    assert [m["id"] for m in prev["moved"]] == [late_id] and [m["id"] for m in prev["retried"]] == [bad_id]
+    assert [m["clip_id"] for m in prev["new"]] == [ids[2]]
+    with session_scope() as db:
+        assert db.get(Publication, bad_id).status == "failed"  # preview changes nothing
+        assert db.scalar(select(Publication.id).where(Publication.clip_id == ids[2])) is None
+    done = admin.post("/api/publish/autofill", json={"account_id": aid, "dry_run": False}, headers=CSRF).json()
+    assert len(done["new"]) == 1 and len(done["retried"]) == 1
+    with session_scope() as db:
+        pubs = list(db.scalars(select(Publication).where(Publication.account_id == aid)))
+        assert len(pubs) == 4 and {p.status for p in pubs} == {"scheduled"}
+        assert all(p.scheduled_at > utcnow() for p in pubs)
+        assert db.get(Publication, future_id).scheduled_at == future_at
+
+
+def test_dragging_a_failed_post_back_onto_the_calendar(admin):
+    ids, aid = _setup("drag", n=2)
+    with session_scope() as db:
+        ok = _pub(db, ids[0], aid)
+        ok.status, ok.remote_status = "failed", {"failure": "before_publish"}
+        risky = _pub(db, ids[1], aid)
+        risky.status, risky.upload_state = "failed", {"publish_called_at": "2026-11-20T10:00:00Z"}
+        ok_id, risky_id = ok.id, risky.id
+    when = (utcnow() + timedelta(days=1)).isoformat() + "Z"
+    r = admin.patch(f"/api/publish/publications/{ok_id}", json={"scheduled_at": when}, headers=CSRF)
+    assert r.status_code == 200 and r.json()["status"] == "scheduled"
+    r = admin.patch(f"/api/publish/publications/{risky_id}", json={"scheduled_at": when}, headers=CSRF)
+    assert r.status_code == 422 and "confira no perfil" in r.json()["detail"]["problems"][0]
