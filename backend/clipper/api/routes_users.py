@@ -351,6 +351,7 @@ def _grant(db: Session, g: StreamerGrant) -> dict:
                                                                     ClipShare.revoked_at.is_(None))) or 0
     return {"id": g.id, "user_id": g.user_id, "email": u.email if u else None, "streamer_id": g.streamer_id,
             "streamer": (st.display_name or st.channel) if st else None, "can_download": g.can_download,
+            "include_pending": bool(g.include_pending),
             "expires_at": _iso(g.expires_at), "created_at": _iso(g.created_at), "revoked_at": _iso(g.revoked_at),
             "active_shares": n,
             "state": "revogado" if g.revoked_at else (
@@ -361,6 +362,7 @@ class GrantIn(BaseModel):
     email: str = Field(..., max_length=255)
     streamer_id: int
     can_download: bool = False
+    include_pending: bool = False  # also the clips still waiting for review
     expires_at: datetime | None = None
 
 
@@ -370,12 +372,14 @@ def create_grant(body: GrantIn, request: Request, db: Session = Depends(get_db),
     """The account sees every APPROVED clip of the streamer: the current ones and every later approval."""
     try:
         g, n = sharing.grant_streamer(db, admin_id=admin.id, email=body.email, streamer_id=body.streamer_id,
-                                      can_download=body.can_download, expires_at=_naive_utc(body.expires_at))
+                                      can_download=body.can_download, expires_at=_naive_utc(body.expires_at),
+                                      include_pending=body.include_pending)
     except sharing.ShareError as exc:
         db.rollback()
         raise HTTPException(404 if "não encontrad" in str(exc) else 422, str(exc)) from exc
     audit(db, request, admin, "grants.create", f"user:{g.user_id}",
-          {"streamer": body.streamer_id, "download": body.can_download, "shared_now": n})
+          {"streamer": body.streamer_id, "download": body.can_download, "pending": body.include_pending,
+           "shared_now": n})
     db.commit()
     return {**_grant(db, g), "shared_now": n}
 

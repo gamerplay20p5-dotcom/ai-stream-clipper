@@ -650,6 +650,8 @@ class StreamerGrant(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     streamer_id: Mapped[int] = mapped_column(ForeignKey("streamers.id", ondelete="CASCADE"))
     can_download: Mapped[bool] = mapped_column(Boolean, default=False)
+    # also clips still waiting for review (rendered, status "ready"), not only the approved ones
+    include_pending: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

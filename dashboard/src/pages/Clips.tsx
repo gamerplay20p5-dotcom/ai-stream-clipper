@@ -47,7 +47,32 @@ export default function Clips() {
   const [queueOpen, setQueueOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
-  const toggle = (cid: number) => setPicked((p) => (p.includes(cid) ? p.filter((x) => x !== cid) : [...p, cid]));
+  const [anchor, setAnchor] = useState<number | null>(null);
+  /** Click toggles one clip; Shift+click selects the whole range from the last clicked clip. */
+  const toggle = (cid: number, range = false) => {
+    if (range && anchor !== null) {
+      const a = items.findIndex((c) => c.id === anchor), b = items.findIndex((c) => c.id === cid);
+      if (a >= 0 && b >= 0) {
+        const span = items.slice(Math.min(a, b), Math.max(a, b) + 1).map((c) => c.id);
+        setPicked((p) => Array.from(new Set([...p, ...span])));
+        setAnchor(cid);
+        return;
+      }
+    }
+    setPicked((p) => (p.includes(cid) ? p.filter((x) => x !== cid) : [...p, cid]));
+    setAnchor(cid);
+  };
+  const allLoaded = items.length > 0 && items.every((c) => picked.includes(c.id));
+  const someLoaded = items.some((c) => picked.includes(c.id));
+  const total = list.data?.total ?? 0;
+  const pickAllOfFilter = async () => {
+    const ids = new URLSearchParams();
+    if (qs.get("status")) ids.set("status", qs.get("status")!);
+    if (qs.get("gate")) ids.set("gate", qs.get("gate")!);
+    if (streamer) ids.set("streamer_id", streamer);
+    const r = await api.get<{ ids: number[] }>(`/api/clips/ids?${ids}`);
+    setPicked(r.ids);
+  };
 
   const open = (cid: number | null) => {
     const search = new URLSearchParams(params);
@@ -102,16 +127,29 @@ export default function Clips() {
             onClick={() => setQueueOpen(!queueOpen)}>{queueOpen ? t("Recolher") : t("Ver fila")}</button>
           {list.data && <span>{items.length < list.data.total ? `${items.length} / ${list.data.total}` : items.length}</span>}
         </header>
+        {items.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-suite-line px-3 py-2 text-xs">
+            <label className="flex items-center gap-2 font-medium">
+              <input type="checkbox" checked={allLoaded} ref={(el) => { if (el) el.indeterminate = someLoaded && !allLoaded; }}
+                onChange={() => setPicked(allLoaded ? [] : Array.from(new Set([...picked, ...items.map((c) => c.id)])))} />
+              {t("Selecionar todos")}</label>
+            {allLoaded && total > items.length && picked.length < total && (
+              <button type="button" className="text-take hover:underline" onClick={pickAllOfFilter}>
+                {t("Selecionar todos os {total} deste filtro", { total })}</button>)}
+            <span className="ml-auto text-ink-muted">{t("Shift+clique marca um intervalo")}</span>
+          </div>
+        )}
         <ul id="bin-list">{items.map(c => <li key={c.id} data-current={monitorId === c.id}>
           <button type="button" className="bin-clip" aria-pressed={monitorId === c.id} onClick={() => { setQueueOpen(false); open(c.id); }}>
             <span className="bin-frame">{c.has_thumbnail ? <img alt="" loading="lazy" src={`/api/clips/${c.id}/thumbnail?v=${c.version}`}/> : <Film size={19} aria-hidden/>}</span>
             <span className="bin-caption"><small>#{c.id} · {seconds(c.duration)} · {Math.round(c.score)}/100</small><strong>{c.title || t("Sem título")}</strong>
             <small>{c.is_test ? t("Teste manual") : c.streamer?.display_name}</small>
             {!status && <ClipStatus status={c.status} />}</span></button>
-          <label className="bin-check"><input type="checkbox" checked={picked.includes(c.id)} onChange={() => toggle(c.id)} aria-label={t("Selecionar corte {id}", { id: c.id })}/></label>
+          <label className="bin-check"><input type="checkbox" checked={picked.includes(c.id)} readOnly
+            onClick={(e) => toggle(c.id, e.shiftKey)} aria-label={t("Selecionar corte {id}", { id: c.id })}/></label>
         </li>)}</ul>
         {!items.length && <p className="quiet-copy px-3">{t("Fila vazia neste filtro.")}</p>}
-        {items.length > 0 && picked.length === 0 && <button type="button" className="bin-all" onClick={() => setPicked(items.map(c => c.id))}>{t("Selecionar todos desta lista")}</button>}
+
       </aside>
       <ReviewBench key={monitorId} clipId={monitorId} items={items} onNavigate={open} explicit={selectedId !== null} startInVersions={params.get("aba") === "versoes"}/>
     </div>}

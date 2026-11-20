@@ -503,7 +503,7 @@ export type Me = { email: string; role: string; staff: boolean; areas: ("panel" 
 
 export type LibraryItem = {
   clip_id: number; title: string; streamer: string; duration_s: number; shared_at: string | null; expires_at: string | null;
-  permissions: { view: boolean; download: boolean; variants: boolean }; version: string;
+  permissions: { view: boolean; download: boolean; variants: boolean }; version: string; approved?: boolean;
   video_url: string; thumbnail_url: string; download_url: string | null;
   variants: { name: string; label: string; video_url: string }[];
 };
@@ -524,6 +524,6 @@ export type ClipShareRow = {
 /** Access by streamer: every APPROVED clip of a streamer, now and future approvals (materialised as shares). */
 export type StreamerGrant = {
   id: number; user_id: number; email: string | null; streamer_id: number; streamer: string | null;
-  can_download: boolean; expires_at: string | null; created_at: string | null; revoked_at: string | null;
+  can_download: boolean; include_pending?: boolean; expires_at: string | null; created_at: string | null; revoked_at: string | null;
   active_shares: number; state: "ativo" | "expirado" | "revogado";
 };
