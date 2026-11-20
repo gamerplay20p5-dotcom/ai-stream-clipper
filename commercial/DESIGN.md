@@ -42,7 +42,7 @@ Os botões usam exatamente o coral da referência, `#FF4F62`. O texto branco sob
 
 | Token | Tamanho | Uso |
 | --- | --- | --- |
-| `--step-4` | `clamp(2.2rem, 2.9vw, 2.9rem)` | H1 do hero, em duas linhas |
+| `--step-4` | `clamp(2.2rem, 2.95vw, 2.85rem)` | H1 do hero, em duas linhas |
 | `--step-3` | `clamp(1.9rem, 3.1vw, 2.9rem)` | Títulos de seção |
 | `--step-2` | 1,375rem | Títulos de recurso e comparação |
 | `--step-1` | 1,125rem | Ledes, etapas e marcadores de seção |
@@ -54,7 +54,7 @@ Os marcadores de seção usam a barra coral do mockup (`/ Como funciona`). Não 
 ## Espaço, forma e profundidade
 
 - Escala de espaçamento: 4, 8, 12, 16, 24, 32, 48 e 72 px. Seções com `clamp(64px, 7vw, 112px)`.
-- Largura de conteúdo de 1360 px (1520 px a partir de 1600 px de viewport). Margem fluida de 16 a 56 px, ou 12 px abaixo de 380 px.
+- Largura de conteúdo de até 1520 px, com margem fluida de 16 a 56 px (12 px abaixo de 380 px). No desktop, o hero usa as proporções medidas no mockup: texto 592 e produto 822 (janela 652 + Short 185), separados por 20 px, e a janela com proporção 2:1.
 - Raios por hierarquia: 8 px em botões e campos, 12 px em mídia interna, 18 px em painéis e cards, 24 px em janelas do estúdio e na lista de espera, e cápsula só em selos e filtros.
 - Elevação: `--shadow-panel` para janelas sobre o fundo, `--glow-violet` atrás do estúdio e do preview, `--glow-coral` em CTAs, no Creator e no Short.
 

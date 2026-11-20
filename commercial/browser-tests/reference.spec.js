@@ -9,6 +9,15 @@ import { expect, test } from '@playwright/test'
 const reference = new URL('../docs/qa/cinematic/reference.webp', import.meta.url)
 const rejected = new URL('../docs/qa/desktop-after.webp', import.meta.url)
 const REFERENCE_HERO_HEIGHT = 520 // header, hero and benefits strip in the mockup
+// Element boxes [left, top, right, bottom] read from the mockup at 1536x1024 (docs/qa/cinematic/reference.webp)
+const REFERENCE_BOXES = {
+  '.hero h1': [56, 170, 648, 262],
+  '.hero-actions': [56, 368, null, 412],
+  '.device': [668, 103, 1320, 428],
+  '.short-card': [1305, 133, 1490, 428],
+  '.benefits': [56, 442, 1480, null],
+}
+const BOX_TOLERANCE = 16
 
 const dataUrl = async (source, type) => `data:${type};base64,${(await readFile(source)).toString('base64')}`
 
@@ -90,12 +99,21 @@ test('matches the approved reference in structure, tokens and first-screen compo
       actionTops: [...document.querySelectorAll('.hero-actions .button')].map(button => Math.round(button.getBoundingClientRect().top)),
     }
   })
+  // Positions match the mockup within the tolerance
+  const boxes = await page.evaluate(selectors => Object.fromEntries(selectors.map(selector => {
+    const { left, top, right, bottom } = document.querySelector(selector).getBoundingClientRect()
+    return [selector, [left, top, right, bottom]]
+  })), Object.keys(REFERENCE_BOXES))
+  for (const [selector, expected] of Object.entries(REFERENCE_BOXES)) {
+    expected.forEach((value, index) => {
+      if (value !== null) expect(Math.abs(boxes[selector][index] - value), `${selector} edge ${index}`).toBeLessThanOrEqual(BOX_TOLERANCE)
+    })
+  }
   // Composition: copy on the left, product window and vertical Short on the right, benefits in the first screen
   expect(layout.copy.right).toBeLessThan(layout.device.left)
   expect(layout.copy.left).toBeLessThan(layout.width * .1)
   expect(layout.device.right).toBeGreaterThan(layout.width * .7)
   expect(layout.short.left).toBeGreaterThan(layout.device.left + layout.device.width * .7)
-  expect(layout.short.top).toBeLessThan(layout.device.top)
   expect(layout.short.bottom).toBeGreaterThan(layout.device.top)
   expect(layout.benefits.bottom).toBeLessThanOrEqual(layout.viewport)
   expect(layout.benefitCount).toBe(4)

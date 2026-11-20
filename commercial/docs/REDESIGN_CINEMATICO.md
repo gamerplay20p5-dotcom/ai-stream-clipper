@@ -20,7 +20,7 @@ O mockup aprovado está versionado em [reference.webp](qa/cinematic/reference.we
 | Área | Comparação |
 | --- | --- |
 | Primeira tela no tamanho do mockup (1536×1024) | [compare-1536.webp](qa/cinematic/compare-1536.webp) |
-| Hero em 1440 px | [compare-hero.webp](qa/cinematic/compare-hero.webp) |
+| Hero em 1536 px | [compare-hero.webp](qa/cinematic/compare-hero.webp) |
 | Planos | [compare-plans.webp](qa/cinematic/compare-plans.webp) |
 
 ### Critério reproduzível
@@ -43,12 +43,22 @@ O mockup aprovado está versionado em [reference.webp](qa/cinematic/reference.we
 - borda do Creator coral;
 - superfície `#151722`.
 
+**Posições:** as bordas de cada bloco são medidas no próprio mockup em 1536×1024, e a implementação precisa ficar a até 16 px delas:
+
+| Bloco | Mockup (esq., topo, dir., base) | Implementação |
+| --- | --- | --- |
+| Título | 56, 170, 648, 262 | 56, 165, 644, 258 |
+| Botões do hero | 56, 368, até 412 | 56, 368, 414 |
+| Janela do produto | 668, 103, 1320, 428 | 664, 103, 1311, 427 |
+| Short vertical | 1305, 133, 1490, 428 | 1296, 133, 1480, 427 |
+| Benefícios (topo) | 442 | 441 |
+
 **Pixels:** a primeira tela (cabeçalho, hero e benefícios) é normalizada para a região equivalente do mockup. O teste calcula a similaridade da cor média numa grade de 12×4 células e a sobreposição da distribuição de paleta (escuros, coral, magenta e roxo, quentes e outros). A versão editorial rejeitada serve de controle negativo.
 
 | Versão | Similaridade da grade | Sobreposição de paleta |
 | --- | --- | --- |
-| Cinematográfica (esta) | 0,944 | 0,890 |
-| Editorial rejeitada | 0,461 | 0,269 |
+| Cinematográfica (esta) | 0,946 | 0,882 |
+| Editorial rejeitada | 0,386 | 0,245 |
 
 Limites do teste: grade > 0,90 e paleta > 0,85, e cada métrica precisa superar o controle por pelo menos 0,10 e 0,25. Os valores medidos ficam em `test-results/**/reference-fidelity.json`.
 
