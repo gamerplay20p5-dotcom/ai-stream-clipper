@@ -8,7 +8,7 @@ Branch `redesign/commercial-cinematic`, criada a partir de `redesign/commercial-
 | --- | --- |
 | `feat/commercial-landing` | PR #18 aberto: primeira landing e lista de espera |
 | `redesign/commercial-editorial` | Redesign editorial (bege e verde), rejeitado |
-| `redesign/commercial-broadcast` | Redesign Broadcast Studio (ciano). Estava sem commit e foi preservado no commit `d97d571`, só local |
+| `redesign/commercial-broadcast` | Redesign Broadcast Studio (ciano). Estava sem commit e foi preservado no commit `d97d571`, que faz parte do histórico desta branch |
 | `redesign/commercial-cinematic` | Esta entrega, sobre o histórico anterior |
 
 O backend da lista de espera (`server/`) e o catálogo (`catalog.json`) não foram alterados.
