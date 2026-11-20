@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from .. import queue, storage
 from ..config import get_settings
-from ..db import get_db
+from ..db import get_db, utcnow
 from ..models import Clip, Event, Job, Streamer, StreamSession
 from ..pipeline import active_session
 from ..platforms import InvalidStreamURL, VideoUnavailable, canonical_youtube, parse_file_source, parse_stream_url
@@ -142,7 +142,8 @@ def check_now(sid: int, db: Session = Depends(get_db), _: CurrentUser = Depends(
         raise HTTPException(404, "streamer not found")
     s.check_requested = True
     db.commit()
-    return {"ok": True}
+    # server clock: the panel only calls the request done when a result is recorded AFTER this instant
+    return {"ok": True, "requested_at": ser.iso(utcnow()), "check_requested": True}
 
 
 @router.delete("/streamers/{sid}")
