@@ -6,6 +6,12 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.7.2", "date": "2026-11-20", "title": "Mais acesso para contas convidadas", "items": [
+        "Acesso por streamer: a conta vê todos os cortes aprovados de um streamer, inclusive os aprovados depois; um corte rejeitado sai da biblioteca.",
+        "Escolha cortes específicos para uma conta já criada, com miniaturas e filtro por streamer.",
+        "Tipo de conta: tornar da equipe ou convidada, sempre com confirmação.",
+        "Minha Biblioteca organizada por streamer, com filtro.",
+    ]},
     {"version": "0.7.1", "date": "2026-11-19", "title": "Painel organizado por tarefa", "items": [
         "Nova tela Hoje: mostra primeiro o que precisa de você (cortes, sugestões de publicação, envios incertos e falhas).",
         "Central de cortes: barra Aprovar/Rejeitar/Próximo sempre à mão no celular, “Por que este corte?” em linguagem simples e atalhos com ?.",

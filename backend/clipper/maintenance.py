@@ -25,6 +25,19 @@ log = logging.getLogger(__name__)
 ADVISORY_KEY = 7_420_151
 
 
+def _sync_grants(db) -> None:
+    """Access by streamer: approvals made by any path (batch, scripts) end up shared within one tick."""
+    try:
+        from . import sharing
+
+        with db.begin_nested():
+            n = sharing.sync_all_grants(db)
+        if n:
+            log.info("access by streamer synced", extra={"shared": n})
+    except Exception:
+        log.exception("access-by-streamer sync failed")
+
+
 def _refs_retention(db) -> None:
     """Phase 6C: API-derived reference data older than 30 days is cleared (policy compliance)."""
     try:
@@ -54,6 +67,7 @@ def tick() -> dict:
         out["vision_fallback"] = pipeline.vision_timeouts(db)
         out["revisited"] = pipeline.revisit_waiting_all(db)
         _refs_retention(db)
+        _sync_grants(db)
         from . import pipeline_story
         from .settings_store import load_ai_settings as _load
 

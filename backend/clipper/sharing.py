@@ -16,7 +16,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .db import utcnow
-from .models import Clip, ClipShare, Streamer, User
+from .models import Clip, ClipShare, Streamer, StreamerGrant, User
 
 SHAREABLE = ("ready", "approved")
 
@@ -114,6 +114,106 @@ def share(db: Session, *, admin_id: int, email: str, clip_ids: list[int], can_do
         db.flush()
         done.append(s.id)
     return {"user_id": user.id, "email": user.email, "shared": done, "refused": refused}
+
+
+# ------------------------------------------------------------------ access by streamer
+def _user_for(db: Session, email: str) -> User:
+    user = db.scalar(select(User).where(User.email == normalize_email(email)))
+    if user is None:
+        raise ShareError("conta não encontrada: crie a conta antes de dar acesso (nenhum e-mail é enviado)")
+    if not user.active:
+        raise ShareError("a conta está desativada: reative antes de dar acesso")
+    return user
+
+
+def active_grants(db: Session, *, user_id: int | None = None, streamer_id: int | None = None) -> list[StreamerGrant]:
+    now = utcnow()
+    q = select(StreamerGrant).where(StreamerGrant.revoked_at.is_(None),
+                                    or_(StreamerGrant.expires_at.is_(None), StreamerGrant.expires_at > now))
+    if user_id is not None:
+        q = q.where(StreamerGrant.user_id == user_id)
+    if streamer_id is not None:
+        q = q.where(StreamerGrant.streamer_id == streamer_id)
+    return list(db.scalars(q.order_by(StreamerGrant.id)))
+
+
+def _share_from_grant(db: Session, g: StreamerGrant, clip: Clip) -> ClipShare | None:
+    """One approved, rendered clip -> a share for the grant's account (never duplicates an active share)."""
+    if clip.status != "approved" or not clip.video_path or clip.streamer_id != g.streamer_id:
+        return None
+    if db.scalar(select(ClipShare.id).where(ClipShare.clip_id == clip.id, ClipShare.user_id == g.user_id,
+                                            ClipShare.revoked_at.is_(None))):
+        return None  # already shared (explicitly or by this grant): keep what the admin chose
+    s = ClipShare(clip_id=clip.id, user_id=g.user_id, created_by=g.created_by, can_view=True,
+                  can_download=g.can_download, can_variants=False, expires_at=g.expires_at, grant_id=g.id)
+    snapshot(s, clip)  # the version approved now, like any share
+    db.add(s)
+    db.flush()
+    return s
+
+
+def sync_grant(db: Session, g: StreamerGrant) -> int:
+    """Share every approved clip of the grant's streamer that the account does not have yet."""
+    n = 0
+    for clip in db.scalars(select(Clip).where(Clip.streamer_id == g.streamer_id, Clip.status == "approved",
+                                              Clip.video_path != "")):
+        if _share_from_grant(db, g, clip) is not None:
+            n += 1
+    return n
+
+
+def sync_all_grants(db: Session) -> int:
+    """Safety net (maintenance tick): approvals made by any path end up shared."""
+    return sum(sync_grant(db, g) for g in active_grants(db))
+
+
+def on_clip_status(db: Session, clip: Clip) -> None:
+    """Called after a clip is approved or rejected: grants follow the human decision.
+    Approved -> shared with every account that has access to the streamer.
+    No longer approved -> shares created BY A GRANT are revoked (explicit shares are never touched)."""
+    if clip.status == "approved":
+        for g in active_grants(db, streamer_id=clip.streamer_id):
+            _share_from_grant(db, g, clip)
+        return
+    now = utcnow()
+    for s in db.scalars(select(ClipShare).where(ClipShare.clip_id == clip.id, ClipShare.grant_id.is_not(None),
+                                                ClipShare.revoked_at.is_(None))):
+        s.revoked_at = now
+
+
+def grant_streamer(db: Session, *, admin_id: int, email: str, streamer_id: int, can_download: bool = False,
+                   expires_at: datetime | None = None) -> tuple[StreamerGrant, int]:
+    user = _user_for(db, email)
+    if user.role == "admin":
+        raise ShareError("contas da equipe já veem todos os cortes")
+    if db.get(Streamer, streamer_id) is None:
+        raise ShareError("streamer não encontrado")
+    if expires_at is not None and expires_at <= utcnow():
+        raise ShareError("a data de expiração já passou")
+    g = db.scalar(select(StreamerGrant).where(StreamerGrant.user_id == user.id, StreamerGrant.streamer_id == streamer_id,
+                                              StreamerGrant.revoked_at.is_(None)))
+    if g is None:
+        g = StreamerGrant(user_id=user.id, streamer_id=streamer_id, created_by=admin_id)
+        db.add(g)
+    g.can_download, g.expires_at = can_download, expires_at
+    db.flush()
+    for s in db.scalars(select(ClipShare).where(ClipShare.grant_id == g.id, ClipShare.revoked_at.is_(None))):
+        s.can_download, s.expires_at = can_download, expires_at  # changing the grant updates its shares
+    return g, sync_grant(db, g)
+
+
+def revoke_grant(db: Session, grant_id: int, admin_id: int) -> tuple[StreamerGrant, int]:
+    g = db.get(StreamerGrant, grant_id)
+    if g is None:
+        raise ShareError("acesso por streamer não encontrado")
+    now = utcnow()
+    n = 0
+    if g.revoked_at is None:
+        g.revoked_at, g.revoked_by = now, admin_id
+    for s in db.scalars(select(ClipShare).where(ClipShare.grant_id == g.id, ClipShare.revoked_at.is_(None))):
+        s.revoked_at, s.revoked_by = now, admin_id
+        n += 1
+    return g, n
 
 
 def revoke(db: Session, share_id: int, admin_id: int) -> ClipShare:

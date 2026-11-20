@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, KeyRound, LogOut, UserPlus } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api, type AdminUser, type ClipShareRow } from "../api";
+import GiveAccess from "../components/GiveAccess";
 import { ShareRow, shareDate } from "../components/SharePanel";
 import { ConfirmAction, Empty, ErrorNote, Notice, PageHeader, Skeleton, Status } from "../components/ui";
 
@@ -150,12 +151,13 @@ function AccountDetail({ user, onSecret }: { user: AdminUser; onSecret: (s: Secr
       </div>
       {end.isSuccess && <Notice>Sessões encerradas.</Notice>}
       <ErrorNote error={patch.error || reset.error || end.error} />
+      <GiveAccess user={user} shares={shares.data ?? []} />
       {user.role === "viewer" && (
         <div>
           <h3 className="mb-2 text-sm font-semibold">Cortes compartilhados</h3>
           <ErrorNote error={shares.error} />
           {shares.data && active.length === 0 && (
-            <p className="text-sm text-ink-muted">Nenhum corte ativo. Compartilhe pela Central de cortes, na aba Compartilhar.</p>
+            <p className="text-sm text-ink-muted">Nenhum corte ativo. Use “Dar mais acesso” acima ou a aba Compartilhar da Central de cortes.</p>
           )}
           <ul className="share-list">{active.map((s) => <ShareRow key={s.id} share={s} showClip />)}</ul>
           {past.length > 0 && (
