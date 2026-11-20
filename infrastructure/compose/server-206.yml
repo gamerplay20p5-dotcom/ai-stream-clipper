@@ -1,6 +1,7 @@
 # Server 206 (website-applications) - monitor, capture + segment server, audio/transcription, render.
 # CPU only: no worker here serves GPU models. Operated through `sudo asc-ctl compose ...`.
-# Limits keep the ~20 existing web containers responsive. Totals: 14 CPUs / 21 GiB max.
+# Limits keep the ~20 existing web containers responsive. Totals: 19 CPUs (~60% of the 32 cores, owner-approved
+# 2026-11-20) / 21 GiB max.
 # Host paths are fixed: /opt/asc/models (rw: Whisper/YAMNet cache), /opt/asc/test-media (ro),
 # /etc/asc/tls/ca.crt (ro: verifies the API certificate on 210).
 
@@ -75,7 +76,7 @@ services:
     healthcheck: *worker-health
     deploy:
       resources:
-        limits: { cpus: "8", memory: 12g }
+        limits: { cpus: "13", memory: 12g }  # transcription is the bottleneck with many simultaneous lives
 
   worker-render:
     image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.7.0}
