@@ -5,12 +5,13 @@ import { useSearchParams } from "react-router-dom";
 import { api, type Example, type Taxonomy } from "../api";
 import { Disclosure, Empty, ErrorNote, PageHeader, Skeleton } from "../components/ui";
 import { ago, bytes, platformName, timecode } from "../lib/format";
+import { t, tx } from "../i18n";
 
 const TABS = [
-  { key: "aprendizado", label: "Aprendizado" },
-  { key: "revisar", label: "Revisar" },
-  { key: "metricas", label: "Métricas" },
-  { key: "dataset", label: "Dataset e modelos" },
+  { key: "aprendizado", label: t("Aprendizado") },
+  { key: "revisar", label: t("Revisar") },
+  { key: "metricas", label: t("Métricas") },
+  { key: "dataset", label: t("Dataset e modelos") },
 ];
 
 const providerTone: Record<string, string> = {
@@ -29,23 +30,28 @@ export function ProviderBadge({ provider, tax }: { provider?: string; tax?: Taxo
   );
 }
 
-const fmt = (v: number | null | undefined, digits = 0) => (v === null || v === undefined ? "n/d" : v.toFixed(digits));
-const pct = (v: number | null | undefined) => (v === null || v === undefined ? "n/d" : `${Math.round(v * 100)}%`);
+const fmt = (v: number | null | undefined, digits = 0) => (v === null || v === undefined ? t("n/d") : v.toFixed(digits));
+const pct = (v: number | null | undefined) => (v === null || v === undefined ? t("n/d") : `${Math.round(v * 100)}%`);
 
 export default function Evaluation() {
   const [params, setParams] = useSearchParams();
   const tab = params.get("aba") ?? "revisar";
-  const tax = useQuery({ queryKey: ["taxonomy"], queryFn: () => api.get<Taxonomy>("/api/review/taxonomy"), staleTime: Infinity });
+  const tax = useQuery({ queryKey: ["taxonomy"], queryFn: async () => {
+    // the server sends Portuguese labels; show them in the interface language
+    const raw = await api.get<Taxonomy>("/api/review/taxonomy");
+    return Object.fromEntries(Object.entries(raw).map(([group, labels]) =>
+      [group, Object.fromEntries(Object.entries(labels as Record<string, string>).map(([k, v]) => [k, tx(v)]))])) as Taxonomy;
+  }, staleTime: Infinity });
   return (
     <div>
-      <PageHeader title="Avaliação editorial" description="Revise exemplos, compare a decisão da IA com sua leitura e acompanhe o aprendizado." />
-      <nav className="view-switch mb-5" aria-label="Seções da avaliação">
+      <PageHeader title={t("Avaliação editorial")} description={t("Revise exemplos, compare a decisão da IA com sua leitura e acompanhe o aprendizado.")} />
+      <nav className="view-switch mb-5" aria-label={t("Seções da avaliação")}>
         {TABS.map((t) => (
           <button type="button" key={t.key} onClick={() => setParams({ aba: t.key })}
             className="view-switch-item" aria-pressed={tab === t.key}>{t.label}</button>
         ))}
       </nav>
-      {tax.isLoading && tab !== "aprendizado" && <Skeleton label="Carregando critérios editoriais" />}
+      {tax.isLoading && tab !== "aprendizado" && <Skeleton label={t("Carregando critérios editoriais")} />}
       {tax.data && tab === "revisar" && <ReviewDesk tax={tax.data} />}
       {tax.data && tab === "metricas" && <Metrics tax={tax.data} />}
       {tax.data && tab === "dataset" && <DatasetPanel tax={tax.data} />}
@@ -82,22 +88,22 @@ function ReviewDesk({ tax }: { tax: Taxonomy }) {
   return (
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(12rem,.32fr)_minmax(0,1fr)]">
       <aside className="panel min-w-0">
-        <div className="panel-heading"><h2 className="text-sm font-semibold">Exemplos</h2></div>
+        <div className="panel-heading"><h2 className="text-sm font-semibold">{t("Exemplos")}</h2></div>
         <div className="p-3">
         <div className="view-switch mb-3">
-          <button type="button" className="view-switch-item px-2 text-xs" aria-pressed={filter === "queue"} onClick={() => setFilter("queue")}>Fila sugerida</button>
-          <button type="button" className="view-switch-item px-2 text-xs" aria-pressed={filter === "reviewed"} onClick={() => setFilter("reviewed")}>Já avaliados</button>
+          <button type="button" className="view-switch-item px-2 text-xs" aria-pressed={filter === "queue"} onClick={() => setFilter("queue")}>{t("Fila sugerida")}</button>
+          <button type="button" className="view-switch-item px-2 text-xs" aria-pressed={filter === "reviewed"} onClick={() => setFilter("reviewed")}>{t("Já avaliados")}</button>
         </div>
         <p className="mb-3 text-xs text-ink-muted">
           {filter === "queue"
-            ? "Ordenada pelo que mais ajuda a IA a aprender: perto do limiar, áudio e visão discordando, rejeitados com reação."
-            : "Avaliações salvas. Você pode corrigir qualquer uma."}
+            ? t("Ordenada pelo que mais ajuda a IA a aprender: perto do limiar, áudio e visão discordando, rejeitados com reação.")
+            : t("Avaliações salvas. Você pode corrigir qualquer uma.")}
         </p>
-        {queue.isLoading && <Skeleton label="Carregando exemplos" lines={2} />}
+        {queue.isLoading && <Skeleton label={t("Carregando exemplos")} lines={2} />}
         <ErrorNote error={queue.error} />
         {queue.data && items.length === 0 && (
-          <Empty title={filter === "queue" ? "Nada para revisar agora" : "Nenhuma avaliação ainda"}>
-            Os exemplos aparecem enquanto as lives são analisadas (a mídia leva cerca de 1 minuto para ficar pronta).
+          <Empty title={filter === "queue" ? t("Nada para revisar agora") : t("Nenhuma avaliação ainda")}>
+            {t("Os exemplos aparecem enquanto as lives são analisadas (a mídia leva cerca de 1 minuto para ficar pronta).")}
           </Empty>
         )}
         <ul className="max-h-52 space-y-1 overflow-y-auto p-1 lg:max-h-[65vh]">
@@ -107,7 +113,7 @@ function ReviewDesk({ tax }: { tax: Taxonomy }) {
                 className={`w-full rounded-md px-3 py-2 text-left text-sm ${e.id === sel ? "bg-suite-raised border-l-2 border-take" : "hover:bg-suite-panel"}`}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate font-medium">{e.streamer_name || "—"}</span>
-                  <span className="shrink-0 text-xs text-ink-muted">{e.ai.decision === "accepted" ? "corte" : "rejeitado"} · {fmt(e.ai.score)}</span>
+                  <span className="shrink-0 text-xs text-ink-muted">{e.ai.decision === "accepted" ? t("corte") : t("rejeitado")} · {fmt(e.ai.score)}</span>
                 </div>
                 <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-ink-muted">
                   <span className="truncate">{e.stratum_label}</span>
@@ -191,7 +197,7 @@ function ExampleReview({ id, tax, onDone }: { id: number; tax: Taxonomy; onDone:
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  if (!e) return ex.isLoading ? <Skeleton label="Carregando exemplo" /> : <ErrorNote error={ex.error} />;
+  if (!e) return ex.isLoading ? <Skeleton label={t("Carregando exemplo")} /> : <ErrorNote error={ex.error} />;
   const abs = (t: number) => e.media_start + t; // media time -> session time
   function mark(k: keyof Marks) {
     if (!video.current || !e) return;
@@ -210,34 +216,34 @@ function ExampleReview({ id, tax, onDone }: { id: number; tax: Taxonomy; onDone:
     <section className="panel panel-body space-y-5">
       <header className="flex flex-wrap items-center gap-2 text-sm">
         <h2 className="display text-lg">{e.streamer_name}</h2>
-        <span className="text-ink-muted">{platformName[e.platform] ?? e.platform} · sessão {e.session_id} · {e.split === "val" ? "validação" : "treino"}</span>
+        <span className="text-ink-muted">{platformName[e.platform] ?? e.platform} {t("· sessão {session_id} ·", { session_id: e.session_id })} {e.split === "val" ? t("validação") : t("treino")}</span>
         <ProviderBadge provider={ai.provider} tax={tax} />
         <span className="rounded bg-suite-raised px-1.5 py-0.5 text-[11px] text-ink-muted">{e.stratum_label}</span>
-        {e.is_test && <span className="rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-semibold text-take">TESTE MANUAL · nunca usado como positivo</span>}
+        {e.is_test && <span className="rounded bg-black/60 px-1.5 py-0.5 text-[11px] font-semibold text-take">{t("TESTE MANUAL · nunca usado como positivo")}</span>}
       </header>
 
       {e.media_state === "ready" ? (
-        <div className="media-stage"><video ref={video} className="aspect-video max-h-[50vh] w-full" controls playsInline preload="metadata" aria-label="Vídeo do exemplo"
+        <div className="media-stage"><video ref={video} className="aspect-video max-h-[50vh] w-full" controls playsInline preload="metadata" aria-label={t("Vídeo do exemplo")}
           src={`/api/review/examples/${e.id}/media`} onTimeUpdate={(ev) => setNow((ev.target as HTMLVideoElement).currentTime)} /></div>
       ) : (
         <div className="flex aspect-video w-full items-center justify-center rounded-lg bg-suite-panel text-sm text-ink-muted">
-          {e.media_state === "pending" ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Preparando a mídia…</> : `Mídia indisponível: ${e.media_error || e.media_state}`}
+          {e.media_state === "pending" ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> {t("Preparando a mídia…")}</> : t("Mídia indisponível: {v}", { v: e.media_error || e.media_state })}
         </div>
       )}
 
       {/* Faixas de seleção da IA e do operador. */}
       <div>
-        <div className="relative h-10 rounded-md bg-suite-panel" aria-label="Linha do tempo do exemplo">
+        <div className="relative h-10 rounded-md bg-suite-panel" aria-label={t("Linha do tempo do exemplo")}>
           {x(ai.start) !== null && x(ai.end) !== null && (
-            <div className="absolute top-1 h-3 rounded bg-take/70" style={{ left: `${x(ai.start)}%`, width: `${x(ai.end)! - x(ai.start)!}%` }} title="Seleção da IA" />
+            <div className="absolute top-1 h-3 rounded bg-take/70" style={{ left: `${x(ai.start)}%`, width: `${x(ai.end)! - x(ai.start)!}%` }} title={t("Seleção da IA")} />
           )}
           {x(ai.heuristic_start) !== null && x(ai.heuristic_end) !== null && (ai.heuristic_start !== ai.start || ai.heuristic_end !== ai.end) && (
-            <div className="absolute top-[18px] h-1 rounded bg-take/30" style={{ left: `${x(ai.heuristic_start)}%`, width: `${x(ai.heuristic_end)! - x(ai.heuristic_start)!}%` }} title="Seleção heurística original" />
+            <div className="absolute top-[18px] h-1 rounded bg-take/30" style={{ left: `${x(ai.heuristic_start)}%`, width: `${x(ai.heuristic_end)! - x(ai.heuristic_start)!}%` }} title={t("Seleção heurística original")} />
           )}
           {x(marks.short_start) !== null && x(marks.short_end) !== null && (
-            <div className="absolute bottom-1 h-3 rounded bg-ok/70" style={{ left: `${x(marks.short_start)}%`, width: `${Math.max(0.5, x(marks.short_end)! - x(marks.short_start)!)}%` }} title="Seu Short ideal" />
+            <div className="absolute bottom-1 h-3 rounded bg-ok/70" style={{ left: `${x(marks.short_start)}%`, width: `${Math.max(0.5, x(marks.short_end)! - x(marks.short_start)!)}%` }} title={t("Seu Short ideal")} />
           )}
-          {x(ai.peak) !== null && <div className="absolute inset-y-0 w-0.5 bg-take" style={{ left: `${x(ai.peak)}%` }} title="Pico (IA)" />}
+          {x(ai.peak) !== null && <div className="absolute inset-y-0 w-0.5 bg-take" style={{ left: `${x(ai.peak)}%` }} title={t("Pico (IA)")} />}
           {(["event_start", "event_peak", "event_end"] as const).map((k) => x(marks[k]) !== null && (
             <div key={k} className="absolute inset-y-0 w-0.5 bg-ok" style={{ left: `${x(marks[k])}%` }} title={k} />
           ))}
@@ -245,35 +251,35 @@ function ExampleReview({ id, tax, onDone }: { id: number; tax: Taxonomy; onDone:
         </div>
         <div className="mt-1 flex justify-between text-[11px] text-ink-faint">
           <span>{timecode(e.media_start)}</span>
-          <span><span className="text-take">■</span> IA <span className="ml-2 text-ok">■</span> Você</span>
+          <span><span className="text-take">■</span> {t("IA")} <span className="ml-2 text-ok">■</span> {t("Você")}</span>
           <span>{timecode(e.media_end)}</span>
         </div>
       </div>
 
       <div className="flex flex-wrap gap-2 text-sm">
         {([
-          ["event_start", "Início do acontecimento", "A"], ["event_peak", "Ponto principal", "P"], ["event_end", "Fim da situação", "F"],
-          ["short_start", "Início do Short", "I"], ["short_end", "Fim do Short", "O"],
+          ["event_start", t("Início do acontecimento"), "A"], ["event_peak", t("Ponto principal"), "P"], ["event_end", t("Fim da situação"), "F"],
+          ["short_start", t("Início do Short"), "I"], ["short_end", t("Fim do Short"), "O"],
         ] as const).map(([k, label, key]) => (
           <button key={k} className="btn-quiet" onClick={() => mark(k)} disabled={e.media_state !== "ready"}>
             {label} <kbd className="ml-1 text-[10px] text-ink-faint">{key}</kbd>
             {marks[k] !== null && <span className="ml-1 text-ok" onClick={(ev) => { ev.stopPropagation(); seek(marks[k]); }}>{timecode(marks[k]!)}</span>}
           </button>
         ))}
-        <button className="btn-quiet" onClick={() => { seek(ai.start); }}>Ir para início da IA</button>
+        <button className="btn-quiet" onClick={() => { seek(ai.start); }}>{t("Ir para início da IA")}</button>
       </div>
 
       <div className="grid gap-3 rounded-lg border border-suite-line p-3 text-sm sm:grid-cols-3">
-        <div><p className="text-xs text-ink-muted">Duração IA</p><p>{aiDur !== null ? `${aiDur.toFixed(0)} s` : "n/d"}</p></div>
-        <div><p className="text-xs text-ink-muted">Sua duração ideal</p><p>{humanDur !== null ? `${humanDur.toFixed(0)} s` : "marque I e O"}</p></div>
-        <div><p className="text-xs text-ink-muted">Diferença de início / fim</p>
+        <div><p className="text-xs text-ink-muted">{t("Duração IA")}</p><p>{aiDur !== null ? `${aiDur.toFixed(0)} s` : "n/d"}</p></div>
+        <div><p className="text-xs text-ink-muted">{t("Sua duração ideal")}</p><p>{humanDur !== null ? `${humanDur.toFixed(0)} s` : t("marque I e O")}</p></div>
+        <div><p className="text-xs text-ink-muted">{t("Diferença de início / fim")}</p>
           <p>{marks.short_start !== null && ai.start !== null ? `${(ai.start - marks.short_start).toFixed(1)} s` : "—"} / {marks.short_end !== null && ai.end !== null ? `${(ai.end - marks.short_end).toFixed(1)} s` : "—"}</p></div>
       </div>
 
-      <Disclosure title="Decisão e evidências da IA"><AiSide e={e} tax={tax} seek={seek} /></Disclosure>
+      <Disclosure title={t("Decisão e evidências da IA")}><AiSide e={e} tax={tax} seek={seek} /></Disclosure>
 
       <div>
-        <p className="mb-2 text-sm font-medium">Avaliação editorial <span className="text-xs text-ink-muted">(teclas 1–5)</span></p>
+        <p className="mb-2 text-sm font-medium">{t("Avaliação editorial")} <span className="text-xs text-ink-muted">{t("(teclas 1–5)")}</span></p>
         <div className="flex flex-wrap gap-2">
           {Object.entries(tax.ratings).map(([k, label], i) => (
             <button key={k} aria-pressed={rating === k} onClick={() => setRating(k)}
@@ -286,44 +292,44 @@ function ExampleReview({ id, tax, onDone }: { id: number; tax: Taxonomy; onDone:
 
       <div className="grid gap-4 md:grid-cols-2">
         <fieldset>
-          <legend className="mb-2 text-sm font-medium">Motivos editoriais</legend>
+          <legend className="mb-2 text-sm font-medium">{t("Motivos editoriais")}</legend>
           <Chips options={tax.editorial_reasons} value={reasons} onChange={setReasons} />
         </fieldset>
         <fieldset>
-          <legend className="mb-2 text-sm font-medium">Problemas técnicos <span className="text-xs text-ink-muted">(separados do julgamento editorial)</span></legend>
+          <legend className="mb-2 text-sm font-medium">{t("Problemas técnicos")} <span className="text-xs text-ink-muted">{t("(separados do julgamento editorial)")}</span></legend>
           <Chips options={tax.technical_issues} value={tech} onChange={setTech} />
         </fieldset>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <label className="block text-sm">
-          <span className="mb-1 block font-medium">Tipo de momento</span>
+          <span className="mb-1 block font-medium">{t("Tipo de momento")}</span>
           <select className="field" value={category} onChange={(ev) => setCategory(ev.target.value)}>
             <option value="">—</option>
             {Object.entries(tax.categories).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </label>
         <label className="block text-sm">
-          <span className="mb-1 block font-medium">Qualidade do contexto: {ctxq ?? "—"}</span>
+          <span className="mb-1 block font-medium">{t("Qualidade do contexto:")} {ctxq ?? "—"}</span>
           <input type="range" min={0} max={10} value={ctxq ?? 5} onChange={(ev) => setCtxq(Number(ev.target.value))} className="w-full " />
         </label>
       </div>
       <label className="block text-sm">
-        <span className="mb-1 block font-medium">Descrição objetiva do que acontece</span>
+        <span className="mb-1 block font-medium">{t("Descrição objetiva do que acontece")}</span>
         <textarea className="field min-h-[60px]" value={description} onChange={(ev) => setDescription(ev.target.value)}
-          placeholder="Ex.: foge da polícia de moto, bate num poste e o streamer ri da própria falha" />
+          placeholder={t("Ex.: foge da polícia de moto, bate num poste e o streamer ri da própria falha")} />
       </label>
       <label className="block text-sm">
-        <span className="mb-1 block font-medium">Observações</span>
+        <span className="mb-1 block font-medium">{t("Observações")}</span>
         <textarea className="field min-h-[48px]" value={notes} onChange={(ev) => setNotes(ev.target.value)} />
       </label>
 
       <ErrorNote error={save.error} />
       <div className="flex flex-wrap gap-2">
         <button className="btn-take" disabled={!rating || save.isPending} onClick={() => save.mutate()}>
-          <Save className="h-4 w-4" /> Salvar e ir para o próximo
+          <Save className="h-4 w-4" /> {t("Salvar e ir para o próximo")}
         </button>
-        <button className="btn-quiet" onClick={onDone}><SkipForward className="h-4 w-4" /> Pular</button>
+        <button className="btn-quiet" onClick={onDone}><SkipForward className="h-4 w-4" /> {t("Pular")}</button>
       </div>
 
     </section>
@@ -353,33 +359,33 @@ function AiSide({ e, tax, seek }: { e: Example; tax: Taxonomy; seek: (t: number)
   const events = e.context?.acoustic_events ?? [];
   return (
     <details className="rounded-lg border border-suite-line p-3 text-sm" open>
-      <summary className="cursor-pointer font-medium">O que a IA viu e decidiu</summary>
+      <summary className="cursor-pointer font-medium">{t("O que a IA viu e decidiu")}</summary>
       <div className="mt-3 grid gap-4 md:grid-cols-2">
         <div className="space-y-2">
           <p>
-            Decisão: <b>{ai.decision === "accepted" ? "virou corte" : `rejeitado (${ai.decision})`}</b> · nota {fmt(ai.score, 1)}
-            {ai.min_score !== null && ai.min_score !== undefined && <> (mínimo {fmt(ai.min_score)})</>}
-            {ai.ranker_score !== null && ai.ranker_score !== undefined && <> · classificador {pct(ai.ranker_score)}</>}
+            {t("Decisão:")} <b>{ai.decision === "accepted" ? t("virou corte") : `rejeitado (${ai.decision})`}</b> {t("· nota")} {fmt(ai.score, 1)}
+            {ai.min_score !== null && ai.min_score !== undefined && <> {t("(mínimo")} {fmt(ai.min_score)})</>}
+            {ai.ranker_score !== null && ai.ranker_score !== undefined && <> {t("· classificador")} {pct(ai.ranker_score)}</>}
           </p>
-          <p className="flex items-center gap-2 text-xs">Produzido por <ProviderBadge provider={ai.provider} tax={tax} /></p>
-          <p className="text-xs text-ink-muted">A nota é uma heurística de ordenação. Não é garantia de qualidade nem probabilidade de viralizar.</p>
-          {ai.fallback_reason && <p className="text-xs text-tally">Fallback: {ai.fallback_reason}</p>}
-          {ai.visual?.summary && <p><span className="text-ink-muted">Visão ({ai.visual.model ?? "modelo"}):</span> {ai.visual.summary}</p>}
-          {e.context?.disagreement && <p className="text-take">Áudio ({fmt(e.context.disagreement.audio_score)}) e visão ({fmt(e.context.disagreement.visual_interest, 1)}/10) discordam.</p>}
+          <p className="flex items-center gap-2 text-xs">{t("Produzido por")} <ProviderBadge provider={ai.provider} tax={tax} /></p>
+          <p className="text-xs text-ink-muted">{t("A nota é uma heurística de ordenação. Não é garantia de qualidade nem probabilidade de viralizar.")}</p>
+          {ai.fallback_reason && <p className="text-xs text-tally">{t("Fallback:")} {ai.fallback_reason}</p>}
+          {ai.visual?.summary && <p><span className="text-ink-muted">{t("Visão ({v}):", { v: ai.visual.model ?? t("modelo") })}</span> {ai.visual.summary}</p>}
+          {e.context?.disagreement && <p className="text-take">{t("Áudio (")}{fmt(e.context.disagreement.audio_score)}{t(") e visão (")}{fmt(e.context.disagreement.visual_interest, 1)}/10) discordam.</p>}
           {(ai.reasons ?? []).length > 0 && <ul className="list-inside list-disc text-xs text-ink-muted">{ai.reasons!.slice(0, 8).map((r, i) => <li key={i}>{r}</li>)}</ul>}
-          {(ai.director?.adjustments ?? []).length > 0 && <p className="text-xs text-ink-muted">Diretor: {ai.director!.adjustments!.join("; ")}</p>}
+          {(ai.director?.adjustments ?? []).length > 0 && <p className="text-xs text-ink-muted">{t("Diretor:")} {ai.director!.adjustments!.join("; ")}</p>}
         </div>
         <div className="space-y-2">
-          <p className="text-xs text-ink-muted">Eventos acústicos</p>
+          <p className="text-xs text-ink-muted">{t("Eventos acústicos")}</p>
           <ul className="max-h-32 space-y-0.5 overflow-y-auto text-xs">
-            {events.length === 0 && <li className="text-ink-faint">nenhum</li>}
+            {events.length === 0 && <li className="text-ink-faint">{t("nenhum")}</li>}
             {events.map((ev, i) => (
               <li key={i}><button className="text-take hover:underline" onClick={() => seek(ev.t)}>{timecode(ev.t)}</button> {ev.kind}{ev.phrase ? ` “${ev.phrase}”` : ""}{ev.source ? ` (${ev.source})` : ""}</li>
             ))}
           </ul>
-          <p className="text-xs text-ink-muted">Transcrição</p>
+          <p className="text-xs text-ink-muted">{t("Transcrição")}</p>
           <p className="max-h-32 overflow-y-auto text-xs leading-relaxed">
-            {words.length === 0 ? <span className="text-ink-faint">sem fala</span> : words.map(([t, w], i) => (
+            {words.length === 0 ? <span className="text-ink-faint">{t("sem fala")}</span> : words.map(([t, w], i) => (
               <span key={i} className="cursor-pointer hover:text-take" onClick={() => seek(t)}>{w} </span>
             ))}
           </p>
@@ -387,9 +393,9 @@ function AiSide({ e, tax, seek }: { e: Example; tax: Taxonomy; seek: (t: number)
       </div>
       {e.provenance && (
         <p className="mt-3 break-all text-[11px] text-ink-faint">
-          Versões: app {String((e.provenance as Record<string, unknown>).app ?? "?")} · pontuação {String((e.provenance as Record<string, unknown>).scoring ?? "?")} · config {String((e.provenance as Record<string, unknown>).settings_hash ?? "?")}
+          {t("Versões: app {String} · pontuação {String2} · config {String3}", { String: String((e.provenance as Record<string, unknown>).app ?? "?"), String2: String((e.provenance as Record<string, unknown>).scoring ?? "?"), String3: String((e.provenance as Record<string, unknown>).settings_hash ?? "?") })}
           {(e.provenance as { analysis?: { prompt_version?: string; vision_model?: string } }).analysis &&
-            <> · visão {String((e.provenance as { analysis: { vision_model?: string } }).analysis.vision_model ?? "—")} · prompt {String((e.provenance as { analysis: { prompt_version?: string } }).analysis.prompt_version ?? "—")}</>}
+            <> {t("· visão {String} · prompt", { String: String((e.provenance as { analysis: { vision_model?: string } }).analysis.vision_model ?? "—") })} {String((e.provenance as { analysis: { prompt_version?: string } }).analysis.prompt_version ?? "—")}</>}
         </p>
       )}
     </details>
@@ -435,12 +441,12 @@ function Metrics({ tax }: { tax: Taxonomy }) {
   const [, setParams] = useSearchParams();
   const ed = m.data?.editorial;
   const open = (id: number) => setParams({ aba: "revisar", ex: String(id) });
-  const stageName: Record<string, string> = { audio_analyze: "Áudio e transcrição", score: "Pontuação", vision_analyze: "Análise multimodal", render: "Renderização", dataset_media: "Mídia do dataset" };
+  const stageName: Record<string, string> = { audio_analyze: t("Áudio e transcrição"), score: t("Pontuação"), vision_analyze: t("Análise multimodal"), render: t("Renderização"), dataset_media: t("Mídia do dataset") };
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2 text-sm">
-        <span className="text-ink-muted">Conjunto:</span>
-        {[["", "Todos"], ["train", "Treino"], ["val", "Validação"]].map(([k, l]) => (
+        <span className="text-ink-muted">{t("Conjunto:")}</span>
+        {[["", t("Todos")], ["train", t("Treino")], ["val", t("Validação")]].map(([k, l]) => (
           <button key={k} onClick={() => setSplit(k)} className={`rounded px-2 py-1 ${split === k ? "bg-suite-raised" : "text-ink-muted"}`}>{l}</button>
         ))}
       </div>
@@ -448,42 +454,42 @@ function Metrics({ tax }: { tax: Taxonomy }) {
       {ed && (
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Stat label="Avaliações" value={String(ed.reviewed)} hint={`${ed.reviewed_accepted} cortes · ${ed.reviewed_rejected} rejeitados`} />
-            <Stat label="Precisão dos cortes" value={pct(ed.precision)} hint="bons ou excelentes entre os cortes avaliados (sem 'regular')" />
-            <Stat label="Cobertura" value={pct(ed.coverage)} hint="bons momentos conhecidos que viraram corte" />
-            <Stat label="Taxa de aprovação" value={pct(ed.approval_rate)} />
-            <Stat label="Falsos positivos por hora" value={fmt(ed.false_positives_per_hour, 2)} hint={`${ed.false_positives} ruins/indevidos · ${ed.hours_captured} h capturadas`} />
-            <Stat label="Falsos negativos conhecidos" value={String(ed.false_negatives_known)} hint="rejeitados que você avaliou como bons" />
-            <Stat label="Erro no início (mediana / p95)" value={`${fmt(ed.start_error_s.median, 1)} / ${fmt(ed.start_error_s.p95, 1)} s`} hint={`${ed.start_error_s.n} cortes com marcação`} />
-            <Stat label="Erro no fim (mediana / p95)" value={`${fmt(ed.end_error_s.median, 1)} / ${fmt(ed.end_error_s.p95, 1)} s`} />
-            <Stat label="Duração média IA / ideal" value={`${fmt(ed.duration_s.ai_mean)} / ${fmt(ed.duration_s.human_ideal_mean)} s`} />
-            <Stat label="Duplicatas marcadas" value={String(ed.duplicates_flagged)} />
+            <Stat label={t("Avaliações")} value={String(ed.reviewed)} hint={t("{reviewed_accepted} cortes · {reviewed_rejected} rejeitados", { reviewed_accepted: ed.reviewed_accepted, reviewed_rejected: ed.reviewed_rejected })} />
+            <Stat label={t("Precisão dos cortes")} value={pct(ed.precision)} hint={t("bons ou excelentes entre os cortes avaliados (sem 'regular')")} />
+            <Stat label={t("Cobertura")} value={pct(ed.coverage)} hint={t("bons momentos conhecidos que viraram corte")} />
+            <Stat label={t("Taxa de aprovação")} value={pct(ed.approval_rate)} />
+            <Stat label={t("Falsos positivos por hora")} value={fmt(ed.false_positives_per_hour, 2)} hint={`${ed.false_positives} ruins/indevidos · ${ed.hours_captured} h capturadas`} />
+            <Stat label={t("Falsos negativos conhecidos")} value={String(ed.false_negatives_known)} hint={t("rejeitados que você avaliou como bons")} />
+            <Stat label={t("Erro no início (mediana / p95)")} value={`${fmt(ed.start_error_s.median, 1)} / ${fmt(ed.start_error_s.p95, 1)} s`} hint={t("{n} cortes com marcação", { n: ed.start_error_s.n })} />
+            <Stat label={t("Erro no fim (mediana / p95)")} value={`${fmt(ed.end_error_s.median, 1)} / ${fmt(ed.end_error_s.p95, 1)} s`} />
+            <Stat label={t("Duração média IA / ideal")} value={`${fmt(ed.duration_s.ai_mean)} / ${fmt(ed.duration_s.human_ideal_mean)} s`} />
+            <Stat label={t("Duplicatas marcadas")} value={String(ed.duplicates_flagged)} />
           </div>
           <div className="rounded-lg border border-suite-line p-3">
-            <p className="mb-2 text-sm font-medium">Precision@5 por sessão: os melhores aparecem no topo?</p>
-            <div className="table-scroll" role="region" tabIndex={0} aria-label="Qualidade editorial por recorte"><table className="w-full min-w-[28rem] text-sm">
-              <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Ordenação</th><th>P@5</th></tr></thead>
+            <p className="mb-2 text-sm font-medium">{t("Precision@5 por sessão: os melhores aparecem no topo?")}</p>
+            <div className="table-scroll" role="region" tabIndex={0} aria-label={t("Qualidade editorial por recorte")}><table className="w-full min-w-[28rem] text-sm">
+              <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">{t("Ordenação")}</th><th>{t("P@5")}</th></tr></thead>
               <tbody>
-                <tr><td className="py-1">A. Heurística (v0.2.9)</td><td>{pct(ed.precision_at_5.heuristic)}</td></tr>
-                <tr><td className="py-1">B. Julgamento contextual (diretor + visão + memória)</td><td>{pct(ed.precision_at_5.contextual)}</td></tr>
-                <tr><td className="py-1">C. Classificador treinado</td><td>{pct(ed.precision_at_5.ranker)}</td></tr>
+                <tr><td className="py-1">{t("A. Heurística (v0.2.9)")}</td><td>{pct(ed.precision_at_5.heuristic)}</td></tr>
+                <tr><td className="py-1">{t("B. Julgamento contextual (diretor + visão + memória)")}</td><td>{pct(ed.precision_at_5.contextual)}</td></tr>
+                <tr><td className="py-1">{t("C. Classificador treinado")}</td><td>{pct(ed.precision_at_5.ranker)}</td></tr>
               </tbody>
             </table></div>
-            <p className="mt-2 text-[11px] text-ink-faint">“n/d” = avaliações insuficientes na mesma sessão para comparar. Nenhuma melhoria é declarada sem esses números.</p>
+            <p className="mt-2 text-[11px] text-ink-faint">{t("“n/d” = avaliações insuficientes na mesma sessão para comparar. Nenhuma melhoria é declarada sem esses números.")}</p>
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <div className="rounded-lg border border-suite-line p-3">
-              <p className="mb-2 text-sm font-medium">Onde a IA ainda erra: falsos positivos</p>
-              {ed.false_positive_examples.length === 0 ? <p className="text-xs text-ink-faint">nenhum registrado</p> :
+              <p className="mb-2 text-sm font-medium">{t("Onde a IA ainda erra: falsos positivos")}</p>
+              {ed.false_positive_examples.length === 0 ? <p className="text-xs text-ink-faint">{t("nenhum registrado")}</p> :
                 <ul className="space-y-1 text-xs">{ed.false_positive_examples.map((f) => (
-                  <li key={f.example_id}><button className="text-take hover:underline" onClick={() => open(f.example_id)}>#{f.example_id}</button> nota {fmt(f.score)} · {tax.ratings[f.rating]} · {f.reasons.map((r) => tax.editorial_reasons[r] ?? r).join(", ")}</li>
+                  <li key={f.example_id}><button className="text-take hover:underline" onClick={() => open(f.example_id)}>#{f.example_id}</button> {t("nota")} {fmt(f.score)} · {tax.ratings[f.rating]} · {f.reasons.map((r) => tax.editorial_reasons[r] ?? r).join(", ")}</li>
                 ))}</ul>}
             </div>
             <div className="rounded-lg border border-suite-line p-3">
-              <p className="mb-2 text-sm font-medium">Falsos negativos conhecidos</p>
-              {ed.false_negative_examples.length === 0 ? <p className="text-xs text-ink-faint">nenhum registrado</p> :
+              <p className="mb-2 text-sm font-medium">{t("Falsos negativos conhecidos")}</p>
+              {ed.false_negative_examples.length === 0 ? <p className="text-xs text-ink-faint">{t("nenhum registrado")}</p> :
                 <ul className="space-y-1 text-xs">{ed.false_negative_examples.map((f) => (
-                  <li key={f.example_id}><button className="text-take hover:underline" onClick={() => open(f.example_id)}>#{f.example_id}</button> {tax.strata[f.stratum] ?? f.stratum} · nota {fmt(f.score)} · {tax.ratings[f.rating]}</li>
+                  <li key={f.example_id}><button className="text-take hover:underline" onClick={() => open(f.example_id)}>#{f.example_id}</button> {t("{v} · nota", { v: tax.strata[f.stratum] ?? f.stratum })} {fmt(f.score)} · {tax.ratings[f.rating]}</li>
                 ))}</ul>}
             </div>
           </div>
@@ -491,21 +497,21 @@ function Metrics({ tax }: { tax: Taxonomy }) {
       )}
       {op.data && (
         <div className="rounded-lg border border-suite-line p-3">
-          <p className="mb-2 text-sm font-medium">Desempenho operacional (últimas 24 h)</p>
+          <p className="mb-2 text-sm font-medium">{t("Desempenho operacional (últimas 24 h)")}</p>
           <div className="mb-3 grid gap-3 sm:grid-cols-4">
-            <Stat label="Short pronto (p50 / p95)" value={`${fmt(op.data.clip_ready_s.p50)} / ${fmt(op.data.clip_ready_s.p95)} s`} />
-            <Stat label="Inferência VLM (p50 / p95)" value={`${fmt(op.data.vlm_s.p50, 1)} / ${fmt(op.data.vlm_s.p95, 1)} s`} />
-            <Stat label="Candidatos por hora" value={fmt(op.data.candidates_per_hour, 1)} />
-            <Stat label="Cortes por hora" value={fmt(op.data.clips_per_hour, 2)} />
+            <Stat label={t("Short pronto (p50 / p95)")} value={`${fmt(op.data.clip_ready_s.p50)} / ${fmt(op.data.clip_ready_s.p95)} s`} />
+            <Stat label={t("Inferência VLM (p50 / p95)")} value={`${fmt(op.data.vlm_s.p50, 1)} / ${fmt(op.data.vlm_s.p95, 1)} s`} />
+            <Stat label={t("Candidatos por hora")} value={fmt(op.data.candidates_per_hour, 1)} />
+            <Stat label={t("Cortes por hora")} value={fmt(op.data.clips_per_hour, 2)} />
           </div>
-          <div className="table-scroll" role="region" tabIndex={0} aria-label="Desempenho por dimensão"><table className="w-full min-w-[28rem] text-sm">
-            <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Etapa</th><th>Jobs</th><th>Execução p50/p95</th><th>Espera na fila p50/p95</th><th>Na fila agora</th></tr></thead>
+          <div className="table-scroll" role="region" tabIndex={0} aria-label={t("Desempenho por dimensão")}><table className="w-full min-w-[28rem] text-sm">
+            <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">{t("Etapa")}</th><th>{t("Jobs")}</th><th>{t("Execução p50/p95")}</th><th>{t("Espera na fila p50/p95")}</th><th>{t("Na fila agora")}</th></tr></thead>
             <tbody>
               {Object.entries(op.data.stages).map(([k, s]) => (
                 <tr key={k} className="border-t border-suite-line/50">
                   <td className="py-1">{stageName[k] ?? k}</td><td>{s.n}</td>
-                  <td>{fmt(s.run_p50, 1)} / {fmt(s.run_p95, 1)} s</td><td>{fmt(s.wait_p50, 1)} / {fmt(s.wait_p95, 1)} s</td>
-                  <td>{op.data!.queue.queued[k] ?? 0}{op.data!.queue.oldest_s[k] ? ` (mais antigo ${op.data!.queue.oldest_s[k]} s)` : ""}</td>
+                  <td>{fmt(s.run_p50, 1)} / {fmt(s.run_p95, 1)} {t("s")}</td><td>{fmt(s.wait_p50, 1)} / {fmt(s.wait_p95, 1)} {t("s")}</td>
+                  <td>{op.data!.queue.queued[k] ?? 0}{op.data!.queue.oldest_s[k] ? t(" (mais antigo {v} s)", { v: op.data!.queue.oldest_s[k] }) : ""}</td>
                 </tr>
               ))}
             </tbody>
@@ -546,27 +552,27 @@ function DatasetPanel({ tax }: { tax: Taxonomy }) {
     <div className="space-y-6">
       {s && (
         <div className="grid gap-3 sm:grid-cols-4">
-          <Stat label="Exemplos" value={String(s.total)} hint={`${s.reviewed} avaliados`} />
-          <Stat label="Candidatos registrados" value={String(s.candidates)} hint="todos os momentos pontuados, inclusive os rejeitados" />
-          <Stat label="Treino / validação" value={`${s.by_split.train?.total ?? 0} / ${s.by_split.val?.total ?? 0}`} hint="separados por sessão (sem vazamento)" />
+          <Stat label={t("Exemplos")} value={String(s.total)} hint={`${s.reviewed} avaliados`} />
+          <Stat label={t("Candidatos registrados")} value={String(s.candidates)} hint={t("todos os momentos pontuados, inclusive os rejeitados")} />
+          <Stat label={t("Treino / validação")} value={`${s.by_split.train?.total ?? 0} / ${s.by_split.val?.total ?? 0}`} hint={t("separados por sessão (sem vazamento)")} />
           <div className="rounded-lg border border-suite-line p-3">
-            <p className="text-xs text-ink-muted">Mídia do dataset</p>
+            <p className="text-xs text-ink-muted">{t("Mídia do dataset")}</p>
             <p className="display mt-1 text-xl">{bytes(s.media_bytes)}</p>
             <div className="mt-2 h-1.5 rounded-full bg-suite-line"><div className="h-1.5 rounded-full bg-take" style={{ width: `${useBar}%` }} /></div>
-            <p className="mt-1 text-[11px] text-ink-faint">cota {bytes(s.quota_bytes)} · retenção em Configurações da IA</p>
+            <p className="mt-1 text-[11px] text-ink-faint">{t("cota {bytes} · retenção em Configurações da IA", { bytes: bytes(s.quota_bytes) })}</p>
           </div>
         </div>
       )}
       {s && (
         <div className="grid gap-4 md:grid-cols-2">
           <div className="rounded-lg border border-suite-line p-3 text-sm">
-            <p className="mb-2 font-medium">Por motivo de seleção</p>
+            <p className="mb-2 font-medium">{t("Por motivo de seleção")}</p>
             <ul className="space-y-1">{Object.entries(s.by_stratum).map(([k, v]) => (
               <li key={k} className="flex justify-between"><span>{tax.strata[k] ?? k}</span><span className="text-ink-muted">{v.reviewed}/{v.total}</span></li>
             ))}</ul>
           </div>
           <div className="rounded-lg border border-suite-line p-3 text-sm">
-            <p className="mb-2 font-medium">Avaliações por nota</p>
+            <p className="mb-2 font-medium">{t("Avaliações por nota")}</p>
             <ul className="space-y-1">{Object.entries(tax.ratings).map(([k, label]) => (
               <li key={k} className="flex justify-between"><span>{label}</span><span className="text-ink-muted">{s.by_rating[k] ?? 0}</span></li>
             ))}</ul>
@@ -574,44 +580,41 @@ function DatasetPanel({ tax }: { tax: Taxonomy }) {
         </div>
       )}
       <div className="flex flex-wrap gap-2">
-        <a className="btn-quiet" href="/api/review/export?format=jsonl"><Download className="h-4 w-4" /> Exportar JSONL (avaliados)</a>
-        <a className="btn-quiet" href="/api/review/export?format=csv"><Download className="h-4 w-4" /> Exportar CSV de atributos</a>
-        <a className="btn-quiet" href="/api/review/export?format=jsonl&split=val">Só validação</a>
-        <button className="btn-quiet" disabled={backfill.isPending} onClick={() => backfill.mutate()}><Flag className="h-4 w-4" /> Incluir cortes antigos</button>
-        {backfill.data && <span className="self-center text-xs text-ink-muted">{backfill.data.created} cortes incluídos</span>}
+        <a className="btn-quiet" href="/api/review/export?format=jsonl"><Download className="h-4 w-4" /> {t("Exportar JSONL (avaliados)")}</a>
+        <a className="btn-quiet" href="/api/review/export?format=csv"><Download className="h-4 w-4" /> {t("Exportar CSV de atributos")}</a>
+        <a className="btn-quiet" href="/api/review/export?format=jsonl&split=val">{t("Só validação")}</a>
+        <button className="btn-quiet" disabled={backfill.isPending} onClick={() => backfill.mutate()}><Flag className="h-4 w-4" /> {t("Incluir cortes antigos")}</button>
+        {backfill.data && <span className="self-center text-xs text-ink-muted">{backfill.data.created} {t("cortes incluídos")}</span>}
       </div>
 
       <div className="rounded-lg border border-suite-line p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-medium">Classificador de ranking (aprende com as suas avaliações)</p>
-          <button className="btn-take" disabled={train.isPending} onClick={() => train.mutate()}>Treinar nova versão</button>
+          <p className="text-sm font-medium">{t("Classificador de ranking (aprende com as suas avaliações)")}</p>
+          <button className="btn-take" disabled={train.isPending} onClick={() => train.mutate()}>{t("Treinar nova versão")}</button>
         </div>
         {rk.data && (
           <p className="mb-3 text-xs text-ink-muted">
-            Modo atual: <b>{rk.data.mode === "shadow" ? "sombra (calcula e mostra, não decide)" : rk.data.mode === "active" ? "ativo" : "desligado"}</b>.
-            Exemplos rotulados: treino {rk.data.labelled.train?.n ?? 0} ({rk.data.labelled.train?.pos ?? 0} positivos),
-            validação {rk.data.labelled.val?.n ?? 0} ({rk.data.labelled.val?.pos ?? 0} positivos).
-            Mínimo: {rk.data.requirements.min_train} no treino com ≥{rk.data.requirements.min_per_class} de cada classe e {rk.data.requirements.min_val} na validação.
+            {t("Modo atual:")} <b>{rk.data.mode === "shadow" ? t("sombra (calcula e mostra, não decide)") : rk.data.mode === "active" ? "ativo" : "desligado"}</b>{t(". Exemplos rotulados: treino {v} ({v2} positivos), validação {v3} ({v4} positivos). Mínimo: {min_train} no treino com ≥{min_per_class} de cada classe e {min_val} na validação.", { v: rk.data.labelled.train?.n ?? 0, v2: rk.data.labelled.train?.pos ?? 0, v3: rk.data.labelled.val?.n ?? 0, v4: rk.data.labelled.val?.pos ?? 0, min_train: rk.data.requirements.min_train, min_per_class: rk.data.requirements.min_per_class, min_val: rk.data.requirements.min_val })}
           </p>
         )}
         <ErrorNote error={train.error ?? setStatus.error} />
-        <div className="table-scroll" role="region" tabIndex={0} aria-label="Rankers do dataset"><table className="w-full min-w-[28rem] text-sm">
-          <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Versão</th><th>Estado</th><th>AUC val. (modelo / heurística)</th><th>P@5 (modelo / heurística)</th><th>Treino/val</th><th /></tr></thead>
+        <div className="table-scroll" role="region" tabIndex={0} aria-label={t("Rankers do dataset")}><table className="w-full min-w-[28rem] text-sm">
+          <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">{t("Versão")}</th><th>{t("Estado")}</th><th>{t("AUC val. (modelo / heurística)")}</th><th>{t("P@5 (modelo / heurística)")}</th><th>Treino/val</th><th /></tr></thead>
           <tbody>
             {(rk.data?.models ?? []).map((m) => (
               <tr key={m.id} className="border-t border-suite-line/50">
                 <td className="py-1">{m.name}</td><td>{m.status}</td>
-                <td>{fmt(m.metrics.ranker?.auc, 3)} / {fmt(m.metrics.heuristic?.auc, 3)} {m.metrics.beats_heuristic ? <span className="text-ok">melhor</span> : <span className="text-ink-faint">não superou</span>}</td>
+                <td>{fmt(m.metrics.ranker?.auc, 3)} / {fmt(m.metrics.heuristic?.auc, 3)} {m.metrics.beats_heuristic ? <span className="text-ok">{t("melhor")}</span> : <span className="text-ink-faint">{t("não superou")}</span>}</td>
                 <td>{pct(m.metrics.ranker?.p_at_5)} / {pct(m.metrics.heuristic?.p_at_5)}</td>
                 <td>{m.n_train}/{m.n_val}</td>
                 <td className="space-x-1 text-right">
-                  {m.status !== "shadow" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => setStatus.mutate({ id: m.id, status: "shadow" })}>Sombra</button>}
-                  {m.status !== "active" && m.metrics.beats_heuristic && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => setStatus.mutate({ id: m.id, status: "active" })}>Ativar</button>}
-                  {m.status !== "archived" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => setStatus.mutate({ id: m.id, status: "archived" })}>Arquivar</button>}
+                  {m.status !== "shadow" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => setStatus.mutate({ id: m.id, status: "shadow" })}>{t("Sombra")}</button>}
+                  {m.status !== "active" && m.metrics.beats_heuristic && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => setStatus.mutate({ id: m.id, status: "active" })}>{t("Ativar")}</button>}
+                  {m.status !== "archived" && <button className="btn-quiet px-2 py-1 text-xs" onClick={() => setStatus.mutate({ id: m.id, status: "archived" })}>{t("Arquivar")}</button>}
                 </td>
               </tr>
             ))}
-            {(rk.data?.models ?? []).length === 0 && <tr><td colSpan={6} className="py-2 text-xs text-ink-faint">Nenhum modelo treinado ainda. Avalie exemplos primeiro.</td></tr>}
+            {(rk.data?.models ?? []).length === 0 && <tr><td colSpan={6} className="py-2 text-xs text-ink-faint">{t("Nenhum modelo treinado ainda. Avalie exemplos primeiro.")}</td></tr>}
           </tbody>
         </table></div>
       </div>
@@ -632,7 +635,7 @@ type Learning = {
     recurring_problems: string[]; diversity: string | null; sufficient_for_training: boolean };
 };
 const outcomeLabel: Record<string, string> = {
-  profile_only: "perfil atualizado (sem treino)", trained_shadow: "treinado, em sombra", promoted: "treinado e ativado",
+  profile_only: t("perfil atualizado (sem treino)"), trained_shadow: t("treinado, em sombra"), promoted: t("treinado e ativado"),
 };
 
 function GroupTable({ title, rows }: { title: string; rows: Group[] }) {
@@ -640,8 +643,8 @@ function GroupTable({ title, rows }: { title: string; rows: Group[] }) {
   return (
     <div className="rounded-lg border border-suite-line p-3">
       <p className="mb-2 text-sm font-medium">{title}</p>
-      <div className="table-scroll" role="region" tabIndex={0} aria-label="Grupos do dataset"><table className="w-full min-w-[28rem] text-sm">
-        <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">Grupo</th><th>Rótulos</th><th>Aprovação</th><th>IC 95%</th></tr></thead>
+      <div className="table-scroll" role="region" tabIndex={0} aria-label={t("Grupos do dataset")}><table className="w-full min-w-[28rem] text-sm">
+        <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">{t("Grupo")}</th><th>{t("Rótulos")}</th><th>{t("Aprovação")}</th><th>{t("IC 95%")}</th></tr></thead>
         <tbody>{rows.slice(0, 10).map((g) => (
           <tr key={g.value} className={`border-t border-suite-line/50 ${g.reliable ? "" : "text-ink-muted"}`}>
             <td className="py-1">{g.value}</td><td>{g.n}</td><td>{pct(g.rate)}</td>
@@ -663,35 +666,35 @@ function LearningPanel() {
   return (
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-4">
-        <Stat label="Avaliações humanas" value={String(d.status.human_labels)} hint={`${d.status.labels_last_7d} nos últimos 7 dias · aprovar/rejeitar nos cortes também conta`} />
-        <Stat label="Modelo ativo" value={d.status.active_model.replace(" (nenhum classificador ativo)", "")} hint={d.status.shadow_model ? `em sombra: ${d.status.shadow_model}` : "nenhum modelo em sombra"} />
-        <Stat label="Último aprendizado" value={d.status.last_run ? ago(d.status.last_run.at) : "nunca"} hint={d.status.last_run ? `${outcomeLabel[d.status.last_run.outcome] ?? d.status.last_run.outcome} · ${d.status.last_run.labels} rótulos` : ""} />
-        <Stat label="Taxa de aprovação" value={pct(p.approval_rate)} hint={p.approval_ci95 ? `IC 95%: ${Math.round(p.approval_ci95[0] * 100)}–${Math.round(p.approval_ci95[1] * 100)}%` : ""} />
+        <Stat label={t("Avaliações humanas")} value={String(d.status.human_labels)} hint={t("{labels_last_7d} nos últimos 7 dias · aprovar/rejeitar nos cortes também conta", { labels_last_7d: d.status.labels_last_7d })} />
+        <Stat label={t("Modelo ativo")} value={d.status.active_model.replace(" (nenhum classificador ativo)", "")} hint={d.status.shadow_model ? t("em sombra: {model}", { model: d.status.shadow_model }) : t("nenhum modelo em sombra")} />
+        <Stat label={t("Último aprendizado")} value={d.status.last_run ? ago(d.status.last_run.at) : "nunca"} hint={d.status.last_run ? t("{v} · {labels} rótulos", { v: outcomeLabel[d.status.last_run.outcome] ?? d.status.last_run.outcome, labels: d.status.last_run.labels }) : ""} />
+        <Stat label={t("Taxa de aprovação")} value={pct(p.approval_rate)} hint={p.approval_ci95 ? `IC 95%: ${Math.round(p.approval_ci95[0] * 100)}–${Math.round(p.approval_ci95[1] * 100)}%` : ""} />
       </div>
       <p className={`rounded-md border px-3 py-2 text-sm ${p.labels < 30 ? "border-take/50 bg-take-dim text-take" : "border-suite-line text-ink-muted"}`}>
-        {p.labels} rótulos ({p.approved} aprovados, {p.rejected} rejeitados) — {p.note}.
-        {d.status.last_run?.detail && <span className="block text-xs opacity-80">Último treino: {d.status.last_run.detail}</span>}
+        {t("{labels} rótulos ({approved} aprovados, {rejected} rejeitados) — {note}.", { labels: p.labels, approved: p.approved, rejected: p.rejected, note: p.note })}
+        {d.status.last_run?.detail && <span className="block text-xs opacity-80">{t("Último treino:")} {d.status.last_run.detail}</span>}
       </p>
       <div className="flex flex-wrap gap-2">
-        <button className="btn-quiet" disabled={backfill.isPending} onClick={() => backfill.mutate()}>Importar aprovações/rejeições anteriores</button>
-        <button className="btn-quiet" disabled={run.isPending} onClick={() => run.mutate()}>Rodar aprendizado agora (baixa prioridade)</button>
-        {backfill.data && <span className="self-center text-xs text-ink-muted">{backfill.data.labels} decisões importadas</span>}
+        <button className="btn-quiet" disabled={backfill.isPending} onClick={() => backfill.mutate()}>{t("Importar aprovações/rejeições anteriores")}</button>
+        <button className="btn-quiet" disabled={run.isPending} onClick={() => run.mutate()}>{t("Rodar aprendizado agora (baixa prioridade)")}</button>
+        {backfill.data && <span className="self-center text-xs text-ink-muted">{backfill.data.labels} {t("decisões importadas")}</span>}
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="A nota atual separa bons de ruins?" value={p.current_score_auc === null ? "n/d" : `AUC ${p.current_score_auc}`} hint="0,5 = acaso · 1,0 = perfeito (só rótulos humanos)" />
-        <Stat label="Duração mediana" value={`${fmt(p.duration_median.approved)} / ${fmt(p.duration_median.rejected)} s`} hint="aprovados / rejeitados" />
-        <Stat label="Início da IA vs. o seu" value={p.start_delta_median === null ? "n/d" : `${p.start_delta_median > 0 ? "+" : ""}${p.start_delta_median} s`} hint="positivo = a IA começou depois do ideal" />
+        <Stat label={t("A nota atual separa bons de ruins?")} value={p.current_score_auc === null ? t("n/d") : `AUC ${p.current_score_auc}`} hint={t("0,5 = acaso · 1,0 = perfeito (só rótulos humanos)")} />
+        <Stat label={t("Duração mediana")} value={`${fmt(p.duration_median.approved)} / ${fmt(p.duration_median.rejected)} s`} hint={t("aprovados / rejeitados")} />
+        <Stat label={t("Início da IA vs. o seu")} value={p.start_delta_median === null ? t("n/d") : `${p.start_delta_median > 0 ? "+" : ""}${p.start_delta_median} s`} hint={t("positivo = a IA começou depois do ideal")} />
       </div>
       {(p.recurring_problems.length > 0 || p.diversity) && (
         <div className="rounded-lg border border-take/40 p-3 text-sm">
-          <p className="mb-1 font-medium">Padrões que o diretor está corrigindo</p>
+          <p className="mb-1 font-medium">{t("Padrões que o diretor está corrigindo")}</p>
           <ul className="list-inside list-disc text-ink-muted">{p.recurring_problems.map((r, i) => <li key={i}>{r}</li>)}{p.diversity && <li>{p.diversity}</li>}</ul>
         </div>
       )}
       <div className="grid gap-4 lg:grid-cols-2">
-        <GroupTable title="Por sinal detectado" rows={p.by_signal} />
-        <GroupTable title="Por streamer" rows={p.by_streamer} />
-        <GroupTable title="Por situação narrativa" rows={p.by_situation} />
+        <GroupTable title={t("Por sinal detectado")} rows={p.by_signal} />
+        <GroupTable title={t("Por streamer")} rows={p.by_streamer} />
+        <GroupTable title={t("Por situação narrativa")} rows={p.by_situation} />
       </div>
       <ErrorNote error={backfill.error ?? run.error} />
     </div>

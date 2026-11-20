@@ -5,6 +5,7 @@ import { api, type AdminUser, type ClipShareRow } from "../api";
 import GiveAccess from "../components/GiveAccess";
 import { ShareRow, shareDate } from "../components/SharePanel";
 import { ConfirmAction, Empty, ErrorNote, Notice, PageHeader, Skeleton, Status } from "../components/ui";
+import { t } from "../i18n";
 
 type Secret = { email: string; initial_password: string; note: string };
 
@@ -17,16 +18,16 @@ export default function People() {
   const current = list.find((u) => u.id === selected) ?? null;
   return (
     <div>
-      <PageHeader title="Pessoas e acesso"
-        description="Crie contas para quem é de fora da equipe e escolha quais cortes cada uma vê. Contas convidadas só enxergam a Minha Biblioteca." />
+      <PageHeader title={t("Pessoas e acesso")}
+        description={t("Crie contas para quem é de fora da equipe e escolha quais cortes cada uma vê. Contas convidadas só enxergam a Minha Biblioteca.")} />
       <div className="section-flow">
         {secret && <OneTimePassword secret={secret} onClose={() => setSecret(null)} />}
         <CreateAccount onCreated={setSecret} />
         <section aria-labelledby="accounts-title">
-          <h2 id="accounts-title" className="display mb-3 text-xl">Contas</h2>
+          <h2 id="accounts-title" className="display mb-3 text-xl">{t("Contas")}</h2>
           <ErrorNote error={users.error} />
-          {users.isLoading && <Skeleton label="Carregando contas" />}
-          {users.data && list.length === 0 && <Empty title="Nenhuma conta cadastrada" />}
+          {users.isLoading && <Skeleton label={t("Carregando contas")} />}
+          {users.data && list.length === 0 && <Empty title={t("Nenhuma conta cadastrada")} />}
           {list.length > 0 && (
             <ul className="people-list">
               {list.map((u) => (
@@ -36,13 +37,13 @@ export default function People() {
                     <span className="min-w-0">
                       <strong className="block truncate">{u.email}</strong>
                       <span className="mt-1 block text-xs text-ink-muted">
-                        {u.last_login_at ? `Último acesso em ${shareDate(u.last_login_at)}` : "Ainda não entrou"}
+                        {u.last_login_at ? t("Último acesso em {shareDate}", { shareDate: shareDate(u.last_login_at) }) : t("Ainda não entrou")}
                       </span>
                     </span>
                     <span className="flex flex-wrap items-center justify-end gap-1.5">
-                      <Status tone={u.role === "admin" ? "accent" : "neutral"}>{u.role === "admin" ? "Equipe" : "Convidado"}</Status>
-                      {!u.active && <Status tone="warning">Desativada</Status>}
-                      {u.role === "viewer" && <span className="text-xs text-ink-muted">{u.active_shares} {u.active_shares === 1 ? "corte" : "cortes"}</span>}
+                      <Status tone={u.role === "admin" ? "accent" : "neutral"}>{u.role === "admin" ? t("Equipe") : t("Convidado")}</Status>
+                      {!u.active && <Status tone="warning">{t("Desativada")}</Status>}
+                      {u.role === "viewer" && <span className="text-xs text-ink-muted">{t(u.active_shares === 1 ? "{n} corte" : "{n} cortes", { n: u.active_shares })}</span>}
                     </span>
                   </button>
                   {u.id === selected && current && <AccountDetail user={current} onSecret={setSecret} />}
@@ -78,23 +79,22 @@ function CreateAccount({ onCreated }: { onCreated: (s: Secret) => void }) {
   return (
     <form className="panel panel-body grid gap-4 sm:grid-cols-[minmax(0,1fr)_14rem_auto] sm:items-end" onSubmit={submit}>
       <div>
-        <label className="label" htmlFor="new-email">Nova conta</label>
-        <input id="new-email" type="email" required className="field" value={email} placeholder="nome@empresa.com"
+        <label className="label" htmlFor="new-email">{t("Nova conta")}</label>
+        <input id="new-email" type="email" required className="field" value={email} placeholder={t("nome@empresa.com")}
           onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
       </div>
       <div>
-        <label className="label" htmlFor="new-role">Tipo</label>
+        <label className="label" htmlFor="new-role">{t("Tipo")}</label>
         <select id="new-role" className="field" value={role} onChange={(e) => { setRole(e.target.value as "viewer" | "admin"); setFullAccess(false); }}>
-          <option value="viewer">Convidado (só a biblioteca)</option>
-          <option value="admin">Equipe (painel completo)</option>
+          <option value="viewer">{t("Convidado (só a biblioteca)")}</option>
+          <option value="admin">{t("Equipe (painel completo)")}</option>
         </select>
       </div>
-      <button className="btn-take" disabled={create.isPending || !email || (role === "admin" && !fullAccess)}><UserPlus size={16} aria-hidden /> Criar conta</button>
+      <button className="btn-take" disabled={create.isPending || !email || (role === "admin" && !fullAccess)}><UserPlus size={16} aria-hidden /> {t("Criar conta")}</button>
       {role === "admin" && (
         <label className="admin-ack sm:col-span-3">
           <input type="checkbox" checked={fullAccess} onChange={(e) => setFullAccess(e.target.checked)} />
-          <span><strong>Esta conta terá acesso completo à operação da HTS.</strong> Ela poderá aprovar e publicar cortes, mudar regras de
-            publicação, conectar contas, compartilhar vídeos, criar e desativar outras contas e ver os servidores. Confirmo que é uma pessoa da equipe.</span>
+          <span><strong>{t("Esta conta terá acesso completo à operação da HTS.")}</strong> {t("Ela poderá aprovar e publicar cortes, mudar regras de publicação, conectar contas, compartilhar vídeos, criar e desativar outras contas e ver os servidores. Confirmo que é uma pessoa da equipe.")}</span>
         </label>
       )}
       {create.error && <div className="sm:col-span-3"><ErrorNote error={create.error} /></div>}
@@ -106,14 +106,14 @@ function OneTimePassword({ secret, onClose }: { secret: Secret; onClose: () => v
   const [copied, setCopied] = useState(false);
   return (
     <section className="one-time" role="status" aria-labelledby="otp-title">
-      <h2 id="otp-title" className="display text-lg">Senha inicial de {secret.email}</h2>
-      <p className="text-sm text-ink-muted">{secret.note} Ela aparece só agora.</p>
+      <h2 id="otp-title" className="display text-lg">{t("Senha inicial de")} {secret.email}</h2>
+      <p className="text-sm text-ink-muted">{secret.note} {t("Ela aparece só agora.")}</p>
       <div className="flex flex-wrap items-center gap-2">
         <code className="one-time-code">{secret.initial_password}</code>
         <button type="button" className="btn-quiet" onClick={async () => {
           try { await navigator.clipboard.writeText(secret.initial_password); setCopied(true); } catch { setCopied(false); }
-        }}><Copy size={15} aria-hidden /> {copied ? "Copiada" : "Copiar"}</button>
-        <button type="button" className="btn-quiet" onClick={onClose}>Já entreguei, ocultar</button>
+        }}><Copy size={15} aria-hidden /> {copied ? t("Copiada") : t("Copiar")}</button>
+        <button type="button" className="btn-quiet" onClick={onClose}>{t("Já entreguei, ocultar")}</button>
       </div>
     </section>
   );
@@ -137,32 +137,32 @@ function AccountDetail({ user, onSecret }: { user: AdminUser; onSecret: (s: Secr
   return (
     <div className="people-detail">
       <div className="flex flex-wrap gap-2">
-        <ConfirmAction title="Gerar uma nova senha?" description="A senha atual deixa de funcionar e as sessões abertas desta conta terminam."
-          confirmLabel="Gerar nova senha" pending={reset.isPending} onConfirm={() => reset.mutate()}>
-          <KeyRound size={15} aria-hidden /> Nova senha
+        <ConfirmAction title={t("Gerar uma nova senha?")} description={t("A senha atual deixa de funcionar e as sessões abertas desta conta terminam.")}
+          confirmLabel={t("Gerar nova senha")} pending={reset.isPending} onConfirm={() => reset.mutate()}>
+          <KeyRound size={15} aria-hidden /> {t("Nova senha")}
         </ConfirmAction>
         <button type="button" className="btn-quiet" disabled={end.isPending} onClick={() => end.mutate()}>
-          <LogOut size={15} aria-hidden /> Encerrar sessões
+          <LogOut size={15} aria-hidden /> {t("Encerrar sessões")}
         </button>
         {user.active
-          ? <ConfirmAction title="Desativar esta conta?" description="A pessoa sai na próxima ação e não entra mais. Os compartilhamentos ficam guardados."
-              confirmLabel="Desativar" pending={patch.isPending} onConfirm={() => patch.mutate({ active: false })}>Desativar conta</ConfirmAction>
-          : <button type="button" className="btn-quiet" disabled={patch.isPending} onClick={() => patch.mutate({ active: true })}>Reativar conta</button>}
+          ? <ConfirmAction title={t("Desativar esta conta?")} description={t("A pessoa sai na próxima ação e não entra mais. Os compartilhamentos ficam guardados.")}
+              confirmLabel={t("Desativar")} pending={patch.isPending} onConfirm={() => patch.mutate({ active: false })}>{t("Desativar conta")}</ConfirmAction>
+          : <button type="button" className="btn-quiet" disabled={patch.isPending} onClick={() => patch.mutate({ active: true })}>{t("Reativar conta")}</button>}
       </div>
-      {end.isSuccess && <Notice>Sessões encerradas.</Notice>}
+      {end.isSuccess && <Notice>{t("Sessões encerradas.")}</Notice>}
       <ErrorNote error={patch.error || reset.error || end.error} />
       <GiveAccess user={user} shares={shares.data ?? []} />
       {user.role === "viewer" && (
         <div>
-          <h3 className="mb-2 text-sm font-semibold">Cortes compartilhados</h3>
+          <h3 className="mb-2 text-sm font-semibold">{t("Cortes compartilhados")}</h3>
           <ErrorNote error={shares.error} />
           {shares.data && active.length === 0 && (
-            <p className="text-sm text-ink-muted">Nenhum corte ativo. Use “Dar mais acesso” acima ou a aba Compartilhar da Central de cortes.</p>
+            <p className="text-sm text-ink-muted">{t("Nenhum corte ativo. Use “Dar mais acesso” acima ou a aba Compartilhar da Central de cortes.")}</p>
           )}
           <ul className="share-list">{active.map((s) => <ShareRow key={s.id} share={s} showClip />)}</ul>
           {past.length > 0 && (
             <details className="mt-3 text-sm">
-              <summary className="text-ink-muted">Histórico ({past.length})</summary>
+              <summary className="text-ink-muted">{t("Histórico ({length})", { length: past.length })}</summary>
               <ul className="share-list mt-2">{past.map((s) => <ShareRow key={s.id} share={s} showClip />)}</ul>
             </details>
           )}

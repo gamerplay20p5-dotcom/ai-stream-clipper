@@ -1,7 +1,8 @@
-import { AlertCircle, ChevronDown, Film, Loader2, Play } from "lucide-react";
+import { AlertCircle, ChevronDown, Film, Languages, Loader2, Play } from "lucide-react";
 import { useId, useRef, type ReactNode, type VideoHTMLAttributes } from "react";
 import type { Clip } from "../api";
 import { seconds, statusLabel } from "../lib/format";
+import { lang, languages, setLang, t, type Lang } from "../i18n";
 
 export function Status({ tone = "neutral", children }: {
   tone?: "neutral" | "accent" | "success" | "danger" | "warning" | "processing";
@@ -22,22 +23,22 @@ export function Tally({ live, label }: { live: boolean; label?: string }) {
   return (
     <Status tone={live ? "danger" : "neutral"}>
       <span className={`size-1.5 shrink-0 rounded-full ${live ? "bg-tally" : "bg-ink-faint"}`} aria-hidden />
-      {label ?? (live ? "Ao vivo" : "Offline")}
+      {label ?? (live ? t("Ao vivo") : t("Offline"))}
     </Status>
   );
 }
 
 export function ScoreMark({ score, size = "md" }: { score: number; size?: "md" | "lg" }) {
   return (
-    <span title={`Pontuação heurística ${score.toFixed(1)} de 100`}
-      aria-label={`Pontuação ${score.toFixed(1)} de 100`}
+    <span title={t("Pontuação heurística {toFixed} de 100", { toFixed: score.toFixed(1) })}
+      aria-label={t("Pontuação {toFixed} de 100", { toFixed: score.toFixed(1) })}
       className={`inline-flex shrink-0 items-center rounded-md bg-suite-media/95 font-mono font-semibold text-ink ${size === "lg" ? "gap-1 px-2.5 py-2 text-lg" : "gap-0.5 px-1.5 text-xs"}`}>
       {Math.round(score)}<span className="text-[10px] text-ink-muted" aria-hidden>/100</span>
     </span>
   );
 }
 
-export function Meter({ value, max = 10, tone = "take", label = "Medição" }: {
+export function Meter({ value, max = 10, tone = "take", label = t("Medição") }: {
   value: number | null; max?: number; tone?: "take" | "ink" | "tally"; label?: string;
 }) {
   if (value === null || value === undefined) return <div className="h-1.5 w-full rounded-full bg-suite-line/50" />;
@@ -62,7 +63,7 @@ export function ClipStatus({ status }: { status: string }) {
 }
 
 export function ClipFrame({ clip, onOpen, selected }: { clip: Clip; onOpen: () => void; selected?: boolean }) {
-  const title = clip.title || "Sem título";
+  const title = clip.title || t("Sem título");
   return (
     <button type="button" onClick={onOpen} aria-current={selected ? "true" : undefined}
       className={`group block w-full min-w-0 rounded-lg text-left ${selected ? "ring-1 ring-take" : ""}`}>
@@ -72,7 +73,7 @@ export function ClipFrame({ clip, onOpen, selected }: { clip: Clip; onOpen: () =
             className={`absolute inset-0 size-full object-cover ${clip.status === "rejected" ? "opacity-60" : ""}`} />
         ) : <Film className="size-7 text-ink-faint" aria-hidden />}
         <span className="absolute left-2 top-2 text-xs font-semibold">
-          {clip.is_test ? <Status tone="warning">Teste manual</Status> : <ScoreMark score={clip.score} />}
+          {clip.is_test ? <Status tone="warning">{t("Teste manual")}</Status> : <ScoreMark score={clip.score} />}
         </span>
         <span className="pointer-events-none absolute grid size-10 place-items-center rounded-full bg-suite-media/90 text-ink opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
           <Play size={16} fill="currentColor" aria-hidden />
@@ -118,7 +119,7 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
   );
 }
 
-export function Skeleton({ label = "Carregando", lines = 3 }: { label?: string; lines?: number }) {
+export function Skeleton({ label = t("Carregando"), lines = 3 }: { label?: string; lines?: number }) {
   return (
     <div className="panel panel-body min-h-28 space-y-3" role="status">
       <span className="sr-only">{label}</span>
@@ -177,7 +178,7 @@ export function ConfirmAction({ title, description, confirmLabel, pending, disab
         <h2 id={id} className="display text-xl">{title}</h2>
         <div id={id + "-description"} className="mt-2 space-y-2 text-sm text-ink-muted">{description}</div>
         <div className="mt-6 flex flex-wrap justify-end gap-2">
-          <button type="button" className="btn-quiet" onClick={() => dialog.current?.close()}>Voltar</button>
+          <button type="button" className="btn-quiet" onClick={() => dialog.current?.close()}>{t("Voltar")}</button>
           <button type="button" className={tone === "danger" ? "btn-danger" : "btn-take"} disabled={pending} onClick={() => {
             dialog.current?.close();
             onConfirm();
@@ -192,4 +193,18 @@ const decisionTone = { sugestao: "decision-suggestion", confirmado: "decision-co
 /** Suggestion, confirmed or automatic: always icon shape + text, never colour alone. */
 export function DecisionChip({ kind, label }: { kind: "sugestao" | "confirmado" | "automatico"; label: string }) {
   return <span className={`decision-chip ${decisionTone[kind]}`}><span className="decision-mark" aria-hidden />{label}</span>;
+}
+
+/** Interface language. The label is bilingual so anyone can find it; changing it reloads the page. */
+export function LanguagePicker({ className = "" }: { className?: string }) {
+  return (
+    <label className={`inline-flex items-center gap-1.5 text-xs text-ink-muted ${className}`}>
+      <Languages size={14} aria-hidden />
+      <span className="sr-only">Idioma / Language</span>
+      <select className="field min-h-0 w-auto py-1 text-xs" value={lang} aria-label="Idioma / Language"
+        onChange={(e) => setLang(e.target.value as Lang)}>
+        {languages.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+      </select>
+    </label>
+  );
 }

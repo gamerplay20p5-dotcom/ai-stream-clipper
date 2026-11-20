@@ -6,6 +6,17 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.7.4", "date": "2026-11-20", "title": "Painel em inglês", "items": [
+        "Todo o painel, a tela de entrada e a biblioteca dos convidados agora também existem em inglês.",
+        "O idioma segue o navegador (português para pt, inglês para os demais) e pode ser trocado no menu Minha conta, na tela de entrada e no rodapé da biblioteca.",
+        "Datas e números acompanham o idioma escolhido.",
+        "Textos gerados pela IA (títulos, explicações e evidências) continuam no idioma original da live.",
+    ], "title_en": "Dashboard in English", "items_en": [
+        "The whole dashboard, the sign-in page and the guest library are now also available in English.",
+        "The language follows the browser (Portuguese for pt, English for everything else) and can be changed in My account, on the sign-in page and in the library footer.",
+        "Dates and numbers follow the chosen language.",
+        "Text written by the AI (titles, explanations and evidence) stays in the stream's original language.",
+    ]},
     {"version": "0.7.2", "date": "2026-11-20", "title": "Mais acesso para contas convidadas", "items": [
         "Acesso por streamer: a conta vê todos os cortes aprovados de um streamer, inclusive os aprovados depois; um corte rejeitado sai da biblioteca.",
         "Escolha cortes específicos para uma conta já criada, com miniaturas e filtro por streamer.",

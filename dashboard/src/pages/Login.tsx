@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { api } from "../api";
 import { Brand } from "../components/Brand";
-import { ErrorNote } from "../components/ui";
+import { ErrorNote, LanguagePicker } from "../components/ui";
+import { t } from "../i18n";
 
 export default function Login({ onDone }: { onDone: () => void }) {
   const [email, setEmail] = useState("");
@@ -34,32 +35,33 @@ export default function Login({ onDone }: { onDone: () => void }) {
       <div className="login-access">
       <header><Brand /></header>
       <div className="login-form">
-        <h1 className="display text-3xl">Acesse o painel</h1>
-        <p className="mb-7 mt-2 text-sm text-ink-muted">Monitore lives, revise cortes e acompanhe publicações.</p>
+        <h1 className="display text-3xl">{t("Acesse o painel")}</h1>
+        <p className="mb-7 mt-2 text-sm text-ink-muted">{t("Monitore lives, revise cortes e acompanhe publicações.")}</p>
         <form onSubmit={submit} className="space-y-4" aria-busy={busy}>
           <div>
-            <label className="label" htmlFor="email">E-mail</label>
+            <label className="label" htmlFor="email">{t("E-mail")}</label>
             <input id="email" className="field" type="email" autoComplete="username" required value={email}
               onChange={(e) => setEmail(e.target.value)} />
           </div>
           <div>
-            <label className="label" htmlFor="password">Senha</label>
+            <label className="label" htmlFor="password">{t("Senha")}</label>
             <input id="password" className="field" type="password" autoComplete="current-password" required value={password}
               onChange={(e) => setPassword(e.target.value)} />
           </div>
           <ErrorNote error={error} />
           <button className="btn-take min-h-11 w-full" disabled={busy}>
-            {busy ? "Entrando…" : "Entrar"}
+            {busy ? t("Entrando…") : t("Entrar")}
           </button>
           {cfg.data?.oidc_enabled && (
-            <p className="text-xs text-ink-muted">O servidor tem Authentik (OIDC) configurado. Nesta versão, use seu e-mail e senha.</p>
+            <p className="text-xs text-ink-muted">{t("O servidor tem Authentik (OIDC) configurado. Nesta versão, use seu e-mail e senha.")}</p>
           )}
         </form>
       </div>
       <footer className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-ink-muted">
-        <a className="hover:text-take" href="/privacidade">Privacidade</a>
-        <a className="hover:text-take" href="/termos">Termos de uso</a>
-        <span className="ml-auto font-mono">v{__APP_VERSION__}</span>
+        <a className="hover:text-take" href="/privacidade">{t("Privacidade")}</a>
+        <a className="hover:text-take" href="/termos">{t("Termos de uso")}</a>
+        <LanguagePicker />
+        <span className="ml-auto font-mono">{t("v")}{__APP_VERSION__}</span>
       </footer>
       </div>
     </main>
