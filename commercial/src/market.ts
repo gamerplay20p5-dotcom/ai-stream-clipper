@@ -4,9 +4,10 @@ import type { Language } from './content'
 export const plans = catalog.plans
 export type PlanId = keyof typeof plans
 export type Market = keyof typeof catalog.markets
+export interface Preferences { language: Language; market: Market }
 export const planIds = Object.keys(plans) as PlanId[]
 
-export function initialPreferences() {
+export function browserPreferences(): Preferences {
   const params = new URLSearchParams(window.location.search)
   const requestedLanguage = params.get('lang')
   const requestedMarket = params.get('market')

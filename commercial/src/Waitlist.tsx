@@ -56,79 +56,81 @@ export function Waitlist({ copy, language, market, interest, onInterest }: Props
   }
 
   return (
-    <section className="waitlist shell" id="acesso" aria-labelledby="waitlist-heading">
-      <div className="waitlist-intro">
-        <span className="eyebrow"><span className="status-dot" />{t.eyebrow}</span>
-        <h2 id="waitlist-heading">{t.title}</h2>
-        <p>{t.detail}</p>
-        <div className="waitlist-decoration" aria-hidden="true"><img src="/brand.svg" alt="" width="240" height="240" /></div>
-      </div>
-      {status === 'success' ? (
-        <div className="waitlist-confirmation">
-          <span className="confirm-icon"><Check size={26} aria-hidden="true" /></span>
-          <h3 tabIndex={-1} ref={successHeading}>{t.success}</h3>
-          <p>{t.successDetail}</p>
+    <section className="waitlist section-space" id="acesso" aria-labelledby="waitlist-heading" tabIndex={-1}>
+      <div className="shell waitlist-inner">
+        <div className="waitlist-intro">
+          <h2 id="waitlist-heading">{t.title}</h2>
+          <p>{t.detail}</p>
+          <div className="closing-frame" aria-hidden="true"><img src="/media/harbor-turn.webp" alt="" width="960" height="540" loading="lazy" /></div>
         </div>
-      ) : (
-        <form onSubmit={submit} aria-describedby="privacy-note" className="waitlist-form">
-          <fieldset disabled={status === 'sending'}>
-            <label className="field field-wide">
-              <span>{t.email}</span>
-              <input name="email" type="email" autoComplete="email" maxLength={254} placeholder={t.placeholder} required />
-            </label>
-            <label className="field">
-              <span>{t.plan}</span>
-              <span className="select-field">
-                <select name="plan" required value={interest} onChange={event => onInterest(event.target.value as PlanId | '')}>
-                  <option value="" disabled>{t.choose}</option>
-                  {planIds.map(id => <option key={id} value={id}>{plans[id].name}</option>)}
-                </select>
-                <ChevronDown size={15} aria-hidden="true" />
-              </span>
-            </label>
-            <label className="field">
-              <span>{t.country}</span>
-              <span className="select-field">
-                <select name="country" autoComplete="off" required value={country} onChange={event => setCountryChoice(event.target.value)}>
-                  {catalog.countries.map(id => <option key={id} value={id}>{t.countries[id as keyof typeof t.countries]}</option>)}
-                </select>
-                <ChevronDown size={15} aria-hidden="true" />
-              </span>
-            </label>
-            {country === 'OTHER' && (
-              <label className="field field-wide">
-                <span>{t.otherCountry}</span>
-                <input name="otherCountry" autoComplete="country-name" minLength={2} maxLength={80} required />
-              </label>
-            )}
-            <label className="field field-wide">
-              <span>{t.platform}</span>
-              <span className="select-field">
-                <select name="platform" defaultValue="" aria-describedby="platform-note" required>
-                  <option value="" disabled>{t.choose}</option>
-                  {catalog.platforms.map(id => <option key={id} value={id}>{t.platforms[id as keyof typeof t.platforms]}</option>)}
-                </select>
-                <ChevronDown size={15} aria-hidden="true" />
-              </span>
-            </label>
-            <p id="platform-note" className="form-note field-wide">{t.platformsNote}</p>
-            <div hidden aria-hidden="true">
-              <label>Website <input name="website" tabIndex={-1} autoComplete="off" /></label>
-            </div>
-            <label className="consent field-wide">
-              <input type="checkbox" name="consent" required />
-              <span>{t.consent}</span>
-            </label>
-            <button className="button primary field-wide" type="submit">
-              {status === 'sending' ? t.sending : copy.join}<ArrowUpRight size={18} aria-hidden="true" />
-            </button>
-          </fieldset>
-          <div className="form-feedback" role="status">
-            {status !== 'idle' && status !== 'sending' && <p className="form-error">{t.errors[status]}</p>}
+        {status === 'success' ? (
+          <div className="waitlist-confirmation">
+            <span className="confirm-icon"><Check size={26} aria-hidden="true" /></span>
+            <h3 tabIndex={-1} ref={successHeading}>{t.success}</h3>
+            <p>{t.successDetail}</p>
           </div>
-          <p id="privacy-note" className="form-note">{t.privacy}</p>
-        </form>
-      )}
+        ) : (
+          <form action="/api/waitlist" method="post" onSubmit={submit} aria-describedby="privacy-note" className="waitlist-form">
+            <fieldset disabled={status === 'sending'}>
+              <label className="field field-wide">
+                <span>{t.email}</span>
+                <input name="email" type="email" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} placeholder={t.placeholder} required />
+              </label>
+              <label className="field">
+                <span>{t.plan}</span>
+                <span className="select-field">
+                  <select name="plan" required value={interest} onChange={event => onInterest(event.target.value as PlanId | '')}>
+                    <option value="" disabled>{t.choose}</option>
+                    {planIds.map(id => <option key={id} value={id}>{plans[id].name}</option>)}
+                  </select>
+                  <ChevronDown size={15} aria-hidden="true" />
+                </span>
+              </label>
+              <label className="field">
+                <span>{t.country}</span>
+                <span className="select-field">
+                  <select name="country" autoComplete="off" required value={country} onChange={event => setCountryChoice(event.target.value)}>
+                    {catalog.countries.map(id => <option key={id} value={id}>{t.countries[id as keyof typeof t.countries]}</option>)}
+                  </select>
+                  <ChevronDown size={15} aria-hidden="true" />
+                </span>
+              </label>
+              {country === 'OTHER' && (
+                <label className="field field-wide">
+                  <span>{t.otherCountry}</span>
+                  <input name="otherCountry" autoComplete="country-name" minLength={2} maxLength={80} required />
+                </label>
+              )}
+              <label className="field field-wide">
+                <span>{t.platform}</span>
+                <span className="select-field">
+                  <select name="platform" defaultValue="" aria-describedby="platform-note" required>
+                    <option value="" disabled>{t.choose}</option>
+                    {catalog.platforms.map(id => <option key={id} value={id}>{t.platforms[id as keyof typeof t.platforms]}</option>)}
+                  </select>
+                  <ChevronDown size={15} aria-hidden="true" />
+                </span>
+              </label>
+              <p id="platform-note" className="form-note field-wide">{t.platformsNote}</p>
+              <div hidden aria-hidden="true">
+                <label>Website <input name="website" tabIndex={-1} autoComplete="off" /></label>
+              </div>
+              <label className="consent field-wide">
+                <input type="checkbox" name="consent" required />
+                <span>{t.consent}</span>
+              </label>
+              <button className="button primary field-wide" type="submit" aria-describedby="form-status">
+                {status === 'sending' ? t.sending : copy.join}<ArrowUpRight size={18} aria-hidden="true" />
+              </button>
+            </fieldset>
+            <div className="form-feedback" role="status" id="form-status">
+              {status === 'sending' ? <span className="sr-only">{t.sending}</span> : null}
+              {status !== 'idle' && status !== 'sending' && <p className="form-error">{t.errors[status]}</p>}
+            </div>
+            <p id="privacy-note" className="form-note">{t.privacy}</p>
+          </form>
+        )}
+      </div>
     </section>
   )
 }

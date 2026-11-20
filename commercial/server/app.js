@@ -82,6 +82,16 @@ export function createApp({ databasePath, dist, trustProxy }) {
   )
 
   if (dist) {
+    app.get('/', (req, res) => {
+      const language = catalog.languages.includes(req.query.lang)
+        ? req.query.lang
+        : req.acceptsLanguages('pt-BR', 'en') || 'pt-BR'
+      const market = typeof req.query.market === 'string' && Object.hasOwn(catalog.markets, req.query.market)
+        ? req.query.market
+        : language === 'en' ? 'US' : 'BR'
+      res.vary('Accept-Language').set('Content-Language', language)
+      return res.sendFile(join(dist, 'pages', `${language}-${market}.html`))
+    })
     app.use('/assets', express.static(join(dist, 'assets'), { immutable: true, maxAge: '1y' }))
     app.use(express.static(dist))
   }
