@@ -15,14 +15,15 @@
 #             (data in /opt/asc and /etc/asc is left in place; remove manually if wanted)
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
-SERVER="${1:?usage: install-asc-ctl.sh 201|206|210 EXPECTED_SHA256}"
+SERVER="${1:?usage: install-asc-ctl.sh 201|206|210|212 EXPECTED_SHA256}"
 EXPECTED="${2:?missing expected sha256 of asc-ctl}"
 SRC="$(cd "$(dirname "$0")" && pwd)/asc-ctl"
 case "$SERVER" in
   201) LAN_IP=192.168.1.201 ;;
   206) LAN_IP=192.168.1.206 ;;
   210) LAN_IP=192.168.1.210 ;;
-  *) echo "server must be 201, 206 or 210"; exit 1 ;;
+  212) LAN_IP=192.168.1.212 ;;  # dedicated database host (asc PostgreSQL only, port 55432)
+  *) echo "server must be 201, 206, 210 or 212"; exit 1 ;;
 esac
 id asc >/dev/null 2>&1 || { echo "user asc does not exist"; exit 1; }
 command -v docker >/dev/null || { echo "docker not found"; exit 1; }

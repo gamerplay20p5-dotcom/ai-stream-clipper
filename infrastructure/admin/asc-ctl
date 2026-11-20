@@ -15,6 +15,8 @@ Policy (checked on the *resolved* compose config, which is then the exact file e
   * named volumes / networks only asc_* and never external
   * devices only /dev/dri/renderD128 (GPU hosts), group_add only the render gid
   * published ports only 8780/8781 on this server's LAN IP (or 127.0.0.1)
+  * 212 (dedicated database host, shared with other projects): ONLY the asc PostgreSQL, published
+    only on 192.168.1.212:55432, client access limited by its own pg_hba (the 210 API host)
   * every service declares CPU and memory limits
 Never runs `docker system prune`, `down -v`, or anything on other projects.
 """
@@ -32,7 +34,7 @@ import sys
 import tarfile
 import tempfile
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 CONF_FILE = "/etc/asc/asc-ctl.conf"
 ENV_FILE = "/etc/asc/asc.env"
 LOG_FILE = "/var/log/asc-ctl.log"
@@ -43,6 +45,10 @@ DATA_ROOT = "/opt/asc"
 DATA_DIRS = ("models", "test-media", "bench")
 CONTAINER_UID = 10001
 ALLOWED_PORTS = {"8780", "8781"}
+DB_HOST_PORT = "55432"  # 212: other projects already use 5432/3306/1433/27017 there
+DB_CLIENTS = ("192.168.1.210",)  # hosts allowed to reach the asc database on 212
+PG_DIR = "/opt/asc/pg"  # 212: pg_hba.conf (root-owned, read-only in the container)
+POSTGRES_IMAGE_RE = re.compile(r"^postgres:16(\.[0-9]+)*(-bookworm)?$")
 ALLOWED_BIND_PREFIXES = ("/opt/asc/", "/etc/asc/tls", "/etc/asc/tunnel")
 # Cloudflare Tunnel connector (210 only): official image, pinned version (>= 2025.4.0 for --token-file)
 TUNNEL_DIR = "/etc/asc/tunnel"
@@ -62,7 +68,7 @@ ENV_KEYS = {
     "ASC_VISION_PROVIDER", "ASC_AI_MODELS", "ASC_AI_ALLOW_CPU_FALLBACK", "ASC_WHISPER_MODEL", "ASC_WHISPER_CPU_THREADS",
     "ASC_CONCURRENCY_AUDIO", "ASC_CONCURRENCY_RENDER", "ASC_FFMPEG_THREADS", "ASC_MAX_CONCURRENT_CAPTURES",
     "ASC_BUFFER_SECONDS", "ASC_MAX_SESSION_HOURS", "ASC_MAX_CAPTURE_DISK_GB", "ASC_ALLOW_FILE_SOURCES",
-    "ASC_CAPTURE_QUALITY", "ASC_OIDC_ISSUER", "ASC_OIDC_CLIENT_ID", "ASC_CLOUDFLARED_TAG",
+    "ASC_CAPTURE_QUALITY", "ASC_OIDC_ISSUER", "ASC_OIDC_CLIENT_ID", "ASC_CLOUDFLARED_TAG", "ASC_DB_PORT",
 }
 SECRET_KEYS = {"ASC_INTERNAL_SECRET", "ASC_JWT_SECRET", "ASC_DB_PASSWORD", "ASC_ADMIN_PASSWORD", "ASC_METRICS_TOKEN"}
 COMPOSE_SUBCOMMANDS = {"config", "up", "down", "stop", "start", "restart", "ps", "logs", "pull", "images"}
@@ -93,8 +99,8 @@ def load_conf(path: str = CONF_FILE) -> dict:
     for k in ("SERVER", "LAN_IP", "ASC_USER", "REPO"):
         if not conf.get(k):
             die(f"{path}: missing {k}")
-    if conf["SERVER"] not in ("201", "206", "210"):
-        die("SERVER must be 201, 206 or 210")
+    if conf["SERVER"] not in ("201", "206", "210", "212"):
+        die("SERVER must be 201, 206, 210 or 212")
     return conf
 
 
@@ -164,6 +170,8 @@ def check_policy(cfg: dict, conf: dict) -> list[str]:
     """Return a list of violations (empty = allowed)."""
     v: list[str] = []
     gpu_host = conf["SERVER"] in ("201", "210")
+    db_host = conf["SERVER"] == "212"
+    ports_ok = {DB_HOST_PORT} if db_host else ALLOWED_PORTS
     render_gid = str(conf.get("RENDER_GID", ""))
     allowed_ips = {conf["LAN_IP"], "127.0.0.1"}
     if cfg.get("name") != "asc":
@@ -221,6 +229,8 @@ def check_policy(cfg: dict, conf: dict) -> list[str]:
                 v.append(f"{p}: tunnel must be read_only with cap_drop ALL")
         elif not IMAGE_RE.match(image):
             v.append(f"{p}: image {s.get('image')!r} not allowed")
+        elif db_host and (svc != "postgres" or cname != "asc-postgres" or not POSTGRES_IMAGE_RE.match(image)):
+            v.append(f"{p}: on 212 only the asc PostgreSQL (service postgres, asc-postgres) may run")
         for d in _as_list(s.get("devices")):
             src = d.get("source") if isinstance(d, dict) else str(d).split(":")[0]
             if not gpu_host or src != "/dev/dri/renderD128":
@@ -236,8 +246,10 @@ def check_policy(cfg: dict, conf: dict) -> list[str]:
                 hip, pub = (parts[0], parts[1]) if len(parts) == 3 else ("", parts[0])
             if hip not in allowed_ips:
                 v.append(f"{p}: port must bind to {sorted(allowed_ips)} (got {hip or '0.0.0.0'})")
-            if pub not in ALLOWED_PORTS:
+            if pub not in ports_ok:
                 v.append(f"{p}: published port {pub} not allowed")
+            if db_host and hip != conf["LAN_IP"]:
+                v.append(f"{p}: on 212 the database binds only to {conf['LAN_IP']}")
         for vol in _as_list(s.get("volumes")):
             if not isinstance(vol, dict):
                 v.append(f"{p}: unexpected volume syntax {vol!r}")
@@ -254,6 +266,8 @@ def check_policy(cfg: dict, conf: dict) -> list[str]:
                     v.append(f"{p}: {src} must be read-only")
                 if src.startswith(TUNNEL_DIR) and (svc != "tunnel" or not vol.get("read_only")):
                     v.append(f"{p}: {src} only read-only in the tunnel service")
+                if src.startswith(PG_DIR) and (svc != "postgres" or not vol.get("read_only")):
+                    v.append(f"{p}: {src} only read-only in the postgres service")
             elif t == "volume":
                 if vol.get("source") not in top_vols:
                     v.append(f"{p}: volume {vol.get('source')} not declared by the project")
@@ -461,6 +475,8 @@ def cmd_env_install(conf: dict, args: list[str]) -> int:
             raise Denied("bad ASC_IMAGE_TAG")
         if k == "ASC_DB_HOST" and val not in ("postgres", "192.168.1.212"):
             raise Denied("ASC_DB_HOST must be postgres or 192.168.1.212")
+        if k == "ASC_DB_PORT" and val not in ("5432", DB_HOST_PORT):
+            raise Denied(f"ASC_DB_PORT must be 5432 or {DB_HOST_PORT}")
         lines.append(f"{k}={val}")
     os.makedirs("/etc/asc", exist_ok=True)
     tmp = ENV_FILE + ".new"
@@ -553,7 +569,25 @@ def cmd_tls_install_ca(conf: dict, args: list[str]) -> int:
     return 0
 
 
+def pg_hba() -> str:
+    lines = ["# written by asc-ctl init (212): only the asc database, only from the API host",
+             "local   all   all                 trust",  # inside the container (pg_isready, pg_dump, psql)
+             "host    all   all   127.0.0.1/32   scram-sha-256"]
+    lines += [f"host    asc   asc   {ip}/32   scram-sha-256" for ip in DB_CLIENTS]
+    lines += ["host    all   all   0.0.0.0/0      reject", "host    all   all   ::/0           reject"]
+    return "\n".join(lines) + "\n"
+
+
 def cmd_init(conf: dict, args: list[str]) -> int:
+    if conf["SERVER"] == "212":
+        os.makedirs(PG_DIR, mode=0o755, exist_ok=True)
+        os.chmod(PG_DIR, 0o755)
+        path = os.path.join(PG_DIR, "pg_hba.conf")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(pg_hba())
+        os.chmod(path, 0o644)
+        print(f"{path} ready (clients: {', '.join(DB_CLIENTS)})")
+        return 0
     for d in DATA_DIRS:
         p = os.path.join(DATA_ROOT, d)
         os.makedirs(p, exist_ok=True)
@@ -641,8 +675,8 @@ def cmd_test_media_add(conf: dict, args: list[str]) -> int:
 
 
 def cmd_backup_db(conf: dict, args: list[str]) -> int:
-    if conf["SERVER"] != "210":
-        raise Denied("database lives on 210")
+    if conf["SERVER"] not in ("210", "212"):
+        raise Denied("the database lives on 210 or 212")
     _, _, home = user_ids(conf)
     d = os.path.join(home, "backups")
     os.makedirs(d, exist_ok=True)
@@ -657,6 +691,33 @@ def cmd_backup_db(conf: dict, args: list[str]) -> int:
     os.chmod(dest, 0o600)
     chown_to_user(conf, dest)
     print(dest)
+    return rc
+
+
+def _db_tables(conf: dict) -> int:
+    n = out([DOCKER, "exec", "asc-postgres", "psql", "-U", "asc", "-d", "asc", "-tAc",
+             "select count(*) from information_schema.tables where table_schema = 'public'"])
+    return int(n.strip() or 0)
+
+
+def cmd_db_restore(conf: dict, args: list[str]) -> int:
+    """212 only: load a pg_dump (.sql.gz from backup-db) into the EMPTY asc database. Never overwrites."""
+    if conf["SERVER"] != "212":
+        raise Denied("db-restore runs only on 212 (the new database host)")
+    if len(args) != 1:
+        raise Denied("usage: asc-ctl db-restore FILE.sql.gz (inside the asc home)")
+    path = user_file(conf, args[0])
+    if not path.endswith(".sql.gz"):
+        raise Denied("expected a .sql.gz made by asc-ctl backup-db")
+    if _db_tables(conf):
+        raise Denied("the asc database on 212 is not empty: refusing to overwrite it")
+    with open(path, "rb") as f:
+        p1 = subprocess.Popen(["gzip", "-dc"], stdin=f, stdout=subprocess.PIPE)
+        p2 = subprocess.Popen([DOCKER, "exec", "-i", "asc-postgres", "psql", "-U", "asc", "-d", "asc",
+                               "-v", "ON_ERROR_STOP=1", "-q", "--single-transaction"], stdin=p1.stdout)
+        p1.stdout.close()
+        rc = p2.wait() or p1.wait()
+    print(f"restore rc={rc}; tables now: {_db_tables(conf)}")
     return rc
 
 
@@ -724,7 +785,7 @@ COMMANDS = {
     "image-save": cmd_image_save, "image-load": cmd_image_load, "image-rm": cmd_image_rm,
     "env-install": cmd_env_install, "env-show": cmd_env_show, "set-tag": cmd_set_tag, "tls-init": cmd_tls_init,
     "tls-install-ca": cmd_tls_install_ca, "init": cmd_init, "models": cmd_models, "gpu-validate": cmd_gpu_validate,
-    "test-media-add": cmd_test_media_add, "backup-db": cmd_backup_db,
+    "test-media-add": cmd_test_media_add, "backup-db": cmd_backup_db, "db-restore": cmd_db_restore,
     "tunnel-token-install": cmd_tunnel_token_install, "tunnel-token-remove": cmd_tunnel_token_remove,
 }
 

@@ -52,6 +52,54 @@ def _with(path, value):
     return cfg
 
 
+DB212 = {"SERVER": "212", "LAN_IP": "192.168.1.212", "RENDER_GID": "", "ASC_USER": "asc", "REPO": "/home/asc/x"}
+PG212 = {
+    "name": "asc",
+    "networks": {"asc_net": {"name": "asc_net_212"}},
+    "volumes": {"asc_pgdata": {"name": "asc_pgdata"}},
+    "services": {"postgres": {
+        "container_name": "asc-postgres", "image": "postgres:16.4-bookworm",
+        "ports": [{"mode": "ingress", "host_ip": "192.168.1.212", "target": 5432, "published": "55432", "protocol": "tcp"}],
+        "volumes": [{"type": "volume", "source": "asc_pgdata", "target": "/var/lib/postgresql/data"},
+                    {"type": "bind", "source": "/opt/asc/pg", "target": "/etc/asc-pg", "read_only": True}],
+        "deploy": {"resources": {"limits": {"cpus": 4, "memory": "34359738368"}}}}},
+}
+
+
+def test_db_host_212_runs_only_the_isolated_postgres():
+    assert asc_ctl.check_policy(PG212, DB212) == []
+    bad = copy.deepcopy(PG212)
+    bad["services"]["postgres"]["ports"][0]["published"] = "5432"  # other projects' port
+    assert any("55432" in x or "not allowed" in x for x in asc_ctl.check_policy(bad, DB212))
+    bad = copy.deepcopy(PG212)
+    bad["services"]["postgres"]["ports"][0]["host_ip"] = "0.0.0.0"
+    assert asc_ctl.check_policy(bad, DB212)
+    bad = copy.deepcopy(PG212)
+    bad["services"]["api"] = copy.deepcopy(GOOD["services"]["api"])
+    assert any("only the asc PostgreSQL" in x for x in asc_ctl.check_policy(bad, DB212))
+    bad = copy.deepcopy(PG212)
+    bad["services"]["postgres"]["volumes"][1]["read_only"] = False
+    assert asc_ctl.check_policy(bad, DB212)
+    assert asc_ctl.check_policy(PG212, CONF)  # 55432 is not a 210 port
+
+
+def test_pg_hba_allows_only_the_api_host():
+    hba = asc_ctl.pg_hba()
+    assert "host    asc   asc   192.168.1.210/32   scram-sha-256" in hba
+    assert hba.strip().endswith("reject") and "trust" not in hba.split("local")[1].split("\n", 1)[1]
+
+
+def test_db_restore_only_on_212_and_never_over_data(monkeypatch, tmp_path):
+    import pytest
+
+    with pytest.raises(asc_ctl.Denied):
+        asc_ctl.cmd_db_restore(CONF, ["x.sql.gz"])
+    monkeypatch.setattr(asc_ctl, "user_file", lambda conf, p: str(tmp_path / p))
+    monkeypatch.setattr(asc_ctl, "_db_tables", lambda conf: 38)
+    with pytest.raises(asc_ctl.Denied, match="not empty"):
+        asc_ctl.cmd_db_restore(DB212, ["asc.sql.gz"])
+
+
 def test_project_config_passes():
     assert asc_ctl.check_policy(GOOD, CONF) == []
 
