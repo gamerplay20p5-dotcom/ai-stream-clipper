@@ -38,6 +38,8 @@ Responda SOMENTE com um objeto JSON, sem texto extra, no formato:
  "reaction_linked": true se a reação do streamer tem relação com o que aparece na tela,
  "confidence": 0-1}}
 Memória da live (contexto anterior, pode estar incompleta): {story}
+Critério de editor: acontecimento é algo que MUDA no jogo (perseguição, tiro, queda, susto, prisão, fuga, piada com reação).
+Menus, configurações, Discord, navegador, conversa sobre a live/chat/inscrição ou só andar e comentar NÃO são acontecimentos: nesses casos use "important" e "unexpected" baixos.
 Use apenas instantes da lista acima. Não invente acontecimentos que não estejam visíveis nas imagens ou na fala."""
 
 # Constrained decoding (OpenVINO GenAI structured output): the answer must match this regex,

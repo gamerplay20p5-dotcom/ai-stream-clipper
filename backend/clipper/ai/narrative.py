@@ -28,11 +28,13 @@ Fatos verificados:
 Regras: fale do ACONTECIMENTO, não da análise (nunca use as palavras "transcrição", "análise", "evidência" ou "streamer");
 priorize o que o streamer disse; não invente nada que não esteja nos fatos; títulos com no máximo 60 caracteres;
 hashtags curtas, sem # e sem espaços, ligadas ao acontecimento.
+Título de editor profissional: concreto (quem + o que aconteceu), prometendo SÓ o que o corte entrega; nunca genérico
+("Reação", "Momento", "Conversa", "Gameplay", "Emocional" sozinhos são proibidos); o gancho é a primeira frase que faria alguém parar de rolar o feed.
 Exemplo do ESTILO (outro contexto, não copie): "Ela não esperava o gol no último segundo".
 Responda apenas com JSON: {{"justification": "por que esse momento prende a atenção, 1-2 frases",
 "hook": "frase curta de gancho", "titles": ["título 1", "título 2", "título 3"],
 "description": "1-2 frases para a descrição do vídeo", "hashtags": ["tag1", "tag2", "tag3"]}} /no_think"""
-PROMPT_VERSION = "narr-2026-11-18e"
+PROMPT_VERSION = "narr-2026-11-20-playbook"
 
 
 META_WORDS = re.compile(r"transcri|an[aá]lise|evid[eê]ncia|json|t[ií]tulo \d", re.I)

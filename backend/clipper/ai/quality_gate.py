@@ -25,8 +25,8 @@ READY, REWORK, CONTEXT_PENDING, HUMAN_REVIEW, REJECTED = "READY", "REWORK", "CON
 OUTCOME_PT = {READY: "Pronto para revisão", REWORK: "Reeditar", CONTEXT_PENDING: "Aguardando contexto",
               HUMAN_REVIEW: "Revisão humana", REJECTED: "Rejeitado"}
 EVENT_KEYS = {"interest": 1.4, "humor": 0.9, "surprise": 0.9, "tension": 0.9, "reaction": 1.0, "originality": 0.6,
-              "resolution": 0.8}
-NARRATIVE_KEYS = {"context": 1.2, "narrative": 1.2, "standalone": 1.0, "retention": 1.0}
+              "resolution": 0.8, "payoff": 1.1}
+NARRATIVE_KEYS = {"context": 1.2, "narrative": 1.2, "standalone": 1.0, "retention": 1.0, "intelligible": 0.7}
 DEAD_GAP_S = 1.5  # silence between words longer than this counts as dead time (when nothing else happens)
 VERSION = "gate-2026-11-18a"
 
@@ -243,6 +243,9 @@ def evaluate(*, judgement: dict, start: float, end: float, peak: float, keep: bo
         issues.append("repete uma situação que já tem corte")
     if dur < 3:
         blocking.append("duração menor que 3 s")
+    ing = (crit.get("ingame") or {}).get("value")
+    if ing is not None and ing < 4.0:
+        blocking.append("conteúdo fora do jogo (conversa sobre a live ou a plataforma)")
     tech = 10.0 - 1.5 * len(issues) - 5.0 * len(blocking)
     if aud is not None:
         tech = (tech + float(aud)) / 2

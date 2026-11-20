@@ -16,13 +16,17 @@ from dataclasses import asdict, dataclass, field
 VLM_WEIGHT = 0.35
 WEIGHTS = {"interest": 1.4, "narrative": 1.2, "humor": 0.8, "surprise": 0.9, "tension": 0.8, "reaction": 1.1,
            "context": 1.1, "visual": 0.6, "audio": 0.5, "originality": 0.7, "retention": 0.8,
-           "standalone": 1.1, "resolution": 1.0, "redundancy": 0.9}
+           "standalone": 1.1, "resolution": 1.0, "redundancy": 0.9,
+           # Phase 7 playbook: hook/ending describe the CUT (fixable by editing) -> shown, weight 0
+           "ingame": 1.2, "payoff": 1.1, "intelligible": 0.7, "hook": 0.0, "ending": 0.0}
 LABELS = {"interest": "Interesse do acontecimento", "narrative": "Clareza narrativa", "humor": "Humor",
           "surprise": "Surpresa", "tension": "Tensão e desenvolvimento", "reaction": "Qualidade das reações",
           "context": "Contexto suficiente", "visual": "Qualidade visual", "audio": "Qualidade sonora",
           "originality": "Originalidade", "retention": "Potencial de retenção",
           "standalone": "Compreensível sem conhecer o streamer", "resolution": "Existência de desfecho",
-          "redundancy": "Não redundante com outros cortes"}
+          "redundancy": "Não redundante com outros cortes", "ingame": "Acontece dentro do jogo",
+          "payoff": "Tem desfecho/payoff", "intelligible": "Fala compreensível", "hook": "Gancho no início",
+          "ending": "Termina no ponto certo"}
 STORY_KINDS_TENSE = ("police_chase", "shootout", "conflict")
 
 
@@ -65,7 +69,7 @@ def _mmss(t: float) -> str:
 
 def judge(*, start: float, end: float, peak: float, breakdown: dict, kinds: list[str], story: dict | None = None,
           noise: list[str] | None = None, visual: dict | None = None, director: dict | None = None,
-          same_story_clips: int = 0, min_score: float = 55.0) -> Judgement:
+          same_story_clips: int = 0, min_score: float = 55.0, craft=None, fixes: list | None = None) -> Judgement:
     """``story``: situation dict (pipeline_story.story_context()['situation']); ``visual``: VisualAnalysis dict."""
     b = {k: (float(v) if isinstance(v, (int, float)) else None) for k, v in (breakdown or {}).items()}
     kinds = list(kinds or [])
@@ -160,12 +164,17 @@ def judge(*, start: float, end: float, peak: float, breakdown: dict, kinds: list
     c["redundancy"] = _c(10.0 - 3.0 * same_story_clips,
                          f"{same_story_clips} outro(s) corte(s) da mesma situação" if same_story_clips else "")
 
+    if craft is not None:  # Phase 7 playbook (ai/playbook.py)
+        for k, (v, ev) in craft.criteria.items():
+            c[k] = _c(v, *ev)
     known = {k: v.value for k, v in c.items() if v.value is not None}
     num = sum(WEIGHTS[k] * v for k, v in known.items())
     den = sum(WEIGHTS[k] for k in known)
     editorial = 10.0 * num / den if den else 0.0
     if noise and not ("laughter" in kinds or "scream" in kinds):
         editorial *= 0.75
+    if craft is not None and craft.offgame:
+        editorial *= 0.7  # talking about the stream/platform is not a happening
     stage = "final" if (visual is not None or director is not None) else "preliminary"
     final = None
     if stage == "final":
@@ -196,8 +205,13 @@ def judge(*, start: float, end: float, peak: float, breakdown: dict, kinds: list
         j.edit_suggestions.append("estender o fim até o desfecho, se houver")
     if c["retention"].value is not None and c["retention"].value < 5:
         j.edit_suggestions.append("encurtar a preparação: o ponto alto demora a chegar")
+    for f in fixes or []:
+        if f.get("detail") and f["detail"] not in j.edit_suggestions:
+            j.edit_suggestions.append(f["detail"])
     score_for_decision = final if final is not None else editorial
-    if score_for_decision < min_score:
+    if craft is not None and craft.offgame:
+        j.rejection_reason = "conteúdo fora do jogo: conversa sobre a live ou a plataforma, sem acontecimento"
+    elif score_for_decision < min_score:
         j.rejection_reason = "nota editorial abaixo do mínimo" + (f"; principal fraqueza: {j.weaknesses[0]}" if j.weaknesses else "")
     # a story still in progress is never judged final on a low preliminary score
     j.waiting_context = bool(s and s.get("status") == "ongoing" and not s.get("complete"))
