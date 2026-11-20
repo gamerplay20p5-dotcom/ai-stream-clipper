@@ -226,3 +226,32 @@ Para o #5 (Codex), o contrato do backend está nas seções 3 e 4: `GET /api/aut
 - **Pending:** the live database audit could not run because the servers were unreachable; the exact read-only queries are listed in section 1.
 
 **Update (review of PR #6):** each share freezes the approved media (path, sha256, size, thumbnail, version and variants). Re-edits never change what a guest watches unless the admin re-approves or chose `follow_latest`. Shared files are kept by the renderer and by storage cleanup and quarantine while the share is valid, and deleting a shared clip is refused. The crawl requires exactly 403, with an admin positive control. The two-account end-to-end test runs against a real API process. Migration 0012 follows 0011 with a single head. 349 tests pass.
+
+## 8. Mais acesso para contas já criadas (v0.7.2, migração 0013)
+
+Em **Pessoas e acesso**, cada conta tem uma área **Dar mais acesso**:
+
+- **Todos os cortes de um streamer** (`POST /api/streamer-grants`):
+  - a conta passa a ver todos os cortes **aprovados** do streamer, agora e os aprovados depois;
+  - se um corte for rejeitado, ele sai da biblioteca da conta;
+  - o acesso é feito com compartilhamentos comuns, marcados com `grant_id`. Valem a mesma versão imutável, a mesma proteção de arquivos e a mesma autorização;
+  - aprovar um corte (individual ou em lote) já o compartilha. A rotina de manutenção sincroniza a cada ciclo, como rede de segurança;
+  - compartilhamentos manuais nunca são duplicados, nem removidos por rejeição ou por revogação do acesso;
+  - revogar (`DELETE /api/streamer-grants/{id}`) tira só os cortes que vieram por esse acesso, na próxima ação da conta;
+  - mudar download ou prazo atualiza todos os cortes desse acesso.
+- **Escolher cortes:** lista de cortes aprovados que a conta ainda não tem, com miniatura e filtro por streamer (`POST /api/shares`).
+- **Tipo de conta:** tornar da equipe ou convidada, sempre com confirmação. A proteção do último administrador e da própria conta continua no backend.
+- **Conta desativada:** a tela pede para reativar antes de dar acesso (o backend recusa com 422).
+
+A **Minha Biblioteca** agrupa os vídeos por streamer, com um filtro por streamer.
+
+**Migração 0013:**
+- cria `streamer_grants` e `clip_shares.grant_id`;
+- no downgrade, a tabela vira `streamer_grants_preserved` e os compartilhamentos continuam válidos como manuais, para nenhuma conta perder acesso sem aviso.
+
+**Testes:**
+- 9 em `tests/test_streamer_grants.py`;
+- 6 cenários de navegador em `dashboard/scripts/ux/scenarios_access.py`;
+- os 21 cenários anteriores continuam passando.
+
+**EN:** Accounts can now get every approved clip of a streamer (future approvals included, rejected clips withdrawn), hand-picked clips, or a role change, always with confirmation. Guest libraries are grouped by streamer. Grants are materialised as ordinary shares, so snapshots, file protection and authorization are unchanged.

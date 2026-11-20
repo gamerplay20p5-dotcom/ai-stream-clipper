@@ -619,6 +619,28 @@ class ClipShare(Base):
     clip_version: Mapped[int] = mapped_column(Integer, default=0)
     variants: Mapped[dict] = mapped_column(JSON, default=dict)  # {name: {video_path, sha256, label}}
     follow_latest: Mapped[bool] = mapped_column(Boolean, default=False)
+    grant_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # created by a StreamerGrant
+
+
+class StreamerGrant(Base):
+    """An account sees every APPROVED clip of a streamer: the current ones and the ones approved later.
+    Materialised as ordinary clip shares tagged with ``grant_id`` (same snapshot/protection/authorization)."""
+
+    __tablename__ = "streamer_grants"
+    __table_args__ = (
+        Index("uq_streamer_grants_active", "user_id", "streamer_id", unique=True,
+              postgresql_where=text("revoked_at IS NULL"), sqlite_where=text("revoked_at IS NULL")),
+        Index("ix_streamer_grants_user", "user_id", "revoked_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    streamer_id: Mapped[int] = mapped_column(ForeignKey("streamers.id", ondelete="CASCADE"))
+    can_download: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
 
 # ---------------------------------------------------------------------------

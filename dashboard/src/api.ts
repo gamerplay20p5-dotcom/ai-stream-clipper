@@ -493,8 +493,15 @@ export type AdminUser = {
 
 export type ClipShareRow = {
   id: number; clip_id: number; clip_title: string | null; user_id: number; email: string | null;
-  follow_latest: boolean; shared_version: number | null; outdated: boolean;
+  follow_latest: boolean; shared_version: number | null; outdated: boolean; grant_id?: number | null;
   can_view: boolean; can_download: boolean; can_variants: boolean;
   expires_at: string | null; created_at: string | null; revoked_at: string | null;
   state: "ativo" | "expirado" | "revogado";
+};
+
+/** Access by streamer: every APPROVED clip of a streamer, now and future approvals (materialised as shares). */
+export type StreamerGrant = {
+  id: number; user_id: number; email: string | null; streamer_id: number; streamer: string | null;
+  can_download: boolean; expires_at: string | null; created_at: string | null; revoked_at: string | null;
+  active_shares: number; state: "ativo" | "expirado" | "revogado";
 };

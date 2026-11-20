@@ -278,7 +278,7 @@ with sync_playwright() as p:
 
     # 3f. Library: revoked while watching, download withdrawn. The backend answers; the page reacts.
     guest_shares = [x for x in admin.request.get(f"{BASE}/api/shares").json() if x["email"] == GUEST]
-    target = guest_shares[0]
+    target = next(x for x in guest_shares if x["can_download"])  # the download step needs one with download
     guest.goto(BASE + "/biblioteca")
     expect(guest.locator(".library-card").first).to_be_visible()
     before = guest.locator(".library-card").count()

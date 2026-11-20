@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import sharing
 from .. import storage
 from ..db import get_db
 from ..models import Clip, Streamer
@@ -138,6 +139,7 @@ def approve(cid: int, request: Request, db: Session = Depends(get_db), user: Cur
     if c.status not in ("ready", "rejected", "approved"):
         raise HTTPException(409, "only rendered clips can be approved")
     c.status = "approved"
+    sharing.on_clip_status(db, c)  # accounts with access to this streamer receive it
     audit(db, request, user, "clip.approve", f"clip:{cid}")
     _human_label(db, c, user.email, "approve")
     db.commit()
@@ -150,6 +152,7 @@ def reject(cid: int, request: Request, db: Session = Depends(get_db), user: Curr
     if c.status in ("rendering", "analyzing"):
         raise HTTPException(409, "clip is being processed")
     c.status = "rejected"
+    sharing.on_clip_status(db, c)  # shares created by an access-by-streamer are withdrawn
     audit(db, request, user, "clip.reject", f"clip:{cid}")
     _human_label(db, c, user.email, "reject")
     db.commit()
@@ -291,6 +294,7 @@ def batch(body: BatchIn, request: Request, db: Session = Depends(get_db), user: 
             done.append(cid)
             continue
         c.status = "approved" if body.action == "approve" else "rejected"
+        sharing.on_clip_status(db, c)
         _human_label(db, c, user.email, body.action)
         done.append(cid)
     audit(db, request, user, f"clip.batch_{body.action}", "clips", {"ids": done, "skipped": list(skipped)})

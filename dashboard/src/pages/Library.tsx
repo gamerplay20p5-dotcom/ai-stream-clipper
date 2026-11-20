@@ -19,6 +19,7 @@ async function mediaStatus(url: string): Promise<number> {
     return 0; // network failure: not an authorization answer
   }
 }
+const slug = (name: string) => name.toLowerCase().normalize("NFD").replace(/[^a-z0-9]+/g, "-");
 const LOST = "Seu acesso a este vídeo terminou: a equipe revogou o compartilhamento ou o prazo acabou.";
 
 /** The whole product for an external (non-staff) account: only what was shared with it. */
@@ -28,6 +29,13 @@ export default function LibraryApp({ email }: { email: string }) {
     queryKey: ["library"], queryFn: () => api.get<{ items: LibraryItem[] }>("/api/library"), refetchInterval: 60_000,
   });
   const items = list.data?.items ?? [];
+  // the library is organised by streamer (largest first); a filter shows one streamer at a time
+  const groups = Object.entries(items.reduce<Record<string, LibraryItem[]>>((acc, it) => {
+    const k = it.streamer || "Outros";
+    (acc[k] ??= []).push(it);
+    return acc;
+  }, {})).sort((x, y) => y[1].length - x[1].length || x[0].localeCompare(y[0], "pt-BR"));
+  const [streamer, setStreamer] = useState("");
   const [openId, setOpenId] = useState<number | null>(null);
   const open = items.find((i) => i.clip_id === openId) ?? null;
   const [leaving, setLeaving] = useState(false);
@@ -93,27 +101,44 @@ export default function LibraryApp({ email }: { email: string }) {
           onRefresh={() => void qc.invalidateQueries({ queryKey: ["library"] })} />}
 
         {items.length > 0 && (
-          <ul className="library-grid" aria-label="Vídeos compartilhados com você">
-            {items.map((item) => (
-              <li key={item.clip_id}>
-                <button type="button" className="library-card" aria-current={item.clip_id === openId || undefined}
-                  onClick={() => { setNotice(""); setOpenId(item.clip_id); }}>
-                  <span className="library-frame">
-                    <img src={item.thumbnail_url} alt="" loading="lazy" onError={(e) => { e.currentTarget.hidden = true; }} />
-                    <Film className="library-frame-fallback" aria-hidden />
-                    <span className="library-play" aria-hidden><Play size={16} fill="currentColor" /></span>
-                    <span className="library-duration">{seconds(item.duration_s)}</span>
-                  </span>
-                  <span className="mt-2.5 block text-sm font-semibold leading-tight">{item.title}</span>
-                  <span className="mt-1 block text-xs text-ink-muted">{item.streamer}</span>
-                  <span className="mt-2 flex flex-wrap gap-1.5">
-                    {item.permissions.download ? <Status tone="success">Download liberado</Status> : <Status>Só assistir</Status>}
-                    {item.expires_at && <Status tone="warning"><Clock size={12} aria-hidden /> até {fmt(item.expires_at)}</Status>}
-                  </span>
-                </button>
-              </li>
+          <>
+            {groups.length > 1 && (
+              <nav className="library-streamers" aria-label="Streamers">
+                <button type="button" aria-pressed={streamer === ""} onClick={() => setStreamer("")}>
+                  Todos <span>{items.length}</span></button>
+                {groups.map(([name, list]) => (
+                  <button key={name} type="button" aria-pressed={streamer === name} onClick={() => setStreamer(name)}>
+                    {name} <span>{list.length}</span></button>
+                ))}
+              </nav>
+            )}
+            {groups.filter(([name]) => !streamer || name === streamer).map(([name, list]) => (
+              <section key={name} className="library-group" aria-labelledby={`grp-${slug(name)}`}>
+                <h2 id={`grp-${slug(name)}`} className="library-group-title">{name}
+                  <span>{list.length} {list.length === 1 ? "vídeo" : "vídeos"}</span></h2>
+                <ul className="library-grid" aria-label={`Vídeos de ${name}`}>
+                  {list.map((item) => (
+                    <li key={item.clip_id}>
+                      <button type="button" className="library-card" aria-current={item.clip_id === openId || undefined}
+                        onClick={() => { setNotice(""); setOpenId(item.clip_id); }}>
+                        <span className="library-frame">
+                          <img src={item.thumbnail_url} alt="" loading="lazy" onError={(e) => { e.currentTarget.hidden = true; }} />
+                          <Film className="library-frame-fallback" aria-hidden />
+                          <span className="library-play" aria-hidden><Play size={16} fill="currentColor" /></span>
+                          <span className="library-duration">{seconds(item.duration_s)}</span>
+                        </span>
+                        <span className="mt-2.5 block text-sm font-semibold leading-tight">{item.title}</span>
+                        <span className="mt-2 flex flex-wrap gap-1.5">
+                          {item.permissions.download ? <Status tone="success">Download liberado</Status> : <Status>Só assistir</Status>}
+                          {item.expires_at && <Status tone="warning"><Clock size={12} aria-hidden /> até {fmt(item.expires_at)}</Status>}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </>
         )}
       </main>
       <footer className="library-footer">

@@ -203,3 +203,22 @@
   .check-failed { @apply flex-wrap rounded-md border border-warning/60 bg-warning-dim px-3 py-2 text-warning; }
   .check-failed strong { @apply text-ink; }
 }
+@layer components {
+  /* ---- library by streamer ---- */
+  .library-streamers { @apply flex flex-wrap gap-2; }
+  .library-streamers button { @apply inline-flex min-h-10 items-center gap-2 rounded-full border border-suite-outline px-4 text-sm font-medium text-ink-muted hover:text-ink; }
+  .library-streamers button[aria-pressed="true"] { @apply border-take bg-take-dim text-ink; }
+  .library-streamers span { @apply font-mono text-xs text-ink-muted; }
+  .library-group { @apply space-y-3; }
+  .library-group-title { @apply flex items-baseline gap-3 border-b border-suite-line pb-2 text-lg font-semibold; }
+  .library-group-title span { @apply text-xs font-normal text-ink-muted; }
+  /* ---- give more access (people) ---- */
+  .give-access { @apply space-y-3 rounded-lg border border-suite-line bg-suite-media/40 p-3 sm:p-4; }
+  .give-access .view-switch { @apply flex-wrap; }
+  .pick-grid { @apply grid max-h-[26rem] grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-4 lg:grid-cols-6; }
+  .pick-card { @apply relative grid cursor-pointer gap-1 rounded-md border border-suite-line p-1.5 hover:border-suite-outline; }
+  .pick-card[data-picked] { @apply border-take bg-take-dim; }
+  .pick-check { @apply absolute right-2 top-2 z-[1]; }
+  .pick-frame { @apply grid aspect-short w-full place-items-center overflow-hidden rounded bg-suite-media text-ink-faint; }
+  .pick-frame img { @apply size-full object-cover; }
+}

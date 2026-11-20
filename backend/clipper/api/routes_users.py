@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from .. import sharing
 from ..db import get_db
-from ..models import Clip, ClipShare, User
+from ..models import Clip, ClipShare, Streamer, StreamerGrant, User
 from ..security import hash_password
 from .deps import CurrentUser, audit, require_admin
 
@@ -47,7 +47,7 @@ def _share(db: Session, s: ClipShare) -> dict:
     u = db.get(User, s.user_id)
     current = bool(c and (s.follow_latest or s.video_path == c.video_path))
     return {"id": s.id, "clip_id": s.clip_id, "clip_title": c.title if c else None, "user_id": s.user_id,
-            "follow_latest": s.follow_latest, "shared_version": s.clip_version,
+            "follow_latest": s.follow_latest, "shared_version": s.clip_version, "grant_id": s.grant_id,
             "outdated": not current,  # the clip was re-edited after this share: the old version is still served
             "email": u.email if u else None, "can_view": s.can_view, "can_download": s.can_download,
             "can_variants": s.can_variants, "expires_at": _iso(s.expires_at), "created_at": _iso(s.created_at),
@@ -254,3 +254,63 @@ def revoke_share(sid: int, request: Request, db: Session = Depends(get_db), admi
     audit(db, request, admin, "shares.revoke", f"share:{sid}")
     db.commit()
     return _share(db, s)
+
+
+# ------------------------------------------------------------------ access by streamer
+def _grant(db: Session, g: StreamerGrant) -> dict:
+    st = db.get(Streamer, g.streamer_id)
+    u = db.get(User, g.user_id)
+    n = db.scalar(select(func.count()).select_from(ClipShare).where(ClipShare.grant_id == g.id,
+                                                                    ClipShare.revoked_at.is_(None))) or 0
+    return {"id": g.id, "user_id": g.user_id, "email": u.email if u else None, "streamer_id": g.streamer_id,
+            "streamer": (st.display_name or st.channel) if st else None, "can_download": g.can_download,
+            "expires_at": _iso(g.expires_at), "created_at": _iso(g.created_at), "revoked_at": _iso(g.revoked_at),
+            "active_shares": n,
+            "state": "revogado" if g.revoked_at else (
+                "expirado" if g.expires_at and g.expires_at <= datetime.utcnow() else "ativo")}
+
+
+class GrantIn(BaseModel):
+    email: str = Field(..., max_length=255)
+    streamer_id: int
+    can_download: bool = False
+    expires_at: datetime | None = None
+
+
+@router.post("/api/streamer-grants")
+def create_grant(body: GrantIn, request: Request, db: Session = Depends(get_db),
+                 admin: CurrentUser = Depends(require_admin)):
+    """The account sees every APPROVED clip of the streamer: the current ones and every later approval."""
+    try:
+        g, n = sharing.grant_streamer(db, admin_id=admin.id, email=body.email, streamer_id=body.streamer_id,
+                                      can_download=body.can_download, expires_at=_naive_utc(body.expires_at))
+    except sharing.ShareError as exc:
+        db.rollback()
+        raise HTTPException(404 if "não encontrad" in str(exc) else 422, str(exc)) from exc
+    audit(db, request, admin, "grants.create", f"user:{g.user_id}",
+          {"streamer": body.streamer_id, "download": body.can_download, "shared_now": n})
+    db.commit()
+    return {**_grant(db, g), "shared_now": n}
+
+
+@router.get("/api/streamer-grants")
+def list_grants(user_id: int | None = None, include_revoked: bool = False, db: Session = Depends(get_db),
+                _: CurrentUser = Depends(require_admin)):
+    q = select(StreamerGrant)
+    if user_id is not None:
+        q = q.where(StreamerGrant.user_id == user_id)
+    if not include_revoked:
+        q = q.where(StreamerGrant.revoked_at.is_(None))
+    return [_grant(db, g) for g in db.scalars(q.order_by(StreamerGrant.id.desc()))]
+
+
+@router.delete("/api/streamer-grants/{gid}")
+def revoke_grant(gid: int, request: Request, db: Session = Depends(get_db), admin: CurrentUser = Depends(require_admin)):
+    """Revoke the access and every share it created (explicit shares of the same clips are kept)."""
+    try:
+        g, n = sharing.revoke_grant(db, gid, admin.id)
+    except sharing.ShareError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    audit(db, request, admin, "grants.revoke", f"grant:{gid}", {"shares_revoked": n})
+    db.commit()
+    return {**_grant(db, g), "shares_revoked": n}

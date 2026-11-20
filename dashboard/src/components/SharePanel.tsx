@@ -33,6 +33,7 @@ export function ShareRow({ share, showClip, showEmail }: { share: ClipShareRow; 
           <span>{share.can_download ? "pode baixar" : "só assistir"}</span>
           {share.expires_at && <span>· até {shareDate(share.expires_at)}</span>}
           <span>· {share.follow_latest ? "acompanha a versão mais recente" : `versão ${share.shared_version ?? "—"}`}</span>
+          {share.grant_id != null && <span>· via acesso ao streamer</span>}
         </p>
         {active && share.outdated && (
           <p className="mt-1.5 text-xs text-warning">
