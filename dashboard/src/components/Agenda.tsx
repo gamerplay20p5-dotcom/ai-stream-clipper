@@ -245,7 +245,7 @@ function BulkReview({ items, pending, onCancel, onConfirm }: {
 function EventDetail({ item, timezone, onClose, onChanged }: { item: Item; timezone: string; onClose: () => void; onChanged: () => void }) {
   const kind = decisionOf(item);
   const move = useMutation({
-    mutationFn: (at: string) => api.patch(`/api/publish/publications/${item.id}`, { scheduled_at: at }),
+    mutationFn: (at: string | null) => api.patch(`/api/publish/publications/${item.id}`, { scheduled_at: at }),
     onSuccess: () => { onChanged(); onClose(); },
   });
   return (
@@ -274,6 +274,8 @@ function EventDetail({ item, timezone, onClose, onChanged }: { item: Item; timez
           <label className="min-w-0 flex-1"><span className="label">Horário (Brasília)</span>
             <input type="datetime-local" name="when" required className="field" defaultValue={item.when?.slice(0, 16) ?? ""} /></label>
           <button className="btn-quiet" disabled={move.isPending}>Mudar horário</button>
+          {item.status === "scheduled" && (
+            <button type="button" className="btn-quiet" disabled={move.isPending} onClick={() => move.mutate(null)}>Enviar agora</button>)}
         </form>
       )}
       <ErrorNote error={move.error} />

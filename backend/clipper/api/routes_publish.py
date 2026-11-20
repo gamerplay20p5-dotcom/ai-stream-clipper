@@ -46,7 +46,7 @@ def _account(a: PublishAccount) -> dict:
 
 def _rule(r: PublishRule, acct: PublishAccount | None = None) -> dict:
     d = {k: getattr(r, k) for k in ("id", "account_id", "streamer_id", "enabled", "mode", "require_approval",
-                                      "min_score", "privacy", "allow_public_auto", "max_per_day", "slots",
+                                      "min_score", "privacy", "allow_public_auto", "max_per_day", "per_slot", "slots",
                                       "timezone", "templates")}
     opts = ((acct.meta or {}).get("privacy_options") or []) if acct is not None else []
     d["problems"] = [f"privacidade '{r.privacy}' não existe nesta conta ({', '.join(opts)}): nada é publicado por "
@@ -221,6 +221,7 @@ class RuleIn(BaseModel):
     privacy: str = Field("private", pattern="^(private|unlisted|public|SELF_ONLY|MUTUAL_FOLLOW_FRIENDS|FOLLOWER_OF_CREATOR|PUBLIC_TO_EVERYONE)$")
     allow_public_auto: bool = False
     max_per_day: int = Field(3, ge=1, le=50)
+    per_slot: int = Field(1, ge=1, le=6)  # videos sharing the same slot (peak-hour bursts)
     slots: list[str] = Field(default_factory=list, max_length=24)
     timezone: str = "America/Sao_Paulo"
     templates: dict = Field(default_factory=dict)
@@ -479,6 +480,23 @@ def dismiss_proposals(body: IdsIn, request: Request, db: Session = Depends(get_d
 @router.get("/calendar")
 def calendar(days: int = 14, db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
     return ed.calendar(db, days)
+
+
+class RepackIn(BaseModel):
+    account_id: int
+    dry_run: bool = True
+
+
+@router.post("/repack")
+def repack(body: RepackIn, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
+    """Preview (dry_run) or apply: move scheduled publications of an account into the next free slots."""
+    if db.get(PublishAccount, body.account_id) is None:
+        raise HTTPException(404, "account not found")
+    plan = ed.repack(db, body.account_id, user.email, dry_run=body.dry_run)
+    if not body.dry_run:
+        audit(db, request, user, "publish.repack", f"account:{body.account_id}", {"moved": len(plan)})
+        db.commit()
+    return {"dry_run": body.dry_run, "moved": plan}
 
 
 class RescheduleIn(BaseModel):

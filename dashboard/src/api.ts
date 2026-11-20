@@ -4,6 +4,20 @@ export class ApiError extends Error {
   }
 }
 
+/** Server refusals come as text, as {message, problems[]} or as a validation list: show them as a sentence. */
+function describeDetail(d: unknown): string | undefined {
+  if (d === undefined || d === null) return undefined;
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) return d.map((x) => (x && typeof x === "object" && "msg" in x ? String((x as { msg: unknown }).msg) : String(x))).join("; ");
+  if (typeof d === "object") {
+    const o = d as { message?: unknown; problems?: unknown };
+    const problems = Array.isArray(o.problems) ? o.problems.map(String) : [];
+    if (problems.length) return problems.join("; ");
+    if (typeof o.message === "string") return o.message;
+  }
+  return JSON.stringify(d);
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = {};
   if (method !== "GET") headers["X-ASC-CSRF"] = "1";
@@ -18,7 +32,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     let detail = res.statusText;
     try {
       const j = await res.json();
-      detail = typeof j.detail === "string" ? j.detail : j.detail !== undefined ? JSON.stringify(j.detail) : detail;
+      detail = describeDetail(j.detail) ?? detail;
     } catch {
       /* ignore */
     }
