@@ -6,6 +6,7 @@ build/
 data/
 node_modules/
 dashboard/dist/
+commercial/dist/
 .env
 .env.*
 !.env.example

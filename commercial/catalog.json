@@ -1,0 +1,14 @@
+{
+  "plans": {
+    "basic": { "name": "Basic", "monthlyMinor": { "BR": 5990, "US": 1999 }, "hours": 40, "simultaneous": 1, "storageGb": 5, "export4k": 0 },
+    "creator": { "name": "Creator", "monthlyMinor": { "BR": 13990, "US": 4499 }, "hours": 100, "simultaneous": 2, "storageGb": 12, "export4k": 0 },
+    "pro": { "name": "Pro", "monthlyMinor": { "BR": 27990, "US": 8999 }, "hours": 200, "simultaneous": 2, "storageGb": 25, "export4k": 30 }
+  },
+  "markets": {
+    "BR": { "currency": "BRL", "priceLocale": "pt-BR" },
+    "US": { "currency": "USD", "priceLocale": "en-US" }
+  },
+  "languages": ["pt-BR", "en"],
+  "countries": ["BR", "US", "OTHER"],
+  "platforms": ["twitch", "youtube", "kick", "other"]
+}
