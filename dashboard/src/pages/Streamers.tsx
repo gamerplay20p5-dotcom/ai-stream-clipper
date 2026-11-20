@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, FlaskConical, RefreshCw, Square, Trash2 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import VoicePanel from "../components/VoicePanel";
 import { Link } from "react-router-dom";
 import { api, type Streamer } from "../api";
@@ -36,6 +36,7 @@ export default function Streamers() {
 
       {add.isSuccess && <Notice>Canal adicionado ao monitoramento.</Notice>}
       <ErrorNote error={list.error} />
+      <MonitorAlert streamers={list.data ?? []} />
       {list.isLoading && <Skeleton label="Carregando canais monitorados" />}
       {list.data && list.data.length > 0 && <section className="panel">
       <header className="panel-heading">
@@ -86,7 +87,24 @@ function StreamerRow({ s }: { s: Streamer }) {
   const [testing, setTesting] = useState(false);
   const refresh = () => qc.invalidateQueries({ queryKey: ["streamers"] });
   const patch = useMutation({ mutationFn: (b: object) => api.patch(`/api/streamers/${s.id}`, b), onSuccess: refresh });
-  const check = useMutation({ mutationFn: () => api.post(`/api/streamers/${s.id}/check`), onSuccess: refresh });
+  // Manual check: "sent" -> "accepted" (server time) -> "done" only when a result is recorded after acceptance.
+  const [clickedAt, setClickedAt] = useState<number | null>(null);
+  const check = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; requested_at?: string }>(`/api/streamers/${s.id}/check`),
+    onMutate: () => setClickedAt(Date.now()),  // the attempt is shown even if the request is refused
+    onSuccess: refresh,
+  });
+  const acceptedAt = check.data?.requested_at ? Date.parse(check.data.requested_at) : null;
+  const checkedAt = s.last_checked_at ? Date.parse(s.last_checked_at) : null;
+  const done = check.isSuccess && acceptedAt !== null && checkedAt !== null && checkedAt >= acceptedAt && !s.monitor?.check_requested;
+  const waiting = check.isSuccess && !done;
+  useEffect(() => {  // poll while an accepted check is pending; give up after 3 minutes
+    if (!waiting) return;
+    const t = setInterval(refresh, 3000);
+    const stopAt = setTimeout(() => clearInterval(t), 180_000);
+    return () => { clearInterval(t); clearTimeout(stopAt); };
+  }, [waiting]);
+  const pendingFor = clickedAt ? Math.round((Date.now() - clickedAt) / 1000) : 0;
   const del = useMutation({ mutationFn: () => api.del(`/api/streamers/${s.id}`), onSuccess: refresh });
   const stop = useMutation({ mutationFn: (sid: number) => api.post(`/api/sessions/${sid}/stop`), onSuccess: refresh });
   const detail = useQuery({ queryKey: ["streamer", s.id], queryFn: () => api.get<Streamer>(`/api/streamers/${s.id}`), enabled: open });
@@ -104,11 +122,7 @@ function StreamerRow({ s }: { s: Streamer }) {
           <a href={s.platform === "file" ? undefined : s.url} target="_blank" rel="noreferrer noopener" className="block truncate text-xs text-ink-muted hover:text-take">{s.url}</a>
         </div>
         <div className="text-sm sm:w-40">
-          {s.status === "error" ? (
-            <span className="text-xs text-tally" title={s.last_error}>Erro na verificação</span>
-          ) : (
-            <Tally live={live} label={live ? `Ao vivo, ${timecode(s.live_session!.covered_until)}` : s.enabled ? "Offline" : "Pausado"} />
-          )}
+          <MonitorBadge s={s} live={live} />
           <div className="text-xs text-ink-faint">verificado {ago(s.last_checked_at)}</div>
         </div>
         <Link to={`/cortes?status=&streamer=${s.id}`} className="w-20 text-sm text-ink-muted hover:text-ink">{s.clip_count} {s.clip_count === 1 ? "corte" : "cortes"}</Link>
@@ -130,6 +144,21 @@ function StreamerRow({ s }: { s: Streamer }) {
         </div>
       </div>
       {s.last_error && s.status === "error" && <p className="mt-2 text-xs text-tally">{s.last_error}</p>}
+      {s.monitor?.state === "stale" && (
+        <p className="mt-2 text-xs text-warning">
+          Monitoramento atrasado: {s.last_checked_at ? `última verificação ${ago(s.last_checked_at)}` : "este canal nunca foi verificado"}. Não foi possível confirmar se o canal está ao vivo
+          {s.status === "live" || live ? " (o último resultado conhecido era ao vivo)" : ""}.
+        </p>
+      )}
+      {clickedAt !== null && (
+        <p className="mt-2 text-xs" role="status">
+          {check.isPending ? <span className="text-ink-muted">Enviando a solicitação…</span>
+            : check.isError ? <span className="text-tally">A solicitação não foi aceita ({check.error instanceof Error ? check.error.message : "erro"}). Nenhuma verificação foi feita.</span>
+            : done ? <span className="text-ok">Verificação concluída: {s.status === "error" ? "erro na verificação" : live || s.status === "live" ? "ao vivo" : "offline"}.</span>
+            : pendingFor < 90 ? <span className="text-ink-muted">Verificação solicitada, aguardando o monitor…</span>
+            : <span className="text-warning">Solicitada há {pendingFor} s e ainda não executada. O monitoramento pode estar parado.</span>}
+        </p>
+      )}
       {testing && <TestClipPanel streamerId={s.id} onClose={() => setTesting(false)} />}
       {open && (
         <div className="mt-4 grid min-w-0 gap-6 rounded-lg border border-suite-line bg-suite p-4 md:grid-cols-2">
@@ -179,5 +208,32 @@ function StreamerRow({ s }: { s: Streamer }) {
         </div>
       )}
     </li>
+  );
+}
+
+
+const minutes = (sec: number | null) => (sec === null ? "nunca" : sec < 3600 ? `há ${Math.round(sec / 60)} min` : `há ${(sec / 3600).toFixed(1).replace(".", ",")} h`);
+
+/** Current monitoring state; the last known result is shown separately and never as current when stale. */
+function MonitorBadge({ s, live }: { s: Streamer; live: boolean }) {
+  const st = s.monitor?.state;
+  if (st === "stale") return <span className="text-xs font-semibold text-warning" title="A verificação periódica não aconteceu no prazo">Monitoramento atrasado</span>;
+  if (st === "checking") return <span className="text-xs text-ink-muted">Verificando…</span>;
+  if (st === "paused" || !s.enabled) return <Tally live={false} label="Monitoramento pausado" />;
+  if (st === "error" || s.status === "error") return <span className="text-xs text-tally" title={s.last_error}>Erro na verificação</span>;
+  return <Tally live={live} label={live ? `Ao vivo, ${timecode(s.live_session!.covered_until)}` : "Offline"} />;
+}
+
+/** Page-level alert: monitoring can be late even while every worker heartbeat looks healthy. */
+function MonitorAlert({ streamers }: { streamers: Streamer[] }) {
+  const stale = streamers.filter((x) => x.enabled && x.monitor?.state === "stale");
+  if (!stale.length) return null;
+  const never = stale.some((x) => x.monitor?.last_checked_age_s == null);
+  const oldest = Math.max(...stale.map((x) => x.monitor?.last_checked_age_s ?? 0));
+  return (
+    <div role="alert" className="mb-4 rounded-md border border-warning/60 px-3 py-2 text-sm text-warning">
+      <strong>Monitoramento atrasado</strong> em {stale.length} {stale.length === 1 ? "canal" : "canais"}: {never ? "há canal que nunca foi verificado" : `a verificação mais antiga foi ${minutes(oldest)}`}.
+      Os estados abaixo são o último resultado conhecido e podem não ser atuais.
+    </div>
   );
 }

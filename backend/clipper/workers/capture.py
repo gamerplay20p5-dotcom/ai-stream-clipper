@@ -23,7 +23,8 @@ from pathlib import Path
 
 from .. import media
 from ..config import Settings
-from ..platforms import parse_file_source, probe_live
+from ..platforms import parse_file_source
+from .probe import probe_isolated
 from ..security import sha256_file
 from .client import InternalError
 from .runtime import JobContext, JobError
@@ -106,7 +107,8 @@ class CaptureManager:
                     break
                 failures += 1
             else:
-                status = await asyncio.to_thread(probe_live, p["url"])
+                # killable child process: a stuck probe cannot hold this capture (or a thread) forever
+                status = await probe_isolated(p["url"], self.settings.monitor_probe_timeout_s, self.settings.monitor_http_timeout_s)
                 if not status.live and not status.error:
                     end_reason = "stream offline"
                     break

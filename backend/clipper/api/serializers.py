@@ -11,6 +11,32 @@ def iso(dt: datetime | None) -> str | None:
     return dt.isoformat() + "Z" if dt else None
 
 
+def monitor_state(s: Streamer, now=None, stale_after_s: float | None = None) -> dict:
+    """Current MONITORING state, separate from the last known result (`status`).
+
+    A channel that should be checked periodically but was not checked within `stale_after_s` is "stale": its
+    last result must not be shown as current (heartbeats can be healthy while monitoring makes no progress).
+    """
+    from ..config import get_settings
+    from ..db import utcnow
+
+    now = now or utcnow()
+    limit = stale_after_s if stale_after_s is not None else get_settings().monitor_stale_after_s
+    age = (now - s.last_checked_at).total_seconds() if s.last_checked_at else None
+    if not s.enabled:
+        state = "paused"
+    elif age is None or age > limit:
+        state = "stale"
+    elif s.check_requested:
+        state = "checking"
+    elif s.status == "error" or (s.last_error and s.status != "live"):
+        state = "error"
+    else:
+        state = "live" if s.status == "live" else "offline"
+    return {"state": state, "check_requested": bool(s.check_requested),
+            "last_checked_age_s": round(age) if age is not None else None, "stale_after_s": limit}
+
+
 def streamer(s: Streamer, live_session: StreamSession | None = None, clip_count: int = 0) -> dict:
     return {
         "id": s.id,
@@ -28,6 +54,7 @@ def streamer(s: Streamer, live_session: StreamSession | None = None, clip_count:
         "created_at": iso(s.created_at),
         "live_session": session(live_session) if live_session else None,
         "clip_count": clip_count,
+        "monitor": monitor_state(s),
     }
 
 

@@ -79,6 +79,9 @@ export type Streamer = {
   live_session: Session | null;
   clip_count: number;
   sessions?: Session[];
+  /** Current monitoring state (v0.6.2-hotfix.1); `status` is only the last known result. */
+  monitor?: { state: "live" | "offline" | "checking" | "stale" | "error" | "paused"; check_requested: boolean;
+    last_checked_age_s: number | null; stale_after_s: number };
 };
 
 export type Breakdown = Record<string, number | null>;

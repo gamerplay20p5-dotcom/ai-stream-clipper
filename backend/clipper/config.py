@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     worker_host_label: str = ""  # e.g. "210" - shown in the infrastructure page
     work_dir: Path = Path("./data/work")
     heartbeat_interval_s: float = 10.0
+    # --- live monitor (v0.6.2-hotfix.1) ---
+    monitor_interval_s: float = 60.0  # how often each enabled channel is checked
+    monitor_concurrency: int = 4  # probes running at the same time
+    monitor_probe_timeout_s: float = 45.0  # hard deadline: the probe process is killed after it
+    monitor_http_timeout_s: float = 20.0  # streamlink per-request timeout inside the probe
+    monitor_stall_s: float = 600.0  # poll loop without any attempt for this long -> supervisor restarts it
+    monitor_stale_after_s: float = 300.0  # panel: a channel not checked for this long is "monitoramento atrasado"
+    loop_stall_exit_s: float = 300.0  # event loop blocked this long -> stack dump + exit 70 (container restarts); 0 = off
     poll_interval_s: float = 2.0
     lease_seconds: int = 90
     concurrency_audio: int = 2
