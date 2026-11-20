@@ -142,11 +142,16 @@ def run_publish(job_id: int, pub_id: int) -> None:
             service.log_event(pub, "refused", pub.last_error)
             queue.complete(db, job_id, wid, {"refused": problems})
             return
-        last = db.scalar(select(Publication.updated_at).where(Publication.account_id == acct.id,
-                                                              Publication.status.in_(("processing", "published")),
-                                                              Publication.id != pub.id)
-                         .order_by(Publication.updated_at.desc()))
-        if last and (utcnow() - last).total_seconds() < MIN_GAP_BETWEEN_UPLOADS_S:
+        # gap measured from real uploads: another upload in progress on this account, or the last one
+        # that went live. (updated_at changes on every status poll and metrics refresh: using it kept
+        # deferring forever while any Reel was processing.)
+        busy = db.scalar(select(Publication.id).where(Publication.account_id == acct.id, Publication.id != pub.id,
+                                                      Publication.status == "uploading"))
+        last = db.scalar(select(Publication.published_at).where(Publication.account_id == acct.id,
+                                                                Publication.id != pub.id,
+                                                                Publication.published_at.is_not(None))
+                         .order_by(Publication.published_at.desc()))
+        if busy or (last and (utcnow() - last).total_seconds() < MIN_GAP_BETWEEN_UPLOADS_S):
             _reschedule(pub, "intervalo mínimo entre envios", MIN_GAP_BETWEEN_UPLOADS_S)
             queue.complete(db, job_id, wid, {"deferred": "rate"})
             return

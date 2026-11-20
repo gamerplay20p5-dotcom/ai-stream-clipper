@@ -1628,6 +1628,20 @@ const en: Record<string, string> = {
   "há canal que nunca foi verificado": "a channel was never checked",
   "a verificação mais antiga foi {minutes}": "the oldest check was {minutes}",
   "As notas das versões mais antigas estão disponíveis só em português.": "Notes for older versions are only available in Portuguese.",
+  "Enviar agora": "Send now",
+  "sem horário": "no time",
+  "Calculando…": "Calculating…",
+  "Reorganizar agenda": "Reorganize schedule",
+  "Agenda reorganizada.": "Schedule reorganized.",
+  "Reorganizar a agenda de {name}": "Reorganize {name}'s schedule",
+  "Reorganizar a agenda de": "Reorganize the schedule of",
+  "Nada muda: os envios já estão nos próximos horários livres.": "Nothing changes: uploads are already in the next free slots.",
+  "envio(s) mudam de horário, seguindo os horários, o limite por dia e os vídeos por horário da regra. Os melhores cortes vão primeiro. Sugestões que esperam confirmação não mudam.": "upload(s) change time, following the rule's times, daily limit and videos per slot. The best clips go first. Suggestions waiting for confirmation don't change.",
+  "Aplicando…": "Applying…",
+  "Mudar {length} horário(s)": "Change {length} time(s)",
+  "Por horário": "Per slot",
+  "Vídeos por horário (1 a 6)": "Videos per time slot (1 to 6)",
+  "Shorts e Reels: 3 ou 4 no mesmo horário de pico alimentam mais o algoritmo. Os envios saem com 1 minuto de intervalo.": "Shorts and Reels: 3 or 4 in the same peak slot feed the algorithm more. Uploads go out 1 minute apart.",
 };
 
 export default en;

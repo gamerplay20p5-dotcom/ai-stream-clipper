@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+from collections import Counter
 from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
@@ -371,15 +372,16 @@ def next_slot(db: Session, acct: PublishAccount, rule: PublishRule, now: datetim
     now = now or utcnow()
     zone = ZoneInfo(rule.timezone or "America/Sao_Paulo")
     slots = sorted(s for s in (rule.slots or []) if re.match(r"^\d{2}:\d{2}$", s)) or ["12:00", "18:00", "21:00"]
-    taken = {p.scheduled_at for p in db.scalars(select(Publication).where(
-        Publication.account_id == acct.id, Publication.status.in_(ACTIVE), Publication.scheduled_at.is_not(None)))}
+    taken = Counter(p.scheduled_at for p in db.scalars(select(Publication).where(
+        Publication.account_id == acct.id, Publication.status.in_(ACTIVE), Publication.scheduled_at.is_not(None))))
+    per_slot = max(1, int(getattr(rule, "per_slot", 1) or 1))
     local_now = now.replace(tzinfo=ZoneInfo("UTC")).astimezone(zone)
     for day in range(0, 30):
         d = (local_now + timedelta(days=day)).date()
         for s in slots:
             hh, mm = map(int, s.split(":"))
             cand = datetime(d.year, d.month, d.day, hh, mm, tzinfo=zone).astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
-            if cand <= now + timedelta(minutes=2) or cand in taken:
+            if cand <= now + timedelta(minutes=2) or taken[cand] >= per_slot:
                 continue
             if published_today(db, acct, rule.timezone, cand) >= rule.max_per_day:
                 break  # day full -> next day
@@ -440,14 +442,20 @@ def enqueue_due(db: Session) -> int:
     if is_paused(db):
         return 0
     now = utcnow()
+    from .editorial import respread_stale
+
+    respread_stale(db, now)
     n = 0
     for pub in db.scalars(select(Publication).where(Publication.status == "scheduled",
                                                     (Publication.scheduled_at.is_(None)) | (Publication.scheduled_at <= now))):
         # a new round (re-created, admin retry) must get a new key: the queue keeps finished jobs forever
         # (the log is bounded, so the round is identified by its start time, not by counting events)
         rnd = next((e.get("at", "") for e in reversed(pub.log or []) if e.get("event") in ("created", "retry_admin")), "")
+        # deferrals (rate gap, API quota) and manual re-timing change scheduled_at without spending an
+        # attempt: before v0.7.3 they reused the finished job's key and the publication was never sent
+        when = pub.scheduled_at.isoformat(timespec="seconds") if pub.scheduled_at else "now"
         queue.enqueue(db, "publish", {"publication_id": pub.id},
-                      idempotency_key=f"publish:{pub.id}:{rnd[:26]}:{pub.attempts}",
+                      idempotency_key=f"publish:{pub.id}:{rnd[:26]}:{pub.attempts}:{when}",
                       priority=50, max_attempts=6)
         n += 1
     return n

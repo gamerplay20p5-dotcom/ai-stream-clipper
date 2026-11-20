@@ -14,7 +14,7 @@ export type PubApp = { platform: string; name: string; configured: boolean; clie
 export type PubAccount = { id: number; platform: string; platform_name: string; name: string; handle: string; status: string;
   meta: { privacy_options?: string[]; upload_limit?: number; units_limit?: number }; quota: { day?: string; uploads?: number; units?: number }; last_error: string; connected_at: string };
 type Rule = { id: number; account_id: number; streamer_id: number | null; enabled: boolean; mode: string; require_approval: boolean;
-  min_score: number; privacy: string; allow_public_auto: boolean; max_per_day: number; slots: string[]; timezone: string;
+  min_score: number; privacy: string; allow_public_auto: boolean; max_per_day: number; per_slot: number; slots: string[]; timezone: string;
   templates: Record<string, { title?: string; description?: string; hashtags?: string }> };
 export type Pub = { id: number; clip_id: number | null; clip_title: string | null; clip_score: number | null; account_id: number;
   platform: string; status: string; origin: string; scheduled_at: string | null; title: string; privacy: string; remote_url: string;
@@ -231,7 +231,51 @@ function Rights() {
 }
 
 const emptyRule = (a: PubAccount): Omit<Rule, "id"> => ({ account_id: a.id, streamer_id: null, enabled: true, mode: "manual", require_approval: true,
-  min_score: 70, privacy: initialPrivacy(a.meta.privacy_options ?? []), allow_public_auto: false, max_per_day: 3, slots: ["12:00", "18:00", "21:00"], timezone: "America/Sao_Paulo", templates: {} });
+  min_score: 70, privacy: initialPrivacy(a.meta.privacy_options ?? []), allow_public_auto: false, max_per_day: 3, per_slot: 1, slots: ["12:00", "18:00", "21:00"], timezone: "America/Sao_Paulo", templates: {} });
+
+type Moved = { id: number; clip_id: number | null; platform: string; title: string; from: string | null; to: string };
+const fmtWhen = (iso: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 16)}` : t("sem horário"));
+
+/** Preview, then bring the account's scheduled posts forward into the next free peak slots. */
+function RepackButton({ accountId, name }: { accountId: number; name: string }) {
+  const qc = useQueryClient();
+  const [plan, setPlan] = useState<Moved[] | null>(null);
+  const preview = useMutation({
+    mutationFn: () => api.post<{ moved: Moved[] }>("/api/publish/repack", { account_id: accountId, dry_run: true }),
+    onSuccess: (r) => setPlan(r.moved),
+  });
+  const apply = useMutation({
+    mutationFn: () => api.post<{ moved: Moved[] }>("/api/publish/repack", { account_id: accountId, dry_run: false }),
+    onSuccess: () => { setPlan(null); qc.invalidateQueries(); },
+  });
+  const changes = (plan ?? []).filter((m) => m.from !== m.to);
+  return (
+    <>
+      <button className="btn-quiet ml-1 px-2 py-1 text-xs" disabled={preview.isPending} onClick={() => preview.mutate()}>
+        {preview.isPending ? t("Calculando…") : t("Reorganizar agenda")}</button>
+      <ErrorNote error={preview.error ?? apply.error} />
+      {apply.isSuccess && <Notice>{t("Agenda reorganizada.")}</Notice>}
+      {plan && (
+        <div role="dialog" aria-label={t("Reorganizar a agenda de {name}", { name: name })} className="panel panel-body mt-2 max-w-xl whitespace-normal text-left">
+          <p className="text-sm font-medium">{t("Reorganizar a agenda de")} {name}</p>
+          {changes.length === 0 ? <p className="mt-1 text-sm text-ink-muted">{t("Nada muda: os envios já estão nos próximos horários livres.")}</p> : (
+            <>
+              <p className="mt-1 text-sm text-ink-muted">{changes.length} {t("envio(s) mudam de horário, seguindo os horários, o limite por dia e os vídeos por horário da regra. Os melhores cortes vão primeiro. Sugestões que esperam confirmação não mudam.")}</p>
+              <ul className="mt-2 max-h-56 overflow-auto text-xs">
+                {changes.map((m) => <li key={m.id} className="py-0.5"><span className="font-mono">{fmtWhen(m.from)} → {fmtWhen(m.to)}</span> · {m.title || t("Corte #{clip_id}", { clip_id: m.clip_id })}</li>)}
+              </ul>
+            </>
+          )}
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            <button className="btn-quiet" onClick={() => setPlan(null)}>{t("Voltar")}</button>
+            {changes.length > 0 && <button className="btn-take" disabled={apply.isPending} onClick={() => apply.mutate()}>
+              {apply.isPending ? t("Aplicando…") : t("Mudar {length} horário(s)", { length: changes.length })}</button>}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 function Rules({ ov }: { ov: Overview }) {
   const [editing, setEditing] = useState<(Omit<Rule, "id"> & { id?: number }) | null>(null);
@@ -244,7 +288,7 @@ function Rules({ ov }: { ov: Overview }) {
       ))}
       {ov.rules.length > 0 && (
         <table className="mb-3 w-full text-sm">
-          <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">{t("Conta")}</th><th>{t("Streamer")}</th><th>{t("Modo")}</th><th>{t("Nota mín.")}</th><th>{t("Aprovação")}</th><th>{t("Privacidade")}</th><th>{t("Por dia")}</th><th>{t("Horários")}</th><th /></tr></thead>
+          <thead className="text-left text-xs text-ink-muted"><tr><th className="py-1">{t("Conta")}</th><th>{t("Streamer")}</th><th>{t("Modo")}</th><th>{t("Nota mín.")}</th><th>{t("Aprovação")}</th><th>{t("Privacidade")}</th><th>{t("Por dia")}</th><th>{t("Por horário")}</th><th>{t("Horários")}</th><th /></tr></thead>
           <tbody>{ov.rules.map((r) => (
             <tr key={r.id} className={`border-t border-suite-line/50 ${r.enabled ? "" : "opacity-50"}`}>
               <td className="py-1">{acctName(r.account_id)?.name}</td>
@@ -254,8 +298,9 @@ function Rules({ ov }: { ov: Overview }) {
               <td>{privacyLabel[r.privacy] ?? r.privacy}{r.allow_public_auto && t(" · público automático")}
                 {acctName(r.account_id)?.meta.privacy_options && !acctName(r.account_id)!.meta.privacy_options!.includes(r.privacy) &&
                   <span className="block text-xs text-tally">{t("inválida para esta conta: edite a regra (nada é publicado por ela assim)")}</span>}</td>
-              <td>{r.max_per_day}</td><td className="text-xs">{r.slots.join(", ")}</td>
-              <td><button className="btn-quiet px-2 py-1 text-xs" onClick={() => setEditing(r)}>{t("Editar")}</button></td>
+              <td>{r.max_per_day}</td><td>{r.per_slot ?? 1}</td><td className="text-xs">{r.slots.join(", ")}</td>
+              <td className="whitespace-nowrap"><button className="btn-quiet px-2 py-1 text-xs" onClick={() => setEditing(r)}>{t("Editar")}</button>
+                {r.enabled && <RepackButton accountId={r.account_id} name={acctName(r.account_id)?.name ?? ""} />}</td>
             </tr>
           ))}</tbody>
         </table>
@@ -299,6 +344,9 @@ function RuleForm({ rule, accounts, streamers, onClose }: { rule: Omit<Rule, "id
           <input className="field" type="number" min={0} max={100} value={r.min_score} onChange={(e) => setR({ ...r, min_score: Number(e.target.value) })} /></label>
         <label><span className="text-xs text-ink-muted">{t("Máximo por dia")}</span>
           <input className="field" type="number" min={1} max={50} value={r.max_per_day} onChange={(e) => setR({ ...r, max_per_day: Number(e.target.value) })} /></label>
+        <label><span className="text-xs text-ink-muted">{t("Vídeos por horário (1 a 6)")}</span>
+          <input className="field" type="number" min={1} max={6} value={r.per_slot ?? 1} onChange={(e) => setR({ ...r, per_slot: Number(e.target.value) })} />
+          <span className="mt-1 block text-xs text-ink-muted">{t("Shorts e Reels: 3 ou 4 no mesmo horário de pico alimentam mais o algoritmo. Os envios saem com 1 minuto de intervalo.")}</span></label>
         <label><span className="text-xs text-ink-muted">{t("Horários (HH:MM, vírgula)")}</span>
           <input className="field" value={r.slots.join(", ")} onChange={(e) => setR({ ...r, slots: e.target.value.split(/[,\s]+/).filter(Boolean) })} /></label>
       </div>

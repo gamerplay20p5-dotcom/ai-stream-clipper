@@ -6,7 +6,7 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
-    {"version": "0.7.4", "date": "2026-11-20", "title": "Painel em inglês", "items": [
+    {"version": "0.7.5", "date": "2026-11-20", "title": "Painel em inglês", "items": [
         "Todo o painel, a tela de entrada e a biblioteca dos convidados agora também existem em inglês.",
         "O idioma segue o navegador (português para pt, inglês para os demais) e pode ser trocado no menu Minha conta, na tela de entrada e no rodapé da biblioteca.",
         "Datas e números acompanham o idioma escolhido.",
@@ -16,6 +16,21 @@ NOTES: list[dict] = [
         "The language follows the browser (Portuguese for pt, English for everything else) and can be changed in My account, on the sign-in page and in the library footer.",
         "Dates and numbers follow the chosen language.",
         "Text written by the AI (titles, explanations and evidence) stays in the stream's original language.",
+    ]},
+    {"version": "0.7.4", "date": "2026-11-20", "title": "A IA aprendeu critérios de edição profissional", "items": [
+        "Conversa sobre a live ou a plataforma (Discord, assinatura, configurações, “vou mostrar pra vocês”) não conta mais como acontecimento: o corte perde nota e é barrado na revisão de qualidade.",
+        "A IA verifica se o corte tem desfecho (fugiu, foi preso, deu certo, risada) e se a fala é compreensível; cortes só com energia na voz descem na fila.",
+        "Começo lento e final arrastado viram sugestões de edição (onde começar e onde terminar), sem rejeitar o corte.",
+        "Títulos mais concretos: quem fez o quê, sem prometer o que o corte não entrega.",
+        "Medido nas suas aprovações e rejeições: a nota passou a separar melhor bons e ruins (AUC 0,851 → 0,877), sem perder nenhum corte aprovado.",
+    ]},
+    {"version": "0.7.3", "date": "2026-11-20", "title": "Envios destravados e vários vídeos por horário", "items": [
+        "Correção: um envio adiado por “intervalo mínimo entre envios” ficava parado para sempre (15 Reels do dia 19). Agora todo adiamento ou mudança de horário volta para a fila.",
+        "O intervalo entre envios passa a contar só envios reais; consultar o status de um Reel não bloqueia mais os próximos.",
+        "Vídeos por horário (1 a 6) em cada regra: 3 ou 4 Shorts/Reels no mesmo horário de pico, com 1 minuto entre eles.",
+        "Envios atrasados mais de 2 horas não saem todos de uma vez: vão para os próximos horários livres da regra.",
+        "Botão “Reorganizar agenda” mostra antes o que muda e traz os envios para os próximos horários livres.",
+        "“Enviar agora” na agenda e mensagens de erro legíveis (antes apareciam em JSON).",
     ]},
     {"version": "0.7.2", "date": "2026-11-20", "title": "Mais acesso para contas convidadas", "items": [
         "Acesso por streamer: a conta vê todos os cortes aprovados de um streamer, inclusive os aprovados depois; um corte rejeitado sai da biblioteca.",
