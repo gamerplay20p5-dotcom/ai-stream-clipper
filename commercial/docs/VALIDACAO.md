@@ -1,5 +1,7 @@
 # Validação do redesign comercial
 
+> Registro da versão editorial, que foi substituída. A validação atual está em [REDESIGN_CINEMATICO.md](REDESIGN_CINEMATICO.md).
+
 ## Comparação visual
 
 | Tamanho | PR #18 | Redesign |

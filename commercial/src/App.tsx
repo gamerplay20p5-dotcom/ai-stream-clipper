@@ -3,8 +3,9 @@ import { content, type Language } from './content'
 import { editorial } from './editorial'
 import type { Market, PlanId, Preferences } from './market'
 import { Footer, Header } from './SiteChrome'
-import { Hero, Workflow } from './Studio'
-import { Features, Questions } from './EditorialSections'
+import { Hero } from './Hero'
+import { Demo } from './Demo'
+import { Features, Questions } from './Sections'
 import { Pricing } from './Pricing'
 import { Waitlist } from './Waitlist'
 
@@ -36,12 +37,12 @@ export function App({ initial }: { initial: Preferences }) {
       <a className="skip-link" href="#main">{copy.skip}</a>
       <Header t={t} language={language} languageLabel={copy.nav.language} onLanguage={next => updatePreferences(next, market)} join={copy.join} />
       <main id="main" tabIndex={-1}>
-        <Hero t={t} join={copy.join} language={language} />
-        <Workflow t={t} />
+        <Hero t={t} join={copy.join} />
+        <Demo t={t} language={language} caption={t.hero.caption} />
         <Features t={t} />
         <Pricing copy={copy} market={market} onMarket={next => updatePreferences(language, next)} onInterest={setInterest} />
         <Questions t={t.faq} />
-        <Waitlist copy={copy} language={language} market={market} interest={interest} onInterest={setInterest} />
+        <Waitlist copy={copy} language={language} market={market} interest={interest} onInterest={setInterest} marker={t.waitlistMarker} />
       </main>
       <Footer t={t} join={copy.join} independent={copy.footer.independent} />
     </>

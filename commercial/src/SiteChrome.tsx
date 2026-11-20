@@ -66,24 +66,34 @@ export function Header({ t, language, languageLabel, onLanguage, join }: HeaderP
 }
 
 export function Footer({ t, join, independent }: { t: Editorial; join: string; independent: string }) {
+  const { footer } = t
   return (
     <footer className="site-footer">
-      <div className="shell">
-        <div className="footer-main">
+      <div className="shell footer-grid">
+        <div className="footer-brand">
           <Brand />
-          <nav aria-label={t.navigation}><Links links={t.links} /><a href="#acesso">{join}</a></nav>
+          <p>{footer.tagline}</p>
+          <a className="button primary" href="#acesso">{join}<ArrowUpRight size={16} aria-hidden="true" /></a>
         </div>
-        <div className="footer-end">
-          <p>{independent}</p>
+        <nav className="footer-col" aria-labelledby="footer-product">
+          <h2 id="footer-product">{footer.product}</h2>
+          <Links links={t.links} />
+        </nav>
+        <div className="footer-col">
+          <h2 id="footer-legal">{footer.legal}</h2>
           <details className="legal-details">
-            <summary>{t.legal.label}</summary>
-            <div>
-              <a href="#privacidade">{t.legal.privacy}</a><a href="#termos">{t.legal.terms}</a>
-              <section id="privacidade"><h2>{t.legal.privacy}</h2><p>{t.legal.pending}</p></section>
-              <section id="termos"><h2>{t.legal.terms}</h2><p>{t.legal.pending}</p></section>
-            </div>
+            <summary>{footer.privacy}</summary>
+            <p id="privacidade">{footer.pending}</p>
+          </details>
+          <details className="legal-details">
+            <summary>{footer.terms}</summary>
+            <p id="termos">{footer.pending}</p>
           </details>
         </div>
+      </div>
+      <div className="shell footer-end">
+        <p>{footer.rights}</p>
+        <p>{independent}</p>
       </div>
     </footer>
   )

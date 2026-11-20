@@ -1,6 +1,6 @@
 # AI Stream Clipper by HTS | Landing comercial
 
-O serviço comercial roda isolado do painel e dos workers. O estúdio ilustrativo usa duas tomadas originais em cinco etapas interativas, da live à reprodução do Short com legendas. A [direção Broadcast Studio](docs/BROADCAST.md) documenta o sistema de interface e o trabalho local.
+O serviço comercial roda isolado do painel e dos workers. A landing segue a direção cinematográfica aprovada: o hero mostra o software funcionando, e "Como funciona" é uma demonstração interativa em quatro etapas (monitorar, analisar, editar e revisar). O [design system](DESIGN.md) e o [relatório do redesign](docs/REDESIGN_CINEMATICO.md) documentam tokens, mídia, capturas e validação.
 
 ## Rodar localmente
 
@@ -25,7 +25,7 @@ npm run build
 npm run test:browser
 ```
 
-A suíte abre a versão compilada em `127.0.0.1:8792` com um banco de teste temporário. Capturas originais e métricas locais saem em `test-results/`. Veja a [validação do Broadcast Studio](docs/BROADCAST.md#validação-local) e o [relatório da versão editorial anterior](docs/VALIDACAO.md).
+A suíte abre a versão compilada em `127.0.0.1:8792` com um banco de teste temporário. Capturas originais e métricas locais saem em `test-results/`. Veja a [validação do redesign cinematográfico](docs/REDESIGN_CINEMATICO.md#validação-local) e o [relatório da versão editorial anterior](docs/VALIDACAO.md).
 
 ## Lista de espera
 

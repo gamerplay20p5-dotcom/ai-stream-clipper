@@ -12,9 +12,10 @@ interface Props {
   market: Market
   interest: PlanId | ''
   onInterest: (plan: PlanId | '') => void
+  marker: string
 }
 
-export function Waitlist({ copy, language, market, interest, onInterest }: Props) {
+export function Waitlist({ copy, language, market, interest, onInterest, marker }: Props) {
   const t = copy.waitlist
   const [status, setStatus] = useState<Submission>('idle')
   const [countryChoice, setCountryChoice] = useState<string>()
@@ -59,8 +60,12 @@ export function Waitlist({ copy, language, market, interest, onInterest }: Props
     <section className="waitlist section-space" id="acesso" aria-labelledby="waitlist-heading" tabIndex={-1}>
       <div className="shell waitlist-inner">
         <div className="waitlist-intro">
+          <p className="marker">{marker}</p>
           <h2 id="waitlist-heading">{t.title}</h2>
-          <p>{t.detail}</p>
+          <p className="lede">{t.detail}</p>
+          <ul className="waitlist-plans" role="list">
+            {planIds.map(id => <li key={id} className={interest === id ? 'is-chosen' : undefined}><strong>{plans[id].name}</strong><span>{copy.pricing.hours(plans[id].hours)}</span></li>)}
+          </ul>
         </div>
         {status === 'success' ? (
           <div className="waitlist-confirmation">

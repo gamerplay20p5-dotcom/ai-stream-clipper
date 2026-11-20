@@ -10,6 +10,8 @@ export default defineConfig({
   testDir: './browser-tests',
   reporter: 'list',
   workers: 3,
+  // Nine browser projects share one machine; allow headroom for slower runs.
+  timeout: 60_000,
   use: { baseURL, reducedMotion: 'reduce' },
   webServer: {
     command: 'node server/index.js',

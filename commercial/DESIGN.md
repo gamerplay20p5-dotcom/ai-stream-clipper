@@ -1,30 +1,77 @@
-# Direção visual e sistema de design
+# Design system | AI Stream Clipper by HTS
 
-Este documento registra a versão editorial anterior. O sistema do redesign local está em [Broadcast Studio](docs/BROADCAST.md).
+Direção cinematográfica noturna aprovada pela HTS em 20/11/2026. O mockup de referência e a comparação com a implementação estão em [docs/REDESIGN_CINEMATICO.md](docs/REDESIGN_CINEMATICO.md). Os tokens estão em `:root` de [src/styles.css](src/styles.css).
 
-A experiência segue a ordem de uma edição. Começa com um plano aberto, aproxima o olhar no momento que sustenta o corte e termina com a versão vertical. A bancada no hero mostra a transformação. A demonstração abaixo abre as decisões de cada etapa em uma sequência que o visitante controla.
+*English summary at the end.*
 
-## Materiais e grade
+## Princípios
 
-| Papel | Valor |
-| --- | --- |
-| Carvão do estúdio | `#111715` |
-| Superfície da mídia | `#202824` |
-| Papel quente | `#f5f1e8` |
-| Texto no papel | `#1b231f` |
-| Âmbar para ação e marca de edição | `#f5c872` |
-| Verde da área de acesso | `#203c34` |
+1. **O produto é o herói.** A primeira tela mostra o software funcionando: a live, o trecho detectado, a lista de momentos e o Short vertical. O texto acompanha essa leitura.
+2. **Coral é ação e corte.** O coral marca CTAs, o trecho selecionado, o estado ativo e o resultado. Magenta e roxo iluminam o ambiente (céu, halos, brilho dos painéis) e não preenchem componentes.
+3. **Fragmentos do software no lugar de cartões com ícone.** Recursos, demonstração e planos usam pedaços da interface: trilhas, waveform, guia de recorte, biblioteca e formatos.
+4. **Sem ponto final** em títulos, subtítulos, cards, botões, navegação e rótulos, em PT-BR e EN. Respostas do FAQ e notas com mais de uma frase usam pontuação normal. A suíte Playwright verifica a regra.
+5. **Movimento só como resposta.** As transições acontecem quando o visitante age (etapa, momento, recorte, legenda). `prefers-reduced-motion` desativa todas elas.
 
-**Bricolage Grotesque** em peso alto para manchetes, números e títulos de planos. **Instrument Sans** para leitura, navegação e controles. Monoespaçada do sistema só nos timecodes e formatos de mídia. As manchetes usam quebras intencionais, escala fluida e nomes sem pontuação final.
+## Cor
 
-Largura de conteúdo de 1280 px, margens fluidas e espaçamentos com base de 8 px. No desktop, o hero usa duas colunas de texto acima do quadro panorâmico. A demonstração combina capítulos e mídia. Recursos e FAQ usam linhas divisórias de uma página editorial. Preços usam uma grade comparável na horizontal e seções empilhadas no celular. Controles retangulares têm raios de 5 a 8 px, foco de alto contraste e área de toque de 44 px. O menu mobile é modal, com retorno de foco e fechamento por Escape.
+| Token | Valor | Uso |
+| --- | --- | --- |
+| `--bg` | `#090B10` | Fundo da página |
+| `--panel` | `#11131C` | Janelas do estúdio, painéis de recursos e lista de espera |
+| `--surface` | `#151722` | Superfícies internas e cards de plano |
+| `--surface-raised` | `#1C1E2B` | Controles ativos e trilhas |
+| `--text` | `#F5F6FA` | Texto principal |
+| `--text-soft` | `#D4D6E0` | Texto sobre imagem e listas |
+| `--muted` | `#ADB1C0` | Texto secundário |
+| `--line` / `--line-strong` | `#23263A` / `#343849` | Divisórias e bordas |
+| `--coral` | `#FF4F62` | Destaque, trecho, ícones ativos e headline |
+| `--coral-text` | `#FF8A97` | Texto coral pequeno e foco |
+| `--action` | `#D92D45` | Fundo dos botões primários com texto branco |
+| `--magenta` | `#DF3D83` | Luz ambiente na seção de planos |
+| `--violet` | `#7640C8` | Luz ambiente do hero, halos e plano Pro |
 
-## Referências e mídia
+O texto branco sobre `#FF4F62` tem contraste de 3,2:1, abaixo do mínimo de 4,5:1 para texto normal. Por isso o fundo dos botões usa o coral mais profundo `--action` (4,8:1), com brilho coral ao redor para manter a leitura do mockup. O coral puro fica para títulos, bordas e ícones.
 
-Linear e Raycast foram referências de densidade e feedback. Framer, Riverside e Descript foram referências de enquadramento e apresentação de mídia. A página usa composição, tipografia e interação próprias.
+## Tipografia
 
-Os dois vídeos de referência em Downloads, identificados pela comparação «bruto/final», mostram um original visualmente recuado, o corte final em destaque, mudanças de enquadramento e legendas que enfatizam uma frase. A bancada usa essa diferença de hierarquia. A demonstração alterna plano aberto, seleção editorial, recorte vertical e reprodução, com marcação âmbar na legenda. Nenhum trecho dos vídeos de referência foi incorporado à página.
+- **Space Grotesk** (variável, 700) para títulos, números de preço, marca e rótulos do estúdio. O espaçamento entre letras é negativo (-0,035 a -0,045 em) nos tamanhos grandes.
+- **Instrument Sans** (variável, 400 a 650) para texto corrido, controles e formulário.
+- Monoespaçada do sistema só em timecodes e notas da biblioteca.
+- As duas fontes usam a licença SIL OFL 1.1 e são servidas localmente pelo Fontsource. A CSP não permite fontes externas.
 
-As cenas da demonstração são originais, geradas pela ferramenta ImageGen integrada e compactadas localmente. Os prompts pediram uma sequência fictícia de um carro cobre em um porto tropical, primeiro em plano aberto sob viadutos e depois em contraplano contornando o quebra-mar. Não há gameplay, logos ou material da Rockstar na demonstração.
+| Token | Tamanho | Uso |
+| --- | --- | --- |
+| `--step-4` | `clamp(2.2rem, 2.9vw, 2.9rem)` | H1 do hero, em duas linhas |
+| `--step-3` | `clamp(1.9rem, 3.1vw, 2.9rem)` | Títulos de seção |
+| `--step-2` | 1,375rem | Títulos de recurso e comparação |
+| `--step-1` | 1,125rem | Ledes, etapas e marcadores de seção |
+| `--step-0` | 1rem | Texto corrido |
+| `--step--1` | 0,8125rem | Selos e notas |
 
-O movimento acontece sob ação do visitante. O Short de exemplo tem controles nativos, arquivo de legendas nos dois idiomas e descrição em texto. A preferência por movimento reduzido elimina transições e rolagem suave.
+Os marcadores de seção usam a barra coral do mockup (`/ Como funciona`). Não há rótulos em caixa alta.
+
+## Espaço, forma e profundidade
+
+- Escala de espaçamento: 4, 8, 12, 16, 24, 32, 48 e 72 px. Seções com `clamp(64px, 7vw, 112px)`.
+- Largura de conteúdo de 1360 px (1520 px a partir de 1600 px de viewport). Margem fluida de 16 a 56 px, ou 12 px abaixo de 380 px.
+- Raios por hierarquia: 8 px em botões e campos, 12 px em mídia interna, 18 px em painéis e cards, 24 px em janelas do estúdio e na lista de espera, e cápsula só em selos e filtros.
+- Elevação: `--shadow-panel` para janelas sobre o fundo, `--glow-violet` atrás do estúdio e do preview, `--glow-coral` em CTAs, no Creator e no Short.
+
+## Componentes
+
+| Componente | Arquivo | Observações |
+| --- | --- | --- |
+| Cena do hero | `src/Hero.tsx` (`HeroScene`) | SVG original: céu, sol, skyline, palmeiras e helicóptero. Determinístico, para coincidir no SSR e na hidratação |
+| Preview do produto | `src/Hero.tsx` (`ProductPreview`) | `figure` com descrição. O interior é ilustrativo e fica `aria-hidden` |
+| Waveform | `src/Waveform.tsx` | Compartilhado entre hero e demo, com trecho e marcadores |
+| Demonstração | `src/Demo.tsx` | Abas verticais (setas, Home e End), seletor de momento (radiogroup), recorte, legendas e revisão |
+| Recursos | `src/Sections.tsx` | Trilhas de sinais, par 16:9 → 9:16, biblioteca com regra de limpeza, formatos |
+| Planos | `src/Pricing.tsx` | Valores de `catalog.json`. Creator recomendado e Pro com luz violeta |
+| Lista de espera | `src/Waitlist.tsx` | Validação nativa, estados de envio e erro, foco na confirmação |
+| Cabeçalho e rodapé | `src/SiteChrome.tsx` | Menu mobile em `dialog` modal, ciclo de foco e retorno de foco |
+
+Estados interativos: hover com borda coral ou fundo `--coral-wash`, foco visível com contorno `--coral-text` de 2 px, pressionado com deslocamento de 1 px, seleção indicada por `aria-selected`, `aria-checked` ou `aria-pressed`.
+
+## English summary
+
+Night-time cinematic direction approved by HTS. Coral marks action and the selected clip. Magenta and violet are ambient light only. Space Grotesk handles headings and Instrument Sans the body copy, both self-hosted. Sections show fragments of the software rather than icon cards. Headings, subtitles, cards, buttons, navigation and labels never end with a period, and the browser suite enforces this. Primary buttons use `#D92D45` behind white text for 4.8:1 contrast, and pure coral `#FF4F62` is reserved for headlines, borders and icons.
