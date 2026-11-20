@@ -5,7 +5,7 @@ import VoicePanel from "../components/VoicePanel";
 import { Link } from "react-router-dom";
 import { api, type Streamer } from "../api";
 import TestClipPanel from "../components/TestClipPanel";
-import { Empty, ErrorNote, PageHeader, Tally } from "../components/ui";
+import { Disclosure, Empty, ErrorNote, Notice, PageHeader, Skeleton, Tally } from "../components/ui";
 import { ago, platformName, timecode } from "../lib/format";
 
 export default function Streamers() {
@@ -30,9 +30,25 @@ export default function Streamers() {
   }
 
   return (
-    <div className="max-w-5xl">
-      <PageHeader title="Streamers" />
-      <form onSubmit={submit} className="mb-8 grid gap-3 rounded-lg bg-suite-panel p-4 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
+    <div className="space-y-5">
+      <PageHeader title="Lives e streamers" description="Gerencie os canais monitorados, o estado da captura e as preferências de corte." />
+
+
+      {add.isSuccess && <Notice>Canal adicionado ao monitoramento.</Notice>}
+      <ErrorNote error={list.error} />
+      <MonitorAlert streamers={list.data ?? []} />
+      {list.isLoading && <Skeleton label="Carregando canais monitorados" />}
+      {list.data && list.data.length > 0 && <section className="panel">
+      <header className="panel-heading">
+        <h2 className="display text-lg">Canais cadastrados</h2>
+        <span className="text-sm text-ink-muted">{list.data.filter((channel) => channel.live_session).length} ao vivo / {list.data.length} cadastrados</span>
+      </header>
+      <ul className="divide-y divide-suite-line">
+        {list.data.map((channel) => <StreamerRow key={channel.id} s={channel} />)}
+      </ul>
+      </section>}
+      <Disclosure title="Adicionar canal">
+      <form onSubmit={submit} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
         <div>
           <label className="label" htmlFor="url">Link do canal</label>
           <input id="url" className="field" required placeholder="https://www.twitch.tv/canal ou youtube.com/@canal" value={url}
@@ -50,7 +66,7 @@ export default function Streamers() {
           <input id="game" className="field" value={game} onChange={(e) => setGame(e.target.value)} />
         </div>
         <button className="btn-take" disabled={add.isPending}>{add.isPending ? "Adicionando…" : "Começar a monitorar"}</button>
-        <div className="sm:col-span-4">
+        <div className="space-y-2 sm:col-span-2 xl:col-span-4">
           <ErrorNote error={add.error} />
           <p className="text-xs text-ink-muted">
             Aceita canais públicos da Twitch e do YouTube. O sistema só analisa transmissões abertas; publicar os cortes exige autorização do criador.
@@ -58,13 +74,9 @@ export default function Streamers() {
           </p>
         </div>
       </form>
+      </Disclosure>
+      {list.data?.length === 0 && <Empty title="Nenhum canal cadastrado">Abra Adicionar canal e informe o link da transmissão.</Empty>}
 
-      <ErrorNote error={list.error} />
-      <MonitorAlert streamers={list.data ?? []} />
-      {list.data?.length === 0 && <Empty title="Nenhum canal cadastrado">Cole o link de um canal acima para começar.</Empty>}
-      <ul className="divide-y divide-suite-line border-y border-suite-line">
-        {(list.data ?? []).map((s) => <StreamerRow key={s.id} s={s} />)}
-      </ul>
     </div>
   );
 }
@@ -100,22 +112,22 @@ function StreamerRow({ s }: { s: Streamer }) {
   const prefs = s.preferences as { game?: string; min_score?: number; layout?: string };
 
   return (
-    <li className="py-4">
+    <li className="px-4 py-4 sm:px-5">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 basis-full sm:flex-1">
           <div className="flex items-center gap-3">
             <span className="truncate font-medium">{s.display_name}</span>
             <span className="text-xs text-ink-muted">{platformName[s.platform]}</span>
           </div>
-          <a href={s.platform === "file" ? undefined : s.url} target="_blank" rel="noreferrer noopener" className="truncate text-xs text-ink-faint hover:text-ink-muted">{s.url}</a>
+          <a href={s.platform === "file" ? undefined : s.url} target="_blank" rel="noreferrer noopener" className="block truncate text-xs text-ink-muted hover:text-take">{s.url}</a>
         </div>
-        <div className="w-40 text-sm">
+        <div className="text-sm sm:w-40">
           <MonitorBadge s={s} live={live} />
           <div className="text-xs text-ink-faint">verificado {ago(s.last_checked_at)}</div>
         </div>
         <Link to={`/cortes?status=&streamer=${s.id}`} className="w-20 text-sm text-ink-muted hover:text-ink">{s.clip_count} {s.clip_count === 1 ? "corte" : "cortes"}</Link>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
-          <input type="checkbox" className="h-4 w-4 accent-[#F2B33D]" checked={s.enabled}
+          <input type="checkbox" className="h-4 w-4 " checked={s.enabled}
             onChange={(e) => patch.mutate({ enabled: e.target.checked })} />
           Monitorar
         </label>
@@ -133,7 +145,7 @@ function StreamerRow({ s }: { s: Streamer }) {
       </div>
       {s.last_error && s.status === "error" && <p className="mt-2 text-xs text-tally">{s.last_error}</p>}
       {s.monitor?.state === "stale" && (
-        <p className="mt-2 text-xs text-[#F2B33D]">
+        <p className="mt-2 text-xs text-warning">
           Monitoramento atrasado: {s.last_checked_at ? `última verificação ${ago(s.last_checked_at)}` : "este canal nunca foi verificado"}. Não foi possível confirmar se o canal está ao vivo
           {s.status === "live" || live ? " (o último resultado conhecido era ao vivo)" : ""}.
         </p>
@@ -144,12 +156,12 @@ function StreamerRow({ s }: { s: Streamer }) {
             : check.isError ? <span className="text-tally">A solicitação não foi aceita ({check.error instanceof Error ? check.error.message : "erro"}). Nenhuma verificação foi feita.</span>
             : done ? <span className="text-ok">Verificação concluída: {s.status === "error" ? "erro na verificação" : live || s.status === "live" ? "ao vivo" : "offline"}.</span>
             : pendingFor < 90 ? <span className="text-ink-muted">Verificação solicitada, aguardando o monitor…</span>
-            : <span className="text-[#F2B33D]">Solicitada há {pendingFor} s e ainda não executada. O monitoramento pode estar parado.</span>}
+            : <span className="text-warning">Solicitada há {pendingFor} s e ainda não executada. O monitoramento pode estar parado.</span>}
         </p>
       )}
       {testing && <TestClipPanel streamerId={s.id} onClose={() => setTesting(false)} />}
       {open && (
-        <div className="mt-4 grid gap-6 rounded-lg bg-suite-panel p-4 md:grid-cols-2">
+        <div className="mt-4 grid min-w-0 gap-6 rounded-lg border border-suite-line bg-suite p-4 md:grid-cols-2">
           <form className="space-y-3" onSubmit={(e) => {
             e.preventDefault();
             const f = new FormData(e.currentTarget);
@@ -205,7 +217,7 @@ const minutes = (sec: number | null) => (sec === null ? "nunca" : sec < 3600 ? `
 /** Current monitoring state; the last known result is shown separately and never as current when stale. */
 function MonitorBadge({ s, live }: { s: Streamer; live: boolean }) {
   const st = s.monitor?.state;
-  if (st === "stale") return <span className="text-xs font-semibold text-[#F2B33D]" title="A verificação periódica não aconteceu no prazo">Monitoramento atrasado</span>;
+  if (st === "stale") return <span className="text-xs font-semibold text-warning" title="A verificação periódica não aconteceu no prazo">Monitoramento atrasado</span>;
   if (st === "checking") return <span className="text-xs text-ink-muted">Verificando…</span>;
   if (st === "paused" || !s.enabled) return <Tally live={false} label="Monitoramento pausado" />;
   if (st === "error" || s.status === "error") return <span className="text-xs text-tally" title={s.last_error}>Erro na verificação</span>;
@@ -219,7 +231,7 @@ function MonitorAlert({ streamers }: { streamers: Streamer[] }) {
   const never = stale.some((x) => x.monitor?.last_checked_age_s == null);
   const oldest = Math.max(...stale.map((x) => x.monitor?.last_checked_age_s ?? 0));
   return (
-    <div role="alert" className="mb-4 rounded-md border border-[#F2B33D]/60 px-3 py-2 text-sm text-[#F2B33D]">
+    <div role="alert" className="mb-4 rounded-md border border-warning/60 px-3 py-2 text-sm text-warning">
       <strong>Monitoramento atrasado</strong> em {stale.length} {stale.length === 1 ? "canal" : "canais"}: {never ? "há canal que nunca foi verificado" : `a verificação mais antiga foi ${minutes(oldest)}`}.
       Os estados abaixo são o último resultado conhecido e podem não ser atuais.
     </div>

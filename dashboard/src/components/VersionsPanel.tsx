@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { api } from "../api";
-import { ErrorNote } from "./ui";
+import { ClipVideo, Disclosure, Empty, ErrorNote, Notice, Skeleton, Status } from "./ui";
 
 type Seg = { a: number; b: number; role: string };
 type Metrics = { duration: number; time_to_peak: number; teaser: boolean; dead_s: number; dead_ratio: number; cuts: number;
@@ -63,8 +63,8 @@ export default function VersionsPanel({ clipId, version, onChanged }: { clipId: 
   const [teaser, setTeaser] = useState(false);
   const [blind, setBlind] = useState(true);
   const [flip, setFlip] = useState(() => Math.random() < 0.5);
-  const [voted, setVoted] = useState<string | null>(null);
-  const [pick, setPick] = useState<string>("");
+  const [pick, setPick] = useState<string | null>(null);
+  const [voted, setVoted] = useState<{ left?: string; right?: string } | null>(null);
   const done = () => { qc.invalidateQueries({ queryKey: ["variants", clipId] }); onChanged(); };
   const restructure = useMutation({ mutationFn: () => api.post(`/api/clips/${clipId}/restructure`, { structure: key, teaser }), onSuccess: () => { setVoted(null); done(); } });
   const promote = useMutation({
@@ -74,26 +74,68 @@ export default function VersionsPanel({ clipId, version, onChanged }: { clipId: 
   const vote = useMutation({
     mutationFn: (w: "left" | "right" | "equal") => api.post<{ winner: string }>(`/api/clips/${clipId}/compare`,
       { left: flip ? alt : "main", right: flip ? "main" : alt, winner: w, blind }),
-    onSuccess: (_d, w) => { setVoted(w); done(); },
+    onSuccess: () => { setVoted({ left: name(sides[0]), right: name(sides[1]) }); done(); },
   });
   const v = q.data;
-  const ready = v ? ["format", "edit", "original"].filter((n) => v.variants[n]?.video) : [];
-  const altName = (pick && ready.includes(pick) ? pick : ready[0]) ?? null;
+  const ready = v ? ["format", "edit", "original"]
+    .filter((n) => v.variants[n]?.video) : [];
+  const altName = pick && ready.includes(pick) ? pick : ready[0];
   const alt = altName ?? "edit";
   const all = useMemo(() => (v ? [v.main.segments, ...Object.values(v.variants).map((x) => x.segments)].flat() : []), [v]);
-  if (!v) return <ErrorNote error={q.error} />;
+  if (!v) return q.isLoading ? <Skeleton label="Carregando versões" /> : <ErrorNote error={q.error} />;
   const lo = Math.min(...all.map((s) => s.a)), hi = Math.max(...all.map((s) => s.b));
   const sides = flip ? [alt, "main"] : ["main", alt];
   const src = (n: string) => (n === "main" ? `/api/clips/${clipId}/video?v=${version}` : `/api/clips/${clipId}/variants/${n}/video?v=${version}-${v.variants[n]?.state}`);
-  const name = (n: string) => (n === "main" ? v.main.label || LABEL[v.main.structure] : v.variants[n]?.label);
+  const name = (n: string) => (n === "main" ? v.main.label || LABEL[v.main.structure] || "Principal" : v.variants[n]?.label || n);
 
   return (
-    <section className="mt-6">
-      <h3 className="mb-1 text-sm font-semibold">Versões e estruturas</h3>
-      <p className="mb-3 text-xs text-ink-muted">
-        A reedição só usa trechos reais da live: corta pausas (nunca reações, o ponto alto ou o desfecho) e escolhe por onde começar.
-        O vídeo principal só muda quando você promove uma variante.
-      </p>
+    <section className="space-y-4">
+      <section className="panel" aria-labelledby="comparison-heading">
+        <header className="panel-heading">
+          <h2 id="comparison-heading" className="display text-lg">Comparação de versões</h2>
+          {altName && <Status tone={blind ? "accent" : "neutral"}>{blind ? "Modo cego" : "Identificação visível"}</Status>}
+        </header>
+        <div className="panel-body space-y-4">
+          {!altName ? <Empty title="Nenhuma variante pronta">Gere uma variante abaixo para compará-la ao vídeo principal.</Empty> : (
+            <>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+                {ready.length > 1 && (
+                  <select className="field w-auto" value={alt} aria-label="Variante a comparar com o principal" disabled={vote.isPending}
+                    onChange={(e) => { setPick(e.target.value); setVoted(null); setFlip(Math.random() < 0.5); }}>
+                    {ready.map((n) => <option key={n} value={n}>{name(n)}</option>)}
+                  </select>
+                )}
+                <label className="flex min-h-9 items-center gap-2 text-sm">
+                  <input type="checkbox" checked={blind} disabled={vote.isPending}
+                    onChange={(e) => { setBlind(e.target.checked); setVoted(null); setFlip(Math.random() < 0.5); }} />
+                  Comparar às cegas
+                </label>
+              </div>
+              <p className="text-sm text-ink-muted">Assista aos dois vídeos e registre sua preferência. A avaliação de melhora considera os votos em modo cego.</p>
+              <div className="grid grid-cols-2 gap-2.5 sm:gap-4">
+                {sides.map((n, index) => {
+                  const title = blind && !voted ? `Versão ${index + 1}` : name(n);
+                  return (
+                    <figure key={`${n}-${index}`} className="min-w-0 space-y-2">
+                      <figcaption className="text-sm font-semibold">{title}</figcaption>
+                      <ClipVideo aria-label={title} preload="none" src={src(n)} />
+                    </figure>
+                  );
+                })}
+              </div>
+              {voted ? <Notice>Voto registrado. Versão 1 era “{voted.left}” e Versão 2 era “{voted.right}”.</Notice> : (
+                <div className="flex flex-wrap gap-2" aria-label="Voto de comparação">
+                  <button className="btn-quiet" disabled={vote.isPending} onClick={() => vote.mutate("left")}>Prefiro a versão 1</button>
+                  <button className="btn-quiet" disabled={vote.isPending} onClick={() => vote.mutate("right")}>Prefiro a versão 2</button>
+                  <button className="btn-quiet" disabled={vote.isPending} onClick={() => vote.mutate("equal")}>Empate</button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </section>
+
+      <Disclosure title="Linha do tempo, métricas e promoção">
       <div className="space-y-3">
         <div>
           <div className="mb-1 flex justify-between text-xs"><b>Principal: {LABEL[v.main.structure] ?? v.main.structure}</b></div>
@@ -103,8 +145,9 @@ export default function VersionsPanel({ clipId, version, onChanged }: { clipId: 
           <div key={n} className="rounded-md border border-suite-line p-2">
             <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs">
               <b>Variante: {x.label ?? LABEL[x.structure]}</b>
-              <span className="text-ink-muted">{x.state === "queued" ? "renderizando…" : x.state === "failed" ? `falhou: ${x.error}` : x.state === "done" ? "pronta" : ""}</span>
+              <span className="text-ink-muted">{x.state === "queued" ? "Renderizando…" : x.state === "failed" ? "Falhou" : x.state === "done" ? "Pronta" : x.state}</span>
             </div>
+            {x.state === "failed" && <ErrorNote error={x.error} />}
             <Timeline segs={x.segments} lo={lo} hi={hi} />
             {x.reason && <p className="mt-1 text-xs text-ink-muted">Por quê: {x.reason}</p>}
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -120,47 +163,19 @@ export default function VersionsPanel({ clipId, version, onChanged }: { clipId: 
           </div>
         ))}
       </div>
+      </Disclosure>
 
-      {altName && (
-        <div className="mt-4 rounded-md border border-take/40 p-3">
-          <div className="mb-2 flex flex-wrap items-center gap-3 text-sm">
-            <b>Comparar</b>
-            <label className="flex items-center gap-1 text-xs"><input type="checkbox" className="accent-[#F2B33D]" checked={blind}
-              onChange={(e) => { setBlind(e.target.checked); setVoted(null); setFlip(Math.random() < 0.5); }} /> às cegas</label>
-            <span className="text-xs text-ink-muted">Assista às duas e escolha. Só comparações cegas contam como evidência de melhora.</span>
-            {ready.length > 1 && (
-              <select className="field w-auto py-0.5 text-xs" value={alt} aria-label="Variante a comparar"
-                onChange={(e) => { setPick(e.target.value); setVoted(null); setFlip(Math.random() < 0.5); }}>
-                {ready.map((n) => <option key={n} value={n}>{v!.variants[n]?.label ?? n}</option>)}
-              </select>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            {sides.map((n, i) => (
-              <div key={n}>
-                <p className="mb-1 text-xs font-semibold">{blind && !voted ? `Versão ${i + 1}` : name(n)}</p>
-                <video className="aspect-short w-full rounded bg-black" controls preload="metadata" src={src(n)} />
-              </div>
-            ))}
-          </div>
-          {!voted ? (
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button className="btn-quiet px-3 py-1 text-sm" disabled={vote.isPending} onClick={() => vote.mutate("left")}>Versão 1 é melhor</button>
-              <button className="btn-quiet px-3 py-1 text-sm" disabled={vote.isPending} onClick={() => vote.mutate("right")}>Versão 2 é melhor</button>
-              <button className="btn-quiet px-3 py-1 text-sm" disabled={vote.isPending} onClick={() => vote.mutate("equal")}>Tanto faz</button>
-            </div>
-          ) : <p className="mt-2 text-xs text-ok">Registrado. Versão 1 era “{name(sides[0])}”, versão 2 era “{name(sides[1])}”.</p>}
-        </div>
-      )}
-
+      <section className="panel panel-body">
+        <h2 className="display mb-2 text-lg">Gerar variante</h2>
+        <p className="text-sm text-ink-muted">A reedição usa trechos da live e preserva o vídeo principal até você promover uma variante.</p>
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <select className="field w-auto py-1 text-sm" value={key} onChange={(e) => setKey(e.target.value)} aria-label="Estrutura">
           <option value="auto">Estrutura automática</option>
           {["A", "B", "C", "D", "E"].map((k) => <option key={k} value={k}>{k} · {LABEL[k]}</option>)}
         </select>
-        <label className="flex items-center gap-1 text-xs"><input type="checkbox" className="accent-[#F2B33D]" checked={teaser} onChange={(e) => setTeaser(e.target.checked)} />
+        <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={teaser} onChange={(e) => setTeaser(e.target.checked)} />
           prévia do clímax no início (marcada como “Daqui a pouco…”)</label>
-        <button className="btn-take px-3 py-1 text-sm" disabled={restructure.isPending} onClick={() => restructure.mutate()}>Gerar variante</button>
+        <button className="btn-take px-3 py-1 text-sm" disabled={restructure.isPending} onClick={() => restructure.mutate()}>{restructure.isPending ? "Solicitando…" : "Gerar variante"}</button>
         <button className="btn-quiet px-2 py-1 text-xs" onClick={() => props.refetch()}>Ver opções</button>
       </div>
       {props.data && (
@@ -174,11 +189,13 @@ export default function VersionsPanel({ clipId, version, onChanged }: { clipId: 
           ))}
         </ul>
       )}
-      <ErrorNote error={restructure.error || promote.error || vote.error} />
+      <ErrorNote error={q.error || props.error || restructure.error || promote.error || vote.error} />
+      {restructure.isSuccess && <Notice>Renderização da variante solicitada.</Notice>}
       {v.comparisons.length > 0 && (
         <p className="mt-2 text-xs text-ink-muted">Comparações deste corte: {v.comparisons.map((c) =>
           `${LABEL[c.left_structure] ?? c.left_structure} × ${LABEL[c.right_structure] ?? c.right_structure}: ${c.winner === "equal" ? "empate" : (c.winner === "left" ? LABEL[c.left_structure] : LABEL[c.right_structure]) ?? c.winner}${c.blind ? " (cega)" : ""}`).join("; ")}</p>
       )}
+      </section>
     </section>
   );
 }

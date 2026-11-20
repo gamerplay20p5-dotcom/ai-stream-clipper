@@ -1,0 +1,31 @@
+:root {
+  --suite: 23 21 38;
+  --panel: 32 29 51;
+  --raised: 49 40 69;
+  --line: 80 65 104;
+  --outline: 136 116 160;
+  --ink: 255 244 237;
+  --muted: 219 204 226;
+  --faint: 188 173 202;
+  --take: 255 164 207;
+  --take-dim: 66 39 66;
+  --take-ink: 40 20 43;
+  --action: 255 185 146;
+  --action-hover: 255 207 181;
+  --action-ink: 41 24 43;
+  --tally: 255 173 181;
+  --tally-dim: 70 37 53;
+  --ok: 157 231 200;
+  --warning: 255 212 153;
+  --warning-dim: 61 44 49;
+  --processing: 165 225 236;
+  --processing-dim: 31 54 69;
+  --media: 14 14 27;
+  --coastal-art: url("/site/orla-ao-entardecer.webp");
+  --space-section: clamp(1.5rem, 3vw, 2.5rem);
+  --radius-control: 0.35rem;
+  --radius-panel: 0.6rem;
+  --duration-fast: 150ms;
+  --duration-panel: 200ms;
+  --shadow-overlay: 0 12px 36px rgb(0 0 0 / 36%);
+}

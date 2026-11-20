@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { api, type Host, type Infra, type ModelInfo } from "../api";
-import { ErrorNote, Meter, PageHeader } from "../components/ui";
+import { Disclosure, Empty, ErrorNote, Meter, Notice, PageHeader, Skeleton, Status } from "../components/ui";
 import { ago, bytes, jobLabel } from "../lib/format";
 
 type ModelWorker = ModelInfo["workers"][number];
@@ -20,39 +22,52 @@ function modelStateTone(w: ModelWorker): string {
   return w.loaded ? "text-ok" : "text-ink-muted";
 }
 
+function HostMetric({ label, value, percent, warning = false }: {
+  label: string; value: string; percent: number | null; warning?: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-2 gap-y-1">
+      <dt className="text-ink-muted">{label}</dt>
+      <dd className="text-right">{value}</dd>
+      <dd className="col-span-2"><Meter value={percent} max={100} tone={warning ? "tally" : "ink"} label={label} /></dd>
+    </div>
+  );
+}
+
 function HostColumn({ h }: { h: Host }) {
   const m = h.metrics;
   const online = h.workers.filter((w) => w.status === "online");
   const gpuWorker = h.workers.find((w) => w.capabilities?.gpu);
   return (
-    <section className="rounded-lg bg-suite-panel p-4">
-      <div className="flex items-baseline justify-between">
+    <section className="panel">
+      <div className="panel-heading">
         <h2 className="display text-lg">{h.label}</h2>
-        <span className={`text-xs ${online.length ? "text-ok" : "text-ink-faint"}`}>{online.length ? `${online.length} online` : "sem workers"}</span>
+        <Status tone={online.length === 0 ? "warning" : online.length === h.workers.length ? "success" : "warning"}>
+          {online.length ? `${online.length}/${h.workers.length} online` : "Sem workers online"}
+        </Status>
       </div>
+      <div className="panel-body">
       <p className="text-xs text-ink-muted">{h.hostname} {h.ip && `(${h.ip})`}</p>
       <p className="mt-2 text-sm">{h.role}</p>
       {m ? (
-        <dl className="mt-4 space-y-2.5 text-xs">
-          <div><div className="mb-1 flex justify-between"><dt className="text-ink-muted">CPU</dt><dd>{Math.round(m.cpu_pct ?? 0)}%</dd></div><Meter value={m.cpu_pct ?? 0} max={100} tone="ink" /></div>
-          <div><div className="mb-1 flex justify-between"><dt className="text-ink-muted">Memória</dt><dd>{bytes(m.mem_used ?? 0)} de {bytes(m.mem_total ?? 0)}</dd></div><Meter value={m.mem_pct ?? 0} max={100} tone="ink" /></div>
-          <div><div className="mb-1 flex justify-between"><dt className="text-ink-muted">Disco de trabalho</dt><dd>{Math.round(m.disk_pct ?? 0)}%</dd></div><Meter value={m.disk_pct ?? 0} max={100} tone={(m.disk_pct ?? 0) > 85 ? "tally" : "ink"} /></div>
+        <dl className="mt-4 space-y-3 text-xs">
+          <HostMetric label="CPU" value={`${Math.round(m.cpu_pct ?? 0)}%`} percent={m.cpu_pct ?? null} />
+          <HostMetric label="Memória" value={`${bytes(m.mem_used ?? 0)} de ${bytes(m.mem_total ?? 0)}`} percent={m.mem_pct ?? null} />
+          <HostMetric label="Disco de trabalho" value={`${Math.round(m.disk_pct ?? 0)}%`} percent={m.disk_pct ?? null} warning={(m.disk_pct ?? 0) > 85} />
           {h.gpu && (
-            <div>
-              <div className="mb-1 flex justify-between"><dt className="text-ink-muted">GPU {h.gpu}</dt>
-                <dd>{m.gpu_busy_pct !== undefined ? `${m.gpu_freq_mhz} MHz` : gpuWorker ? "detectada" : "não validada"}</dd></div>
-              <Meter value={m.gpu_busy_pct ?? null} max={100} tone="ink" />
-            </div>
+            <HostMetric label={`GPU ${h.gpu}`} value={m.gpu_busy_pct !== undefined ? `${m.gpu_freq_mhz} MHz` : gpuWorker ? "Detectada" : "Não validada"}
+              percent={m.gpu_busy_pct ?? null} />
           )}
         </dl>
       ) : (
         <p className="mt-4 text-sm text-ink-muted">Nenhuma métrica recebida. Os workers desta máquina ainda não foram implantados ou estão desligados.</p>
       )}
       {h.workers.length > 0 && (
-        <ul className="mt-4 space-y-2 border-t border-suite-line pt-3 text-xs">
+        <div className="mt-4"><Disclosure title={h.workers.length + " workers"}>
+          <ul className="space-y-3 text-xs">
           {h.workers.map((w) => (
             <li key={w.id} className="flex justify-between gap-2">
-              <span className="min-w-0">
+              <span className="min-w-0 break-words">
                 <span className={w.status === "online" ? "text-ink" : "text-ink-faint"}>{w.id}</span>
                 <span className="block text-ink-muted">{w.roles.join(", ")}{w.capabilities?.gpu ? ", GPU" : ""}</span>
               </span>
@@ -60,44 +75,56 @@ function HostColumn({ h }: { h: Host }) {
             </li>
           ))}
         </ul>
+        </Disclosure></div>
       )}
+      </div>
     </section>
   );
 }
 
 export default function Infrastructure() {
   const qc = useQueryClient();
+  const { hash } = useLocation();
   const q = useQuery({ queryKey: ["infra"], queryFn: () => api.get<Infra>("/api/infrastructure"), refetchInterval: 5_000 });
   const models = useQuery({ queryKey: ["ai-models"], queryFn: () => api.get<ModelInfo[]>("/api/ai/models"), refetchInterval: 10_000 });
   const retry = useMutation({ mutationFn: (id: number) => api.post(`/api/jobs/${id}/retry`), onSuccess: () => qc.invalidateQueries({ queryKey: ["infra"] }) });
   const d = q.data;
+  const ready = Boolean(d);
+  useEffect(() => {
+    if (ready && hash === "#falhas") document.getElementById("falhas")?.scrollIntoView();
+  }, [ready, hash]);
   const types = ["capture", "audio_analyze", "score", "vision_analyze", "render"];
 
   return (
-    <div className="space-y-10">
-      <PageHeader title="Infraestrutura" />
-      <ErrorNote error={q.error} />
+    <div>
+      <PageHeader title="Infraestrutura" description="Acompanhe a capacidade dos servidores, o estado dos modelos e as falhas do pipeline." />
+      <div className="section-flow">
+      <ErrorNote error={q.error ?? retry.error} />
+      {retry.isSuccess && <Notice>Tarefa devolvida à fila.</Notice>}
+      {q.isLoading && <Skeleton label="Consultando servidores" />}
+      {d && d.hosts.length === 0 && <Empty title="Sem servidores reportados">O uso de recursos aparece após o primeiro sinal de um worker.</Empty>}
       {d && (
         <>
-          <div className="grid gap-4 lg:grid-cols-3">
+          <div className="host-rack">
             {d.hosts.map((h) => <HostColumn key={h.label} h={h} />)}
           </div>
 
-          <div className="grid gap-10 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-            <section>
-              <h2 className="display mb-3 text-lg">Filas</h2>
-              <table className="w-full text-sm">
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(270px,1fr)]">
+            <section className="min-w-0">
+              <h2 className="display mb-3 text-lg">Filas de processamento</h2>
+              <div className="table-scroll" tabIndex={0} role="region" aria-label="Filas por etapa">
+              <table className="w-full min-w-[34rem] text-sm">
                 <thead className="text-left text-xs text-ink-muted">
                   <tr><th className="py-2 font-normal">Etapa</th><th className="font-normal">Na fila</th><th className="font-normal">Rodando</th>
                     <th className="font-normal">Concluídas</th><th className="font-normal">Falhas</th><th className="font-normal">Tempo médio 24 h</th></tr>
                 </thead>
                 <tbody className="divide-y divide-suite-line">
-                  {types.map((t) => {
+                  {[...new Set([...types, ...Object.keys(d.queues)])].map((t) => {
                     const s = d.queues[t] ?? {};
                     const p = d.processing[t];
                     return (
                       <tr key={t}>
-                        <td className="py-2.5">{jobLabel[t]}</td>
+                        <td className="py-2.5">{jobLabel[t] ?? t}</td>
                         <td className={s.queued ? "text-take" : "text-ink-muted"}>{s.queued ?? 0}</td>
                         <td>{s.running ?? 0}</td>
                         <td className="text-ink-muted">{s.done ?? 0}</td>
@@ -108,18 +135,23 @@ export default function Infrastructure() {
                   })}
                 </tbody>
               </table>
+              </div>
             </section>
-            <section>
+            <section className="panel panel-body self-start">
               <h2 className="display mb-3 text-lg">Armazenamento dos cortes</h2>
               <div className="mb-1 flex justify-between text-sm"><span>{bytes(d.storage.used_bytes)} usados</span><span className="text-ink-muted">limite {bytes(d.storage.limit_bytes)}</span></div>
-              <Meter value={d.storage.used_bytes} max={d.storage.limit_bytes || 1} tone={d.storage.used_bytes > 0.85 * d.storage.limit_bytes ? "tally" : "take"} />
+              <Meter value={d.storage.used_bytes} max={d.storage.limit_bytes || 1} label="Uso da cota dos cortes" tone={d.storage.used_bytes > 0.85 * d.storage.limit_bytes ? "tally" : "take"} />
               <p className="mt-2 text-xs text-ink-muted">{bytes(d.storage.disk_free_bytes)} livres no disco do servidor 210.</p>
+              <Link to="/armazenamento" className="mt-3 inline-block text-sm text-take hover:underline">Gerenciar armazenamento</Link>
             </section>
           </div>
 
           <section>
             <h2 className="display mb-3 text-lg">Modelos de IA</h2>
-            <table className="w-full text-sm">
+            <ErrorNote error={models.error} />
+            {models.isLoading && <Skeleton label="Carregando modelos" />}
+            {models.data && <div className="table-scroll" tabIndex={0} role="region" aria-label="Modelos e workers">
+            <table className="w-full min-w-[39rem] text-sm">
               <thead className="text-left text-xs text-ink-muted">
                 <tr><th className="py-2 font-normal">Modelo</th><th className="font-normal">Tamanho</th><th className="font-normal">Onde</th>
                   <th className="font-normal">Estado</th><th className="font-normal">Latência média</th><th className="font-normal">Chamadas / falhas</th></tr>
@@ -145,20 +177,21 @@ export default function Infrastructure() {
                 ))}
               </tbody>
             </table>
+            </div>}
             <p className="mt-2 text-xs text-ink-faint">Cada GPU Arc A750 tem cerca de 8 GB e carrega um modelo pesado por vez. Sem modelo disponível, os cortes seguem com áudio e visão heurística.</p>
           </section>
 
-          <section>
+          <section id="falhas" className="scroll-mt-20">
             <h2 className="display mb-3 text-lg">Falhas definitivas</h2>
             {d.failures.length === 0 ? (
               <p className="text-sm text-ink-muted">Nenhuma tarefa falhou depois de todas as tentativas.</p>
             ) : (
-              <ul className="divide-y divide-suite-line border-y border-suite-line">
+              <ul className="panel divide-y divide-suite-line">
                 {d.failures.map((j) => (
-                  <li key={j.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
+                  <li key={j.id} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
                     <div className="min-w-0 flex-1">
                       <div className="text-sm">{jobLabel[j.type] ?? j.type} #{j.id}, {j.attempts} tentativa(s), {ago(j.finished_at)}</div>
-                      <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-xs text-ink-muted">{j.last_error}</pre>
+                      <details className="mt-2 text-xs text-ink-muted"><summary>Mensagem do worker</summary><pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-md bg-suite-media p-3">{j.last_error}</pre></details>
                     </div>
                     <button className="btn-quiet" disabled={retry.isPending} onClick={() => retry.mutate(j.id)}>Tentar de novo</button>
                   </li>
@@ -168,6 +201,7 @@ export default function Infrastructure() {
           </section>
         </>
       )}
+      </div>
     </div>
   );
 }

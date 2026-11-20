@@ -31,7 +31,7 @@ function fromLine(l: Line): W[] {
   return tokens.map((t, i) => ({ start: +(l.start + i * span).toFixed(3), end: +(l.start + (i + 1) * span).toFixed(3), text: t, speaker: l.speaker }));
 }
 
-export default function CaptionEditor({ clipId, onSaved }: { clipId: number; onSaved: () => void }) {
+export default function CaptionEditor({ clipId, videoVersion, onSaved }: { clipId: number; videoVersion: number; onSaved: () => void }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["captions", clipId], queryFn: () => api.get<Caps>(`/api/clips/${clipId}/captions`) });
   const [lines, setLines] = useState<Line[] | null>(null);
@@ -43,7 +43,7 @@ export default function CaptionEditor({ clipId, onSaved }: { clipId: number; onS
     const on = () => setNow(v.currentTime);
     v.addEventListener("timeupdate", on);
     return () => v.removeEventListener("timeupdate", on);
-  }, [q.data]);
+  }, [q.data, videoVersion]);
   const done = () => { qc.invalidateQueries({ queryKey: ["captions", clipId] }); onSaved(); };
   const save = useMutation({ mutationFn: (words: W[]) => api.put(`/api/clips/${clipId}/captions`, { words, rerender: true }), onSuccess: done });
   const reset = useMutation({ mutationFn: () => api.del(`/api/clips/${clipId}/captions`), onSuccess: done });
@@ -72,13 +72,13 @@ export default function CaptionEditor({ clipId, onSaved }: { clipId: number; onS
       {!lines.length && <p className="text-sm text-ink-muted">Sem fala neste corte.</p>}
       <ol className="max-h-80 space-y-1.5 overflow-y-auto pr-1">
         {lines.map((l, i) => (
-          <li key={i} className={`grid grid-cols-[3rem_1fr_9rem] items-center gap-2 rounded px-1 ${live === l ? "bg-take-dim" : ""}`}>
+          <li key={i} className={`grid grid-cols-[3rem_minmax(0,1fr)] sm:grid-cols-[3rem_minmax(0,1fr)_7rem] items-center gap-2 rounded px-1 ${live === l ? "bg-take-dim" : ""}`}>
             <button type="button" className="text-left text-xs text-ink-muted hover:text-ink" onClick={() => seek(l.start)} title="Ir para este trecho">
               {Math.max(0, l.start - c.start).toFixed(1)}s
             </button>
             <input className="field py-1 text-sm" value={l.text} aria-label={`Legenda ${i + 1}`}
               onChange={(e) => setLines(lines.map((x, k) => (k === i ? { ...x, text: e.target.value } : x)))} />
-            <select className="field py-1 text-xs" value={l.speaker || "unknown"} aria-label={`Locutor ${i + 1}`}
+            <select className="field col-start-2 py-1 text-xs sm:col-start-auto" value={l.speaker || "unknown"} aria-label={`Locutor ${i + 1}`}
               onChange={(e) => setLines(lines.map((x, k) => (k === i ? { ...x, speaker: e.target.value } : x)))}>
               {speakers.map((s) => <option key={s} value={s}>{speakerName(s)}</option>)}
             </select>

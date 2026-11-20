@@ -6,7 +6,7 @@ import { api } from "../api";
 import type { Pub, PubAccount } from "../pages/Publishing";
 import { pubStatus } from "../pages/Publishing";
 import PrivacyPicker, { initialPrivacy, privacyLabel } from "./PrivacyPicker";
-import { ErrorNote } from "./ui";
+import { Empty, ErrorNote, Notice, Skeleton } from "./ui";
 
 type Check = { problems: string[]; rights_on_file: boolean; privacy_options: string[];
   suggested: { title: string; description: string; tags: string[]; credit: string } };
@@ -14,7 +14,7 @@ type Check = { problems: string[]; rights_on_file: boolean; privacy_options: str
 export default function PublishPanel({ clipId, isTest }: { clipId: number; isTest: boolean }) {
   const qc = useQueryClient();
   const ov = useQuery({ queryKey: ["publish-overview"], queryFn: () => api.get<{ accounts: PubAccount[] }>("/api/publish/overview") });
-  const pubs = useQuery({ queryKey: ["publications"], queryFn: () => api.get<Pub[]>("/api/publish/publications?days=365") });
+  const pubs = useQuery({ queryKey: ["publications", 365], queryFn: () => api.get<Pub[]>("/api/publish/publications?days=365") });
   const accounts = (ov.data?.accounts ?? []).filter((a) => a.status === "connected");
   const [accountId, setAccountId] = useState<number | null>(null);
   const acct = accounts.find((a) => a.id === accountId) ?? null;
@@ -48,12 +48,9 @@ export default function PublishPanel({ clipId, isTest }: { clipId: number; isTes
       clip_id: clipId, account_id: accountId, title, description, privacy, rights_confirmed: rights,
       tags: tags.split(/[,\s]+/).filter(Boolean), scheduled_at: at ? new Date(at).toISOString() : null,
     }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["publications"] }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["publications"] }); qc.invalidateQueries({ queryKey: ["calendar"] }); },
   });
   const mine = (pubs.data ?? []).filter((p) => p.clip_id === clipId);
-  if (accounts.length === 0) {
-    return <p className="mt-3 text-xs text-ink-faint">Para publicar, conecte uma conta em <Link className="text-take underline" to="/publicacao">Publicação</Link>.</p>;
-  }
   const problems = check.data?.problems ?? [];
   const rightsProblem = problems.find((p) => p.startsWith("confirme"));
   // privacy problems disappear once a valid choice is made; until then the picker says what to do
@@ -63,28 +60,35 @@ export default function PublishPanel({ clipId, isTest }: { clipId: number; isTes
   if (!title) missing.push("preencha o título");
   if (check.data && !check.data.rights_on_file && !rights) missing.push("confirme o direito de republicar");
   return (
-    <details className="mt-3 rounded-lg border border-suite-line p-3 text-sm">
-      <summary className="cursor-pointer font-medium">Publicar nas redes</summary>
+    <section className="space-y-4" aria-label="Publicar nas redes">
+      <h2 className="display text-lg">Publicar nas redes</h2>
+      <ErrorNote error={ov.error ?? pubs.error} />
+      {ov.isLoading && <Skeleton label="Carregando contas disponíveis" />}
+      {ov.data && accounts.length === 0 && (
+        <Empty title="Nenhuma conta disponível"><Link className="text-take hover:underline" to="/publicacao?aba=contas">Gerenciar contas conectadas</Link></Empty>
+      )}
       {mine.length > 0 && (
-        <ul className="mt-2 space-y-1 text-xs">
+        <ul className="divide-y divide-suite-line rounded-md border border-suite-line px-3 text-sm" aria-label="Envios deste corte">
           {mine.map((p) => (
-            <li key={p.id}>{accounts.find((a) => a.id === p.account_id)?.platform_name ?? p.platform}: <span className={pubStatus[p.status]?.[1]}>{pubStatus[p.status]?.[0] ?? p.status}</span>
+            <li key={p.id} className="break-words py-2">{accounts.find((a) => a.id === p.account_id)?.platform_name ?? p.platform}: <span className={pubStatus[p.status]?.[1]}>{pubStatus[p.status]?.[0] ?? p.status}</span>
               {p.remote_url && <> · <a className="text-take underline" href={p.remote_url} target="_blank" rel="noreferrer">abrir</a></>}
-              {p.last_error && <span className="block text-[#ffb4b6]">{p.last_error}</span>}</li>
+              {p.last_error && <span className="block text-tally">{p.last_error}</span>}</li>
           ))}
         </ul>
       )}
-      <div className="mt-3 space-y-2">
-        <select className="field" value={accountId ?? ""} onChange={(e) => setAccountId(e.target.value ? Number(e.target.value) : null)}>
+      {accounts.length > 0 && <div className="space-y-3">
+        <label className="label" htmlFor="clip-publication-account">Conta de destino</label>
+        <select id="clip-publication-account" className="field" value={accountId ?? ""} onChange={(e) => setAccountId(e.target.value ? Number(e.target.value) : null)}>
           <option value="">Escolha a conta…</option>
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.platform_name} — {a.name}</option>)}
         </select>
         {acct && <ErrorNote error={check.error} />}
+        {acct && check.isLoading && <Skeleton label="Verificando os requisitos de envio" />}
         {acct && check.data && (
           <>
             {isTest && <p className="text-xs text-take">Corte de TESTE MANUAL: só publicação manual, nunca automática.</p>}
             {blocking.length > 0 && (
-              <div className="rounded-md border border-[#ffb4b6]/40 p-2 text-xs text-[#ffb4b6]">
+              <div className="rounded-md border border-tally/40 p-2 text-xs text-tally">
                 <p className="font-semibold">Não é possível publicar enquanto:</p>
                 <ul className="list-inside list-disc">{blocking.map((p, i) => <li key={i}>{p}</li>)}</ul>
               </div>
@@ -101,7 +105,7 @@ export default function PublishPanel({ clipId, isTest }: { clipId: number; isTes
                 Confirmo que tenho direito de republicar este conteúdo do streamer.</label>
             )}
             <ErrorNote error={submit.error} />
-            {submit.data && <p className="text-xs text-ok">Publicação #{submit.data.id} criada ({pubStatus[submit.data.status]?.[0]}). Acompanhe em <Link className="underline" to="/publicacao">Publicação</Link>.</p>}
+            {submit.data && <Notice>Publicação #{submit.data.id} criada ({pubStatus[submit.data.status]?.[0]}). <Link className="underline" to="/publicacao">Acompanhar envio</Link></Notice>}
             {missing.length > 0 && blocking.length === 0 && <p className="text-xs text-ink-muted">Falta: {missing.join(", ")}.</p>}
             <button className="btn-take w-full" disabled={submit.isPending || blocking.length > 0 || missing.length > 0} onClick={() => submit.mutate()}
               data-privacy={privacy}>
@@ -109,7 +113,7 @@ export default function PublishPanel({ clipId, isTest }: { clipId: number; isTes
             </button>
           </>
         )}
-      </div>
-    </details>
+      </div>}
+    </section>
   );
 }

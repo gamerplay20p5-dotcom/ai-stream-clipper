@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ExternalLink, Star, Upload } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { api, upload } from "../api";
-import { ErrorNote, PageHeader } from "../components/ui";
+import { ConfirmAction, Disclosure, Empty, ErrorNote, Notice, PageHeader, Skeleton, Status } from "../components/ui";
 
 type Item = { id: number; platform: string; kind: string; url: string; handle: string; title: string; category: string;
   games: string[]; humor: string[]; formats: string[]; tags: string[]; why: string; notes: string; favorite: boolean;
@@ -20,31 +22,46 @@ type Profile = { id: number; name: string; item_id: number | null; status: strin
   params: Params; has_image: boolean; has_avatar: boolean; analysis: { vlm?: Record<string, string>; vlm_error?: string };
   measured: { split?: number | null; caption?: { center: number } | null; badge?: string | null; faces?: unknown[] } };
 
-const TABS = [["refs", "Referências"], ["cols", "Coleções"], ["formats", "Formatos"], ["caps", "O que as APIs permitem"]] as const;
+const TABS = [["refs", "Biblioteca"], ["cols", "Coleções"], ["formats", "Perfis de formato"], ["caps", "Capacidades das APIs"]] as const;
 const list = (s: string) => s.split(/[,;]+/).map((x) => x.trim()).filter(Boolean);
-const STATUS: Record<string, string> = { comprovado: "text-ok", parcial: "text-take", indisponível: "text-tally", proibido: "text-tally" };
+const capabilityTone = { comprovado: "success", parcial: "warning", indisponível: "danger", proibido: "danger" } as const;
+const formatStatus = {
+  draft: ["Aguardando print", "neutral"],
+  queued: ["Analisando", "processing"],
+  ready: ["Pronto", "success"],
+  failed: ["Falhou", "danger"],
+} as const;
 
 export default function References() {
   const [tab, setTab] = useState<(typeof TABS)[number][0]>("refs");
   return (
-    <div className="max-w-5xl pb-16">
-      <PageHeader title="Viral Intelligence · Referências" />
-      <p className="-mt-3 mb-4 max-w-3xl text-sm text-ink-muted">
-        Canais, perfis e prints que inspiram nossos cortes. Só fontes legítimas: APIs com a autorização que já temos,
-        e o que você cadastra ou envia. Nenhum vídeo de terceiros é baixado; dos prints, a IA extrai só parâmetros
-        abstratos (posições, tamanhos, cores), nunca logotipos, textos ou artes.
-      </p>
-      <div className="mb-5 flex gap-1 border-b border-suite-line" role="tablist">
-        {TABS.map(([k, label]) => (
-          <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === k ? "border-take text-ink" : "border-transparent text-ink-muted hover:text-ink"}`}>{label}</button>
+    <div>
+      <PageHeader title="Laboratório de referências" description="Organize referências editoriais, extraia parâmetros visuais de prints e teste formatos em cortes próprios." />
+      <nav className="view-switch mb-5" aria-label="Áreas do laboratório">
+        {TABS.map(([key, label]) => (
+          <button key={key} type="button" className="view-switch-item" aria-pressed={tab === key}
+            onClick={() => setTab(key)}>{label}</button>
         ))}
-      </div>
+      </nav>
       {tab === "refs" && <Refs />}
       {tab === "cols" && <Collections />}
       {tab === "formats" && <Formats />}
       {tab === "caps" && <Capabilities />}
     </div>
+  );
+}
+
+function ImageInput({ label, disabled, onSelect }: { label: string; disabled?: boolean; onSelect: (file: File) => void }) {
+  return (
+    <label className="btn-quiet relative cursor-pointer focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-take">
+      <Upload size={15} aria-hidden />{label}
+      <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" disabled={disabled}
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          if (file) onSelect(file);
+          event.currentTarget.value = "";
+        }} />
+    </label>
   );
 }
 
@@ -75,41 +92,63 @@ function Refs() {
   });
   return (
     <div className="space-y-5">
-      <form className="grid gap-2 rounded-lg border border-suite-line p-3 md:grid-cols-3" onSubmit={(e) => { e.preventDefault(); add.mutate(); }}>
-        <input className="field md:col-span-2" placeholder="Link do canal, vídeo, Short, perfil ou Reel (ou deixe vazio e use um título + print)"
-          value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} />
-        <input className="field" placeholder="Título (opcional)" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} />
-        <input className="field" placeholder="Categoria" value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })} />
-        <input className="field" placeholder="Jogos (vírgula)" value={f.games} onChange={(e) => setF({ ...f, games: e.target.value })} />
-        <input className="field" placeholder="Tipo de humor (vírgula)" value={f.humor} onChange={(e) => setF({ ...f, humor: e.target.value })} />
-        <input className="field" placeholder="Formato (ex.: gancho imediato, webcam em cima)" value={f.formats} onChange={(e) => setF({ ...f, formats: e.target.value })} />
-        <input className="field" placeholder="Tags: perseguição, reação, suspense…" value={f.tags} onChange={(e) => setF({ ...f, tags: e.target.value })} />
-        <input className="field" placeholder="Por que esta referência é interessante?" value={f.why} onChange={(e) => setF({ ...f, why: e.target.value })} />
-        <button className="btn-take md:col-span-3" disabled={add.isPending}>Adicionar referência</button>
-        <div className="md:col-span-3"><ErrorNote error={add.error} /></div>
-      </form>
-      <div className="flex flex-wrap gap-2 text-sm">
-        <select className="field w-auto" value={filter.platform} onChange={(e) => setFilter({ ...filter, platform: e.target.value })}>
-          <option value="">Todas as plataformas</option><option value="youtube">YouTube</option><option value="instagram">Instagram</option><option value="other">Por imagem</option>
-        </select>
-        <select className="field w-auto" value={filter.collection} onChange={(e) => setFilter({ ...filter, collection: e.target.value })}>
-          <option value="">Todas as coleções</option>{(cols.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <input className="field w-auto" placeholder="Buscar" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} />
-      </div>
-      <ErrorNote error={items.error || refresh.error || patch.error || del.error || img.error || member.error} />
+      <Disclosure title="Adicionar referência">
+        <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" onSubmit={(event) => { event.preventDefault(); add.mutate(); }}>
+          {([
+            ["url", "Endereço de origem", "Link do canal, perfil ou vídeo"],
+            ["title", "Título", "Obrigatório para referências sem link"],
+            ["category", "Categoria", ""],
+            ["games", "Jogos", "Separe por vírgulas"],
+            ["humor", "Tipo de humor", "Separe por vírgulas"],
+            ["formats", "Formato", "Ex.: gancho imediato, webcam em cima"],
+            ["tags", "Tags", "Separe por vírgulas"],
+            ["why", "Por que é relevante?", ""],
+          ] as const).map(([key, label, placeholder]) => (
+            <label key={key} className="min-w-0">
+              <span className="label">{label}</span>
+              <input className="field" placeholder={placeholder} value={f[key]} onChange={(e) => setF({ ...f, [key]: e.target.value })} />
+            </label>
+          ))}
+          <div className="flex flex-wrap items-center gap-3 sm:col-span-2 xl:col-span-3">
+            <button className="btn-take" disabled={add.isPending || (!f.url.trim() && !f.title.trim())}>
+              {add.isPending ? "Adicionando…" : "Adicionar referência"}
+            </button>
+            <p className="text-sm text-ink-muted">Você pode enviar um print após cadastrar a referência.</p>
+          </div>
+          <div className="sm:col-span-2 xl:col-span-3"><ErrorNote error={add.error} /></div>
+        </form>
+      </Disclosure>
+      {add.isSuccess && <Notice>Referência cadastrada.</Notice>}
+      <section className="library-filters" aria-labelledby="reference-filters">
+        <div><h2 id="reference-filters" className="display text-lg">Buscar na biblioteca</h2></div>
+        <div className="flex flex-wrap gap-2">
+          <input className="field w-auto grow" type="search" aria-label="Buscar referências" placeholder="Buscar por termo" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} />
+          <select className="field w-auto" aria-label="Filtrar plataforma" value={filter.platform} onChange={(e) => setFilter({ ...filter, platform: e.target.value })}>
+            <option value="">Todas as plataformas</option><option value="youtube">YouTube</option><option value="instagram">Instagram</option><option value="other">Por imagem</option>
+          </select>
+          <select className="field w-auto" aria-label="Filtrar coleção" value={filter.collection} onChange={(e) => setFilter({ ...filter, collection: e.target.value })}>
+            <option value="">Todas as coleções</option>{(cols.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+      </section>
+      {items.isLoading && <Skeleton label="Carregando referências" />}
+      {items.data?.length === 0 && <Empty title="Nenhuma referência encontrada">Ajuste os filtros ou adicione uma referência à biblioteca.</Empty>}
+      <ErrorNote error={items.error || cols.error || refresh.error || patch.error || del.error || img.error || member.error} />
       <ul className="grid gap-3 md:grid-cols-2">
         {(items.data ?? []).map((it) => (
-          <li key={it.id} className="rounded-lg border border-suite-line p-3 text-sm">
+          <li key={it.id} className="panel panel-body text-sm">
             <div className="flex items-start gap-3">
-              {it.has_image && <img src={`/api/refs/items/${it.id}/image`} alt="" className="h-20 w-12 rounded object-cover" />}
+              {it.has_image && <img src={`/api/refs/items/${it.id}/image`} alt="" className="reference-still" />}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-2">
-                  <b className="truncate">{it.title || it.handle || it.url || `Referência #${it.id}`}</b>
-                  <button className="text-take" title="Favorito" onClick={() => patch.mutate({ id: it.id, b: { favorite: !it.favorite } })}>{it.favorite ? "★" : "☆"}</button>
+                  <h3 className="display min-w-0 break-words text-lg">{it.title || it.handle || it.url || "Referência sem título"}</h3>
+                  <button type="button" className="icon-action" aria-label="Favorito" aria-pressed={it.favorite} disabled={patch.isPending}
+                    onClick={() => patch.mutate({ id: it.id, b: { favorite: !it.favorite } })}>
+                    <Star size={16} className={it.favorite ? "fill-take text-take" : ""} aria-hidden />
+                  </button>
                 </div>
-                <p className="text-xs text-ink-muted">{it.platform} · {it.kind}{it.category ? ` · ${it.category}` : ""}{it.url && <> · <a className="underline" href={it.url} target="_blank" rel="noreferrer">abrir</a></>}</p>
-                {it.why && <p className="mt-1 text-xs">{it.why}</p>}
+                <p className="text-xs text-ink-muted">{it.platform} · {it.kind}{it.category ? ` · ${it.category}` : ""}{it.url && <> · <a className="inline-flex items-center gap-1 text-take hover:underline" href={it.url} target="_blank" rel="noreferrer">Abrir fonte <ExternalLink size={12} aria-hidden /></a></>}</p>
+                {it.why && <p className="mt-2 text-sm">{it.why}</p>}
                 <p className="mt-1 text-[11px] text-ink-faint">{[...it.games, ...it.humor, ...it.formats, ...it.tags].join(" · ")}</p>
                 {Object.keys(it.api_data).length > 0 && (
                   <p className="mt-1 text-[11px] text-ink-muted">
@@ -120,16 +159,15 @@ function Refs() {
                 <div className="mt-2 flex flex-wrap gap-2 text-xs">
                   {it.platform === "youtube" && <button className="btn-quiet px-2 py-1" disabled={refresh.isPending} onClick={() => refresh.mutate(it.id)}>Consultar API</button>}
                   {it.platform === "instagram" && <span className="text-ink-faint">Instagram: cadastro manual (a API não permite consultar outras contas)</span>}
-                  <label className="btn-quiet cursor-pointer px-2 py-1">Enviar print
-                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
-                      onChange={(e) => e.target.files?.[0] && img.mutate({ id: it.id, file: e.target.files[0] })} /></label>
-                  <button className="btn-quiet px-2 py-1" onClick={() => window.confirm("Remover esta referência (só do laboratório)?") && del.mutate(it.id)}>Remover</button>
+                  <ImageInput label="Enviar print" disabled={img.isPending} onSelect={(file) => img.mutate({ id: it.id, file })} />
+                  <ConfirmAction title="Remover esta referência?" description="A referência e o print associado serão removidos do laboratório."
+                    confirmLabel="Remover referência" pending={del.isPending} onConfirm={() => del.mutate(it.id)}>Remover</ConfirmAction>
                 </div>
                 {(cols.data ?? []).length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
                     {(cols.data ?? []).map((c) => (
                       <label key={c.id} className="flex items-center gap-1">
-                        <input type="checkbox" className="accent-[#F2B33D]" checked={it.collections.includes(c.id)}
+                        <input type="checkbox" checked={it.collections.includes(c.id)} disabled={member.isPending}
                           onChange={(e) => member.mutate({ cid: c.id, id: it.id, on: e.target.checked })} />{c.name}</label>
                     ))}
                   </div>
@@ -150,21 +188,24 @@ function Collections() {
   const add = useMutation({ mutationFn: () => api.post("/api/refs/collections", { name }), onSuccess: () => { setName(""); qc.invalidateQueries({ queryKey: ["ref-cols"] }); } });
   const del = useMutation({ mutationFn: (id: number) => api.del(`/api/refs/collections/${id}`), onSuccess: () => qc.invalidateQueries({ queryKey: ["ref-cols"] }) });
   return (
-    <div className="max-w-xl space-y-3">
-      <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (name.trim()) add.mutate(); }}>
-        <input className="field" placeholder="Nova coleção (ex.: Perseguições com bom gancho)" value={name} onChange={(e) => setName(e.target.value)} />
-        <button className="btn-take" disabled={add.isPending}>Criar</button>
+    <div className="max-w-4xl space-y-4">
+      <form className="panel panel-body flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); if (name.trim()) add.mutate(); }}>
+        <input className="field w-auto grow" aria-label="Nome da coleção" required placeholder="Nome da coleção" value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="btn-take" disabled={add.isPending || !name.trim()}>{add.isPending ? "Criando…" : "Criar coleção"}</button>
       </form>
-      <ErrorNote error={add.error || del.error} />
-      <ul className="divide-y divide-suite-line rounded-md border border-suite-line text-sm">
+      <ErrorNote error={cols.error || add.error || del.error} />
+      {add.isSuccess && <Notice>Coleção criada.</Notice>}
+      {cols.isLoading && <Skeleton label="Carregando coleções" />}
+      {cols.data?.length === 0 && <Empty title="Nenhuma coleção criada">Crie uma coleção e associe referências na biblioteca.</Empty>}
+      {!!cols.data?.length && <ul className="panel divide-y divide-suite-line text-sm">
         {(cols.data ?? []).map((c) => (
-          <li key={c.id} className="flex items-center justify-between px-3 py-2">
-            <span>{c.name} <span className="text-xs text-ink-muted">· {c.items} referência(s)</span></span>
-            <button className="btn-quiet px-2 py-1 text-xs" onClick={() => window.confirm("Apagar a coleção? As referências continuam.") && del.mutate(c.id)}>Apagar</button>
+          <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+            <div className="min-w-0"><h2 className="break-words font-semibold">{c.name}</h2><p className="text-xs text-ink-muted">{c.items} referência(s)</p></div>
+            <ConfirmAction title="Excluir esta coleção?" description="As referências continuam disponíveis na biblioteca."
+              confirmLabel="Excluir coleção" pending={del.isPending} onConfirm={() => del.mutate(c.id)}>Excluir</ConfirmAction>
           </li>
         ))}
-        {!cols.data?.length && <li className="px-3 py-2 text-ink-muted">Nenhuma coleção. Crie uma e marque as referências na aba Referências.</li>}
-      </ul>
+      </ul>}
     </div>
   );
 }
@@ -178,118 +219,165 @@ function Formats() {
   const add = useMutation({ mutationFn: () => api.post("/api/refs/formats", { name }), onSuccess: () => { setName(""); done(); } });
   return (
     <div className="space-y-4">
-      <form className="flex max-w-xl gap-2" onSubmit={(e) => { e.preventDefault(); if (name.trim()) add.mutate(); }}>
-        <input className="field" placeholder="Nome do perfil de formato" value={name} onChange={(e) => setName(e.target.value)} />
-        <button className="btn-take" disabled={add.isPending}>Criar perfil</button>
+      <form className="panel panel-body flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); if (name.trim()) add.mutate(); }}>
+        <input className="field w-auto grow" aria-label="Nome do perfil de formato" required placeholder="Nome do perfil de formato" value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="btn-take" disabled={add.isPending || !name.trim()}>{add.isPending ? "Criando…" : "Criar perfil"}</button>
       </form>
       <p className="text-xs text-ink-muted">Envie um print de um vídeo vertical: a IA mede a organização (divisão da tela, webcam, legenda, cores, selo) e cria parâmetros que você pode ajustar e testar num corte nosso. O selo usa a <b>nossa</b> foto e o <b>nosso</b> nome.</p>
       <ErrorNote error={add.error || q.error} />
+      {q.isLoading && <Skeleton label="Carregando perfis de formato" />}
+      {q.data?.length === 0 && <Empty title="Nenhum perfil criado">Crie um perfil para extrair o enquadramento e a hierarquia visual de um print autorizado.</Empty>}
       {(q.data ?? []).map((p) => <FormatCard key={p.id} p={p} onChange={done} />)}
     </div>
   );
 }
 
 function FormatCard({ p, onChange }: { p: Profile; onChange: () => void }) {
-  const [params, setParams] = useState<Params>(p.params);
+  const [draft, setDraft] = useState<Params | null>(null);
+  const params = draft ?? p.params;
   const [clip, setClip] = useState("");
-  const [msg, setMsg] = useState("");
-  const shot = useMutation({ mutationFn: (f: File) => upload(`/api/refs/formats/${p.id}/image`, f), onSuccess: onChange });
+  const [previewClip, setPreviewClip] = useState<number | null>(null);
+  const shot = useMutation({ mutationFn: (f: File) => upload(`/api/refs/formats/${p.id}/image`, f), onSuccess: () => { setDraft(null); onChange(); } });
   const avatar = useMutation({ mutationFn: (f: File) => upload(`/api/refs/formats/${p.id}/avatar`, f), onSuccess: onChange });
-  const save = useMutation({ mutationFn: () => api.put(`/api/refs/formats/${p.id}`, { params }), onSuccess: onChange });
+  const save = useMutation({ mutationFn: () => api.put(`/api/refs/formats/${p.id}`, { params }), onSuccess: () => { setDraft(null); onChange(); } });
   const fav = useMutation({ mutationFn: () => api.put(`/api/refs/formats/${p.id}`, { favorite: !p.favorite }), onSuccess: onChange });
   const del = useMutation({ mutationFn: () => api.del(`/api/refs/formats/${p.id}`), onSuccess: onChange });
   const preview = useMutation({
-    mutationFn: () => api.post<{ label: string; badge: boolean }>(`/api/refs/formats/${p.id}/preview`, { clip_id: Number(clip) }),
-    onSuccess: (d) => setMsg(`Variante "${d.label}" em renderização no corte #${clip}${d.badge ? "" : " (sem selo: envie a nossa foto de perfil)"}. Compare em Cortes → Versões.`),
+    mutationFn: (clipId: number) => api.post<{ label: string; badge: boolean }>(`/api/refs/formats/${p.id}/preview`, { clip_id: clipId }),
+    onSuccess: (_result, clipId) => setPreviewClip(clipId),
   });
   const src = p.params.sources ?? {};
   const s = (k: string) => (src[k] ? <span className="text-[10px] text-ink-faint"> ({src[k]})</span> : null);
-  const set = <K extends keyof Params>(k: K, v: Params[K]) => setParams({ ...params, [k]: v });
+  const set = <K extends keyof Params>(k: K, v: Params[K]) => setDraft({ ...params, [k]: v });
+  const [status, tone] = formatStatus[p.status as keyof typeof formatStatus] ?? [p.status, "neutral"];
   return (
-    <div className="rounded-lg border border-suite-line p-3 text-sm">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <b>{p.name}</b>
-        <span className="text-xs text-ink-muted">{{ draft: "sem análise", queued: "analisando…", ready: "pronto", failed: "falhou" }[p.status] ?? p.status}</span>
-        {p.error && <span className="text-xs text-tally">{p.error}</span>}
-        <button className="ml-auto text-take" onClick={() => fav.mutate()}>{p.favorite ? "★ favorito" : "☆"}</button>
-        <button className="btn-quiet px-2 py-1 text-xs" onClick={() => window.confirm("Apagar este perfil e o print enviado?") && del.mutate()}>Apagar</button>
-      </div>
-      <div className="grid gap-3 md:grid-cols-[120px_1fr]">
-        <div className="space-y-2 text-xs">
-          {p.has_image ? <img src={`/api/refs/formats/${p.id}/image?u=${p.status}`} alt="print enviado" className="w-full rounded" /> : <div className="flex aspect-[9/16] items-center justify-center rounded bg-suite-panel text-ink-faint">sem print</div>}
-          <label className="btn-quiet block cursor-pointer px-2 py-1 text-center">Enviar print
-            <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => e.target.files?.[0] && shot.mutate(e.target.files[0])} /></label>
-          <label className="btn-quiet block cursor-pointer px-2 py-1 text-center">{p.has_avatar ? "Trocar nossa foto" : "Nossa foto de perfil"}
-            <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => e.target.files?.[0] && avatar.mutate(e.target.files[0])} /></label>
+    <article className="panel">
+      <header className="panel-heading">
+        <div className="min-w-0">
+          <h2 className="display break-words text-lg">{p.name}</h2>
+          <Status tone={tone}>{status}</Status>
         </div>
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button className="icon-action" aria-label="Favorito" aria-pressed={p.favorite} disabled={fav.isPending} onClick={() => fav.mutate()}>
+            <Star size={16} className={p.favorite ? "fill-take text-take" : ""} aria-hidden />
+          </button>
+          <ConfirmAction title="Excluir este perfil?" description="O perfil de formato e o print enviado serão removidos."
+            confirmLabel="Excluir perfil" pending={del.isPending} onConfirm={() => del.mutate()}>Excluir</ConfirmAction>
+        </div>
+      </header>
+      <div className="panel-body space-y-4">
+        <ErrorNote error={p.error} />
+        <div className="grid grid-cols-1 items-start gap-5 md:grid-cols-[minmax(150px,0.55fr)_minmax(0,1.45fr)]">
+          <section className="space-y-2" aria-label="Imagem de referência">
+            <div className="media-stage min-h-28">
+              {p.has_image ? <img src={`/api/refs/formats/${p.id}/image?u=${p.status}`} alt="Print enviado para análise" className="max-h-80 w-full object-contain" />
+                : <p className="px-3 py-4 text-sm text-ink-muted">Aguardando print vertical</p>}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <ImageInput label="Enviar print" disabled={shot.isPending} onSelect={(file) => shot.mutate(file)} />
+              <ImageInput label={p.has_avatar ? "Trocar foto do canal" : "Enviar foto do canal"} disabled={avatar.isPending} onSelect={(file) => avatar.mutate(file)} />
+            </div>
+          </section>
+          <section className="grid min-w-0 gap-3 sm:grid-cols-2" aria-label="Parâmetros do formato">
+            <h3 className="text-sm font-semibold sm:col-span-2">Parâmetros do formato</h3>
           <label className="text-xs">Organização{s("layout")}
             <select className="field" value={params.layout} onChange={(e) => set("layout", e.target.value as Params["layout"])}>
               <option value="gameplay">Gameplay inteira</option><option value="split">Webcam + gameplay</option><option value="action">Recorte que acompanha a ação</option>
             </select></label>
           {params.layout === "split" && (
-            <label className="text-xs">Webcam{s("webcam.position")}
+            <div className="text-xs">Webcam{s("webcam.position")}
               <div className="flex gap-2">
-                <select className="field" value={params.webcam.position} onChange={(e) => set("webcam", { ...params.webcam, position: e.target.value as "top" | "bottom" })}>
+                <select className="field" aria-label="Posição da webcam" value={params.webcam.position} onChange={(e) => set("webcam", { ...params.webcam, position: e.target.value as "top" | "bottom" })}>
                   <option value="top">em cima</option><option value="bottom">embaixo</option></select>
-                <input type="number" min={20} max={60} className="field w-20" value={params.webcam.height_pct}
+                <input type="number" min={20} max={60} className="field w-20" aria-label="Altura da webcam em porcentagem" value={params.webcam.height_pct}
                   onChange={(e) => set("webcam", { ...params.webcam, height_pct: Number(e.target.value) })} />%
-              </div></label>
+              </div></div>
           )}
-          <label className="text-xs">Legenda{s("captions.position")}
+          <div className="text-xs">Legenda{s("captions.position")}
             <div className="flex gap-2">
-              <select className="field" value={params.captions.position} onChange={(e) => set("captions", { ...params.captions, position: e.target.value as Params["captions"]["position"] })}>
+              <select className="field" aria-label="Posição da legenda" value={params.captions.position} onChange={(e) => set("captions", { ...params.captions, position: e.target.value as Params["captions"]["position"] })}>
                 <option value="high">alta</option><option value="middle">meio</option><option value="low">baixa</option></select>
-              <select className="field" value={params.captions.style} onChange={(e) => set("captions", { ...params.captions, style: e.target.value as Params["captions"]["style"] })}>
+              <select className="field" aria-label="Estilo da legenda" value={params.captions.style} onChange={(e) => set("captions", { ...params.captions, style: e.target.value as Params["captions"]["style"] })}>
                 <option value="bold">destaque</option><option value="boxed">com fundo</option><option value="clean">limpa</option><option value="none">sem legenda</option></select>
-            </div></label>
-          <label className="text-xs">Tamanho e caixa{s("captions.size_pct")}
-            <div className="flex items-center gap-2">
-              <input type="number" min={60} max={160} className="field w-20" value={params.captions.size_pct}
+            </div></div>
+          <div className="text-xs">Tamanho e caixa{s("captions.size_pct")}
+            <div className="flex flex-wrap items-center gap-2">
+              <input type="number" min={60} max={160} className="field w-20" aria-label="Tamanho da legenda em porcentagem" value={params.captions.size_pct}
                 onChange={(e) => set("captions", { ...params.captions, size_pct: Number(e.target.value) })} />%
               <label className="flex items-center gap-1"><input type="checkbox" checked={params.captions.uppercase}
                 onChange={(e) => set("captions", { ...params.captions, uppercase: e.target.checked })} /> MAIÚSCULAS</label>
               <input type="color" aria-label="Cor da palavra falada" value={params.captions.active_color || "#FFE500"}
                 onChange={(e) => set("captions", { ...params.captions, active_color: e.target.value.toUpperCase() })} />
-            </div></label>
-          <label className="text-xs sm:col-span-2">Selo de identificação (nossa foto + nosso nome){s("badge.position")}
+            </div></div>
+          <div className="text-xs sm:col-span-2">Selo de identificação (nossa foto + nosso nome){s("badge.position")}
             <div className="flex flex-wrap items-center gap-2">
-              <input type="checkbox" checked={params.badge.enabled} onChange={(e) => set("badge", { ...params.badge, enabled: e.target.checked })} />
-              <select className="field w-auto" value={params.badge.position} onChange={(e) => set("badge", { ...params.badge, position: e.target.value as Params["badge"]["position"] })}>
+              <input type="checkbox" aria-label="Ativar selo" checked={params.badge.enabled} onChange={(e) => set("badge", { ...params.badge, enabled: e.target.checked })} />
+              <select className="field w-auto" aria-label="Posição do selo" value={params.badge.position} onChange={(e) => set("badge", { ...params.badge, position: e.target.value as Params["badge"]["position"] })}>
                 <option value="top_left">canto superior esquerdo</option><option value="top_right">canto superior direito</option>
                 <option value="bottom_left">canto inferior esquerdo</option><option value="bottom_right">canto inferior direito</option></select>
-              <input className="field w-48" maxLength={32} placeholder="Nosso nome (ex.: Malaio Cortes)" value={params.badge.name}
+              <input className="field w-48" maxLength={32} aria-label="Nome no selo" placeholder="Nome do canal" value={params.badge.name}
                 onChange={(e) => set("badge", { ...params.badge, name: e.target.value })} />
-            </div></label>
+            </div></div>
           {p.params.palette && <div className="text-xs sm:col-span-2">Paleta medida: {p.params.palette.map((c) => <span key={c} className="mr-1 inline-block h-3 w-6 rounded align-middle" style={{ background: c }} title={c} />)} {p.params.contrast != null && `· contraste ${p.params.contrast}`}</div>}
           {(p.params.notes ?? []).length > 0 && <ul className="text-[11px] text-ink-muted sm:col-span-2">{p.params.notes!.map((n, i) => <li key={i}>{n}</li>)}</ul>}
           {p.analysis.vlm_error && <p className="text-[11px] text-ink-faint sm:col-span-2">IA visual indisponível nesta análise ({p.analysis.vlm_error}); valeu a medição.</p>}
-          <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
-            <button className="btn-take px-3 py-1" disabled={save.isPending} onClick={() => save.mutate()}>Salvar parâmetros</button>
-            <input className="field w-28" placeholder="Corte #" value={clip} onChange={(e) => setClip(e.target.value.replace(/\D/g, ""))} />
-            <button className="btn-quiet px-3 py-1" disabled={!clip || preview.isPending} onClick={() => preview.mutate()}>Testar num corte nosso</button>
-          </div>
-          {msg && <p className="text-xs text-ok sm:col-span-2">{msg}</p>}
-          <div className="sm:col-span-2"><ErrorNote error={shot.error || avatar.error || save.error || del.error || preview.error || fav.error} /></div>
+            <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
+              <button className="btn-take" disabled={!draft || save.isPending} onClick={() => save.mutate()}>
+                {save.isPending ? "Salvando…" : "Salvar parâmetros"}
+              </button>
+              {draft && <button className="btn-quiet" onClick={() => setDraft(null)} disabled={save.isPending}>Descartar mudanças</button>}
+            </div>
+          </section>
         </div>
+        {save.isSuccess && !draft && <Notice>Parâmetros salvos.</Notice>}
+        <section className="border-t border-suite-line pt-4">
+          <h3 className="mb-2 text-sm font-semibold">Gerar prévia a partir de um corte próprio</h3>
+          <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => { event.preventDefault(); if (clip) preview.mutate(Number(clip)); }}>
+            <input className="field w-32" inputMode="numeric" aria-label="Número do corte" placeholder="Corte #" value={clip}
+              onChange={(e) => setClip(e.target.value.replace(/\D/g, ""))} />
+            <button className="btn-quiet" disabled={!clip || preview.isPending}>{preview.isPending ? "Solicitando…" : "Gerar variante de formato"}</button>
+          </form>
+          {preview.data && previewClip !== null && (
+            <div className="mt-2"><Notice>
+              Variante “{preview.data.label}” solicitada{preview.data.badge ? "" : " sem selo"}.{" "}
+              <Link to={`/cortes/${previewClip}?status=&aba=versoes`} className="underline">Abrir corte #{previewClip}</Link>
+            </Notice></div>
+          )}
+        </section>
+        <ErrorNote error={shot.error || avatar.error || save.error || del.error || preview.error || fav.error} />
       </div>
-    </div>
+    </article>
   );
 }
 
 function Capabilities() {
   const q = useQuery({ queryKey: ["ref-caps"], queryFn: () => api.get<{ measured_at: string; items: Cap[] }>("/api/refs/capabilities") });
   return (
-    <div>
-      <p className="mb-3 text-xs text-ink-muted">Testado com as nossas credenciais em {q.data?.measured_at}, sem pedir permissões novas.</p>
-      <table className="w-full text-sm">
-        <thead className="text-left text-xs text-ink-muted"><tr><th>Plataforma</th><th>Recurso</th><th>Situação</th><th>Como / alternativa</th></tr></thead>
-        <tbody>{(q.data?.items ?? []).map((c, i) => (
-          <tr key={i} className="border-t border-suite-line/50 align-top">
-            <td className="py-1 pr-2">{c.platform}</td><td className="pr-2">{c.what}</td>
-            <td className={`pr-2 font-medium ${STATUS[c.status] ?? ""}`}>{c.status}</td><td className="text-xs text-ink-muted">{c.how}</td>
-          </tr>))}</tbody>
-      </table>
+    <div className="space-y-4">
+      <ErrorNote error={q.error} />
+      {q.isLoading && <Skeleton label="Carregando capacidades das APIs" />}
+      {q.data && (
+        <section className="panel">
+          <header className="panel-heading">
+            <h2 className="display text-lg">Recursos verificados</h2>
+            <p className="text-xs text-ink-muted">Medição em {q.data.measured_at}</p>
+          </header>
+          <ul className="divide-y divide-suite-line">
+            {q.data.items.map((capability, index) => (
+              <li key={index} className="grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] sm:px-5">
+                <div className="min-w-0">
+                  <h3 className="break-words font-semibold">{capability.what}</h3>
+                  <p className="text-sm text-ink-muted">{capability.platform}</p>
+                </div>
+                <div>
+                  <Status tone={capabilityTone[capability.status as keyof typeof capabilityTone]}>{capability.status}</Status>
+                  <p className="mt-1 break-words text-sm text-ink-muted">{capability.how}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

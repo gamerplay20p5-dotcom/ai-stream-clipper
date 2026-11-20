@@ -42,7 +42,7 @@ export default function BatchBar({ ids, onClear }: { ids: number[]; onClear: () 
           {accounts.map((a) => <option key={a.id} value={a.id}>{a.platform} · {a.name || a.handle}</option>)}
         </select>
         <label className="flex items-center gap-1.5 text-xs">
-          <input type="checkbox" className="accent-[#F2B33D]" checked={rights} onChange={(e) => setRights(e.target.checked)} />
+          <input type="checkbox" checked={rights} onChange={(e) => setRights(e.target.checked)} />
           tenho direito de republicar
         </label>
         {chosen && <div className="min-w-[220px]"><PrivacyPicker options={opts} value={privacy} onChange={setPrivacy} platform={chosen.platform} /></div>}
