@@ -50,7 +50,7 @@ export function Header({ t, language, languageLabel, onLanguage, join }: HeaderP
         <nav className="desktop-nav" aria-label={t.navigation}><Links links={t.links} /></nav>
         <div className="header-actions">
           <div className="segmented" role="group" aria-label={languageLabel}>
-            <button lang="pt-BR" type="button" aria-pressed={language === 'pt-BR'} onClick={() => onLanguage('pt-BR')}>PT<span className="sr-only">-BR</span></button>
+            <button lang="pt-BR" type="button" aria-pressed={language === 'pt-BR'} onClick={() => onLanguage('pt-BR')}>PT-BR</button>
             <button lang="en" type="button" aria-pressed={language === 'en'} onClick={() => onLanguage('en')}>EN</button>
           </div>
           <a className="button header-join" href="#acesso">{join}<ArrowUpRight size={15} aria-hidden="true" /></a>

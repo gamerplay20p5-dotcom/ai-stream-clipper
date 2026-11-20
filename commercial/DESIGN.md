@@ -1,5 +1,7 @@
 # Direção visual e sistema de design
 
+Este documento registra a versão editorial anterior. O sistema do redesign local está em [Broadcast Studio](docs/BROADCAST.md).
+
 A experiência segue a ordem de uma edição. Começa com um plano aberto, aproxima o olhar no momento que sustenta o corte e termina com a versão vertical. A bancada no hero mostra a transformação. A demonstração abaixo abre as decisões de cada etapa em uma sequência que o visitante controla.
 
 ## Materiais e grade

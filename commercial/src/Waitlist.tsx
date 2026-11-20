@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowUpRight, Check, ChevronDown } from 'lucide-react'
+import { ArrowUpRight, Check, ChevronDown, LoaderCircle } from 'lucide-react'
 import catalog from '../catalog.json'
 import type { Copy, Language } from './content'
 import { planIds, plans, type Market, type PlanId } from './market'
@@ -61,7 +61,6 @@ export function Waitlist({ copy, language, market, interest, onInterest }: Props
         <div className="waitlist-intro">
           <h2 id="waitlist-heading">{t.title}</h2>
           <p>{t.detail}</p>
-          <div className="closing-frame" aria-hidden="true"><img src="/media/harbor-turn.webp" alt="" width="960" height="540" loading="lazy" /></div>
         </div>
         {status === 'success' ? (
           <div className="waitlist-confirmation">
@@ -120,7 +119,7 @@ export function Waitlist({ copy, language, market, interest, onInterest }: Props
                 <span>{t.consent}</span>
               </label>
               <button className="button primary field-wide" type="submit" aria-describedby="form-status">
-                {status === 'sending' ? t.sending : copy.join}<ArrowUpRight size={18} aria-hidden="true" />
+                {status === 'sending' ? <>{t.sending}<LoaderCircle className="form-spinner" size={18} aria-hidden="true" /></> : <>{copy.join}<ArrowUpRight size={18} aria-hidden="true" /></>}
               </button>
             </fieldset>
             <div className="form-feedback" role="status" id="form-status">

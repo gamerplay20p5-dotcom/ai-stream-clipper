@@ -36,7 +36,7 @@ for (const language of ['pt-BR', 'en'] as const) {
       .replace(/(<meta property="og:title" content=")[^"]*/, (_whole, prefix) => prefix + shareTitle)
       .replace(/(<meta property="og:description" content=")[^"]*/, (_whole, prefix) => prefix + description)
       .replace(/(<meta property="og:locale" content=")[^"]*/, (_whole, prefix) => prefix + locale)
-      .replace(/(<meta property="og:image" content=")[^"]*/, (_whole, prefix) => prefix + shareOrigin + '/media/harbor-wide.webp')
+      .replace(/(<meta property="og:image" content=")([^"]*)/, (_whole, prefix, image) => prefix + shareOrigin + image)
       .replace('</head>', () => `<meta property="og:locale:alternate" content="${alternateLocale}" />
     <meta property="og:image:alt" content="${escape(editorial[language].hero.wideAlt)}" />${alternate}
     </head>`)

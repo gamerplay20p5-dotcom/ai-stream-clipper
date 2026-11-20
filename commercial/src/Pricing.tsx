@@ -1,4 +1,4 @@
-import { ArrowUpRight, Check, Minus, Plus } from 'lucide-react'
+import { ArrowUpRight, Check, Layers3, Minus, Plus } from 'lucide-react'
 import type { Copy } from './content'
 import { formatPrice, planIds, plans, type Market, type PlanId } from './market'
 
@@ -53,21 +53,31 @@ export function Pricing({ copy, market, onMarket, onInterest }: Props) {
             const price = formatPrice(id, market)
             return (
               <article className={`plan-card plan-${id}`} key={id}>
-                <h3>{plan.name}</h3>
+                <div className="plan-card-heading">
+                  <h3>{plan.name}</h3>
+                  {id === 'creator' ? <span className="plan-highlight">{t.highlight}</span> : null}
+                  {id === 'pro' ? <span className="pro-format">4K</span> : null}
+                </div>
                 <p className="plan-tagline">{t.plans[id].tagline}</p>
                 <p className="price"><span className="price-symbol">{price.symbol}</span>{' '}<strong>{price.amount}</strong>{' '}<span className="price-period">{t.perMonth}</span></p>
+                <div className="plan-limits"><strong>{t.hours(plan.hours)}</strong><span>{t.channels(plan.channels)}</span></div>
                 <ul className="plan-features">
-                  {[t.hours(plan.hours), t.simul(plan.simultaneous), plan.export4k ? `1080p + ${t.proExport}` : '1080p', t.watermark].map(item => (
+                  {[t.simul(plan.simultaneous), t.storage(plan.storageGb), t.plans[id].ai, ...(id === 'creator' ? [t.rows.editing] : []), '1080p'].map(item => (
                     <li key={item}><Check size={16} aria-hidden="true" />{item}</li>
                   ))}
-                  {id === 'pro' ? <li><Check size={16} aria-hidden="true" />{t.rows.priority}</li> : null}
                 </ul>
+                {id === 'pro' ? (
+                  <div className="pro-workbench">
+                    <h4><Layers3 size={16} aria-hidden="true" />{t.proHighlight}</h4>
+                    <ul>{[t.rows.secondPass, t.rows.variants, t.rows.priority, t.exportLimit(plan.export4k)].map(item => <li key={item}>{item}</li>)}</ul>
+                  </div>
+                ) : null}
                 <a className={`button ${id === 'creator' ? 'primary' : 'quiet'}`} href="#acesso" onClick={() => onInterest(id)}>{t.interest(plan.name)}<ArrowUpRight size={17} aria-hidden="true" /></a>
               </article>
             )
           })}
         </div>
-        <p className="pricing-note">{t.provisional}</p>
+        <div className="pricing-note"><p><Check size={15} aria-hidden="true" />{t.shared}</p><p>{t.provisional}</p></div>
         <div className="comparison">
           <h3 id="compare-heading">{t.compare}</h3>
           <table aria-labelledby="compare-heading">

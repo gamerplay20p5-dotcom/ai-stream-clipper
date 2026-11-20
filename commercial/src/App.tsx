@@ -36,9 +36,9 @@ export function App({ initial }: { initial: Preferences }) {
       <a className="skip-link" href="#main">{copy.skip}</a>
       <Header t={t} language={language} languageLabel={copy.nav.language} onLanguage={next => updatePreferences(next, market)} join={copy.join} />
       <main id="main" tabIndex={-1}>
-        <Hero t={t} join={copy.join} />
-        <Workflow t={t} language={language} />
-        <Features t={t.features} />
+        <Hero t={t} join={copy.join} language={language} />
+        <Workflow t={t} />
+        <Features t={t} />
         <Pricing copy={copy} market={market} onMarket={next => updatePreferences(language, next)} onInterest={setInterest} />
         <Questions t={t.faq} />
         <Waitlist copy={copy} language={language} market={market} interest={interest} onInterest={setInterest} />

@@ -20,7 +20,7 @@ test('pre-rendered HTML includes localized content and independent market pricin
   expect(response.headers()['content-language']).toBe('en')
   const html = await response.text()
   expect(html).toContain('<html lang="en">')
-  expect(html).toContain('Your best live moments')
+  expect(html).toContain('Your stream ends')
   expect(html).toContain('139,90')
   expect(html).toContain('property="og:locale" content="en_US"')
   const preferred = await request.get('/', { headers: { 'Accept-Language': 'en-US,en;q=0.9' } })
@@ -38,6 +38,9 @@ test('changes language and market independently and retains URL preferences', as
   await expect(page.locator('.price strong')).toHaveText(['59,90', '139,90', '279,90'])
   await page.getByRole('button', { name: 'USD', exact: true }).click()
   await expect(page.locator('.price strong')).toHaveText(['19.99', '44.99', '89.99'])
+  await expect(page.locator('.plan-limits strong')).toHaveText(['40 streaming hours per month', '100 streaming hours per month', '200 streaming hours per month'])
+  await expect(page.locator('.plan-limits span')).toHaveText(['1 channel', '2 channels', '4 channels'])
+  await expect(page.locator('.plan-pro .pro-workbench')).toContainText('Up to 30 4K exports per month')
   await expect(page).toHaveURL(/lang=en&market=US/)
   await page.reload()
   await expect(page.getByRole('heading', { name: 'Plans for the way you stream' })).toBeVisible()
@@ -76,17 +79,21 @@ test('mobile menu traps focus, returns focus on Escape and opens comparison', as
 
 test('editorial demo switches frames and captions and plays the local Short', async ({ page }) => {
   await page.goto('/?lang=en&market=US')
-  const detect = page.getByRole('tab', { name: /Detect/ })
-  await detect.focus()
-  await page.keyboard.press('ArrowDown')
+  await page.getByRole('tab', { name: 'Live' }).focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByRole('tab', { name: 'Analyze' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tabpanel').locator('.console-signals li')).toHaveText(['Video', 'Audio', 'Speech'])
+  await page.keyboard.press('ArrowRight')
   await expect(page.getByRole('tab', { name: /Select/ })).toHaveAttribute('aria-selected', 'true')
-  await page.getByRole('button', { name: /Harbor turn/ }).click()
-  await expect(page.getByRole('tabpanel').locator('img')).toHaveAttribute('src', '/media/harbor-turn.webp')
+  await page.getByRole('button', { name: /Last turn/ }).click()
+  await expect(page.getByRole('tabpanel').locator('.monitor-scene img')).toHaveAttribute('src', '/media/night-turn.webp')
   await page.getByRole('tab', { name: /Edit/ }).click()
   await expect(page.getByRole('tabpanel').locator('.frame-caption')).toBeVisible()
   await page.getByRole('checkbox', { name: 'Show captions' }).uncheck()
   await expect(page.getByRole('tabpanel').locator('.frame-caption')).toHaveCount(0)
-  await page.getByRole('tab', { name: /Review/ }).click()
+  await page.getByRole('tab', { name: 'Live' }).click()
+  await page.getByRole('button', { name: 'Open the sample Short' }).click()
+  await expect(page.getByRole('tab', { name: 'Review' })).toBeFocused()
   const video = page.locator('video')
   await expect(video.locator('track')).toHaveAttribute('srclang', 'en')
   await expect.poll(() => video.evaluate(element => element.readyState)).toBeGreaterThan(0)
@@ -150,7 +157,7 @@ test('captures the required widths and checks WCAG rules across languages and UI
       return img.decode()
     })))
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width)
-    expect(await page.locator('h1, h2, h3, summary, header nav a, button').allTextContents()).not.toContainEqual(expect.stringMatching(/[.!]\s*$/))
+    expect(await page.locator('h1, h2, h3, h4, summary, header nav a, button').allTextContents()).not.toContainEqual(expect.stringMatching(/[.!]\s*$/))
     await page.screenshot({ path: testInfo.outputPath(`landing-${width}.png`), fullPage: true })
   }
   await page.setViewportSize({ width: 1440, height: 1000 })
@@ -185,12 +192,12 @@ test('records initial-load metrics and defers the demo video', async ({ page, br
     await document.fonts.ready
     return {
       ...window.previewMetrics,
-      source: document.querySelector('.stage-source img').currentSrc.split('/').at(-1),
+      source: document.querySelector('.monitor-scene img').currentSrc.split('/').at(-1),
       requestedDemoVideo: performance.getEntriesByType('resource').some(entry => entry.name.endsWith('.mp4')),
     }
   })
   await writeFile(testInfo.outputPath('local-metrics.json'), JSON.stringify(measurements, null, 2))
-  expect(measurements.source).toBe('harbor-wide-small.webp')
+  expect(measurements.source).toBe('night-source-small.webp')
   expect(measurements.layoutShift).toBeLessThan(.1)
   expect(measurements.requestedDemoVideo).toBe(false)
 })

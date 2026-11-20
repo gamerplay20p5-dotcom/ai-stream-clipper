@@ -1,15 +1,22 @@
 import { useRef, useState, type KeyboardEvent } from 'react'
-import { ArrowDown, ArrowRight, ArrowUpRight } from 'lucide-react'
+import { Activity, ArrowUpRight, Clapperboard, Play, Radio, ScanLine, Scissors } from 'lucide-react'
 import type { Editorial } from './editorial'
 import type { Language } from './content'
 
-const wide = '/media/harbor-wide.webp'
-const turn = '/media/harbor-turn.webp'
-const vertical = '/media/harbor-vertical.webp'
-const bars = [24, 44, 29, 46, 31, 20, 54, 31, 50, 21, 29, 53, 70, 59, 37, 65, 89, 93, 52, 64, 97, 74, 51, 30, 47, 68, 51, 24, 42, 36, 22, 51, 66, 37, 29, 17, 27, 42, 22, 32]
+const source = '/media/night-source.webp'
+const close = '/media/night-turn.webp'
+const portrait = '/media/night-vertical.webp'
+const phases = [Radio, Activity, ScanLine, Scissors, Clapperboard]
+const wave = [24, 39, 30, 52, 35, 20, 57, 36, 49, 30, 28, 53, 74, 56, 39, 61, 85, 96, 55, 68, 96, 72, 52, 28, 45, 62, 49, 24, 42, 37, 22, 57, 62, 34, 27, 18, 25, 41, 22, 31, 21, 32, 22, 28]
 
-function Wave({ label }: { label: string }) {
-  return <div className="waveform" role="img" aria-label={label}>{bars.map((height, i) => <i key={i} className={i >= 13 && i < 27 ? 'selected' : undefined} style={{ height: `${height}%` }} />)}<span aria-hidden="true" /></div>
+function Timeline({ t, selected }: { t: Editorial; selected: boolean }) {
+  return (
+    <div className={`console-timeline ${selected ? 'has-clip' : ''}`}>
+      <div className="timeline-ruler timecode" aria-hidden="true"><span>01:24:12</span><span>01:24:18</span><span>01:24:24</span></div>
+      <div className="timeline-track"><span className="track-name">{t.demo.audioTrack}</span><div className="waveform" role="img" aria-label={t.demo.wave}><i className="playhead" aria-hidden="true" />{wave.map((height, index) => <i key={index} className={index >= 13 && index < 29 ? 'wave-cut' : undefined} style={{ height: `${height}%` }} aria-hidden="true" />)}</div></div>
+      <div className="timeline-track"><span className="track-name">{t.demo.clipTrack}</span><div className="range-track"><span>{t.hero.signal}</span></div></div>
+    </div>
+  )
 }
 
 function Caption({ text }: { text: string }) {
@@ -17,99 +24,125 @@ function Caption({ text }: { text: string }) {
   return <b className="frame-caption">{words.slice(0, -2).join(' ')} <mark>{words.slice(-2).join(' ')}</mark></b>
 }
 
-export function Hero({ t, join }: { t: Editorial; join: string }) {
-  return (
-    <section className="hero shell" id="produto" aria-labelledby="hero-heading" tabIndex={-1}>
-      <p className="edition-label"><span />{t.hero.status}</p>
-      <div className="hero-copy">
-        <h1 id="hero-heading">{t.hero.title[0]} <span>{t.hero.title[1]}</span></h1>
-        <div><p>{t.hero.detail}</p><div className="hero-actions"><a className="button primary" href="#acesso">{join}<ArrowUpRight size={17} aria-hidden="true" /></a><a className="text-link" href="#como-funciona">{t.hero.action}<ArrowDown size={16} aria-hidden="true" /></a></div></div>
-      </div>
-      <figure className="hero-stage">
-        <div className="stage-label"><span>{t.hero.sample}</span><span>16:9 <ArrowRight size={16} aria-hidden="true" /> 9:16</span></div>
-        <div className="stage-composition">
-          <div className="stage-source">
-            <img src={wide} srcSet={`/media/harbor-wide-small.webp 720w, ${wide} 1440w`}
-              sizes="(max-width: 540px) 65vw, (max-width: 1450px) 73vw, 1030px" width="1440" height="810" fetchPriority="high" alt={t.hero.wideAlt} />
-            <span className="frame-label">{t.hero.source}</span>
-            <span aria-hidden="true" className="crop-guide" />
-          </div>
-          <div className="stage-output">
-            <img src={vertical} width="450" height="800" alt={t.hero.closeAlt} />
-            <span className="frame-label">{t.hero.output}</span>
-            <Caption text={t.hero.caption} />
-          </div>
-        </div>
-        <figcaption className="stage-timeline"><span className="timecode">01:24:18</span><Wave label={t.demo.wave} /><strong>{t.hero.signal}</strong></figcaption>
-      </figure>
-    </section>
-  )
-}
-
-export function Workflow({ t, language }: { t: Editorial; language: Language }) {
+function BroadcastConsole({ t, language }: { t: Editorial; language: Language }) {
   const [step, setStep] = useState(0)
   const [shot, setShot] = useState(0)
   const [captions, setCaptions] = useState(true)
   const tabs = useRef<(HTMLButtonElement | null)[]>([])
   const { demo, hero } = t
 
+  function activate(index: number) {
+    setStep(index)
+    tabs.current[index]?.focus()
+  }
+
   function moveTab(event: KeyboardEvent<HTMLButtonElement>, current: number) {
     const count = demo.steps.length
     let next: number
     switch (event.key) {
-      case 'ArrowDown': next = (current + 1) % count; break
-      case 'ArrowUp': next = (current + count - 1) % count; break
+      case 'ArrowRight': next = (current + 1) % count; break
+      case 'ArrowLeft': next = (current + count - 1) % count; break
       case 'Home': next = 0; break
       case 'End': next = count - 1; break
       default: return
     }
     event.preventDefault()
-    setStep(next)
-    tabs.current[next]?.focus()
+    activate(next)
   }
 
+  const isClose = step > 2 || (step === 2 && shot === 1)
   return (
-    <section className="workflow band-dark" id="como-funciona" aria-labelledby="workflow-heading" tabIndex={-1}>
-      <div className="shell">
-        <div className="section-head"><h2 id="workflow-heading">{demo.title}</h2><p>{demo.detail}</p></div>
-        <div className="workflow-grid">
-          <div className="workflow-tabs" role="tablist" aria-labelledby="workflow-heading" aria-orientation="vertical">
-            {demo.steps.map((item, i) => (
-              <button key={item.title} type="button" role="tab" id={`step-${i}`} aria-selected={step === i} aria-controls={`panel-${i}`}
-                tabIndex={step === i ? 0 : -1} onClick={() => setStep(i)} onKeyDown={event => moveTab(event, i)} ref={element => { tabs.current[i] = element }}>
-                <span className="timecode">0{i + 1}</span><strong>{item.title}</strong><ArrowRight size={18} aria-hidden="true" />
-              </button>
-            ))}
-          </div>
-          {demo.steps.map((item, i) => (
-            <div key={i} hidden={step !== i} className="workflow-panel" id={`panel-${i}`} role="tabpanel" aria-labelledby={`step-${i}`} tabIndex={0}>
-              {step === i ? <>
-                <p className="workflow-detail">{item.detail}</p>
-                {i === 0 ? (
-                  <div className="monitor"><img src={wide} width="1440" height="810" loading="lazy" alt={hero.wideAlt} /><span className="frame-label">{hero.source}</span><div className="monitor-wave"><Wave label={demo.wave} /></div></div>
-                ) : i === 1 ? (
-                  <div className="shot-selection">
-                    <img src={shot === 0 ? wide : turn} width="960" height="540" loading="lazy" alt={shot === 0 ? hero.wideAlt : hero.closeAlt} />
-                    <div className="shot-buttons">{demo.shots.map((label, index) => <button className="shot-button" key={index} aria-pressed={shot === index} onClick={() => setShot(index)}><span className="timecode">{index === 0 ? '01:24:16' : '01:24:18'}</span>{label}</button>)}</div>
-                  </div>
-                ) : i === 2 ? (
-                  <div className="vertical-editor">
-                    <div className="portrait-preview"><img src={vertical} width="450" height="800" alt={hero.closeAlt} loading="lazy" />{captions ? <Caption text={hero.caption} /> : null}</div>
-                    <div className="edit-options"><p>{demo.format} <strong>9:16</strong></p><label><input type="checkbox" checked={captions} onChange={event => setCaptions(event.target.checked)} />{demo.captions}</label></div>
-                  </div>
+    <section className="broadcast-console" id="estudio" aria-labelledby="studio-heading" tabIndex={-1}>
+      <header className="console-head">
+        <h2 id="studio-heading"><img src="/brand.svg" alt="" width="22" height="22" />{demo.studio}</h2>
+        <span>{hero.sample}</span>
+      </header>
+      <div className="console-tabs" role="tablist" aria-label={demo.stepsLabel}>
+        {demo.steps.map((item, index) => {
+          const Icon = phases[index]
+          return <button key={index} type="button" role="tab" id={`step-${index}`} aria-selected={step === index} aria-controls={`panel-${index}`}
+            tabIndex={step === index ? 0 : -1} onClick={() => setStep(index)} onKeyDown={event => moveTab(event, index)}
+            ref={element => { tabs.current[index] = element }}><Icon size={15} aria-hidden="true" />{item.title}</button>
+        })}
+      </div>
+      {demo.steps.map((item, index) => (
+        <div key={index} id={`panel-${index}`} className="console-panel" role="tabpanel" aria-labelledby={`step-${index}`} hidden={step !== index} tabIndex={0}>
+          {step === index ? <>
+            <div className={`console-monitors ${step === 4 ? 'review-monitors' : ''}`}>
+              <div className="input-monitor">
+                <div className="monitor-title"><span><i />{hero.source}</span><span className="timecode">16:9</span></div>
+                <div className="monitor-scene">
+                  {isClose ? <img src={close} width="960" height="540" alt={hero.closeAlt} /> :
+                    <img src={source} srcSet={`/media/night-source-small.webp 640w, ${source} 1280w`}
+                      sizes="(max-width: 379px) 52vw, (max-width: 820px) 62vw, 42vw"
+                      width="1280" height="720" fetchPriority={step === 0 ? 'high' : 'auto'} alt={hero.wideAlt} />}
+                  {step === 1 || step === 3 ? <span className={`monitor-guide ${step === 3 ? 'vertical-guide' : ''}`} aria-hidden="true" /> : null}
+                </div>
+                <Timeline t={t} selected={step !== 1} />
+              </div>
+              <div className="output-monitor">
+                <div className="monitor-title"><span>{hero.output}</span><span className="timecode">9:16</span></div>
+                {step === 4 ? (
+                  <video width="450" height="800" controls playsInline preload="metadata" poster={portrait} aria-label={hero.output} aria-describedby="short-description">
+                    <source src="/media/night-short.mp4" type="video/mp4" />
+                    <track kind="captions" src={language === 'en' ? '/media/night-en.vtt' : '/media/night-pt.vtt'} srcLang={language} label={demo.captionsTrack} default />
+                  </video>
                 ) : (
-                  <div className="vertical-editor">
-                    <video className="portrait-preview" width="450" height="800" controls playsInline preload="metadata" poster={vertical} aria-label={hero.output} aria-describedby="short-description">
-                      <source src="/media/harbor-short.mp4" type="video/mp4" />
-                      <track kind="captions" src={language === 'en' ? '/media/harbor-en.vtt' : '/media/harbor-pt.vtt'} srcLang={language} label={demo.captionsTrack} default />
-                    </video>
-                    <div className="edit-options" id="short-description"><strong>{demo.transcript}</strong><p>{demo.transcriptDetail}</p></div>
+                  <div className="output-image">
+                    <img src={portrait} width="450" height="800" alt={hero.closeAlt} />
+                    {step !== 3 || captions ? <Caption text={hero.caption} /> : null}
+                    {step === 0 ? <button className="poster-play" type="button" aria-label={demo.openShort} onClick={() => activate(4)}><Play size={17} aria-hidden="true" /></button> : null}
                   </div>
                 )}
-              </> : null}
+              </div>
             </div>
-          ))}
+            <div className="console-detail">
+              <p>{item.detail}</p>
+              {step === 1 ? <ul className="console-signals">{demo.sources.map(label => <li key={label}>{label}</li>)}</ul> : null}
+              {step === 2 ? <div className="shot-buttons">{demo.shots.map((label, shotIndex) => <button className="shot-button" type="button" key={shotIndex} aria-pressed={shot === shotIndex} onClick={() => setShot(shotIndex)}>{label}</button>)}</div> : null}
+              {step === 3 ? <label className="caption-toggle"><input type="checkbox" checked={captions} onChange={event => setCaptions(event.target.checked)} />{demo.captions}</label> : null}
+              {step === 4 ? <details id="short-description"><summary>{demo.transcript}</summary><p>{demo.transcriptDetail}</p></details> : null}
+            </div>
+          </> : null}
         </div>
+      ))}
+    </section>
+  )
+}
+
+export function Hero({ t, join, language }: { t: Editorial; join: string; language: Language }) {
+  return (
+    <section className="hero" id="produto" aria-labelledby="hero-heading" tabIndex={-1}>
+      <div className="hero-grid shell">
+        <div className="hero-copy">
+          <p className="edition-label"><Radio size={15} aria-hidden="true" />{t.hero.status}</p>
+          <h1 id="hero-heading">{t.hero.title[0]} <span>{t.hero.title[1]}</span></h1>
+          <p className="hero-description">{t.hero.detail}</p>
+          <div className="hero-actions">
+            <a className="button primary" href="#acesso">{join}<ArrowUpRight size={17} aria-hidden="true" /></a>
+            <a className="button quiet" href="#estudio"><Play size={16} aria-hidden="true" />{t.hero.action}</a>
+          </div>
+        </div>
+        <BroadcastConsole t={t} language={language} />
+      </div>
+    </section>
+  )
+}
+
+export function Workflow({ t }: { t: Editorial }) {
+  return (
+    <section className="workflow section-space" id="como-funciona" aria-labelledby="workflow-heading" tabIndex={-1}>
+      <div className="shell workflow-layout">
+        <div className="section-head">
+          <h2 id="workflow-heading">{t.demo.title}</h2><p>{t.demo.detail}</p>
+          <a className="text-link" href="#estudio">{t.demo.explore}<ArrowUpRight size={16} aria-hidden="true" /></a>
+        </div>
+        <ol className="workflow-sequence" role="list">
+          {t.demo.steps.map((item, index) => {
+            const Icon = phases[index]
+            return <li key={index}><span className="sequence-icon"><Icon size={19} aria-hidden="true" /></span><div><h3>{item.title}</h3><p>{item.detail}</p></div></li>
+          })}
+        </ol>
       </div>
     </section>
   )
