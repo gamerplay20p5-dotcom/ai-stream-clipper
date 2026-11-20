@@ -9,8 +9,8 @@ Nada foi mesclado nem implantado. Este documento propõe a ordem de integração
 | #4 | `fase6c-laboratorio-referencias` | `main` | `a928aed` | 6C, v0.6.3, migração 0011 | pronto |
 | #5 | `redesign/hts-operator-studio` | #4 | `8a1154d` | identidade HTS / Vice City (Codex) | pronto |
 | #6 | `multiusuario-compartilhamento` | `main` | `64ff70c` | multiusuário, v0.7.0, migração 0012; **contém o #4** | pronto |
-| #7 | `ux/fluxos-de-trabalho` | #6 | `76d855d` (+ esta documentação) | UX v0.7.1; **contém #4, #5 e #6** | Draft até a validação integrada |
-| #8 | `hotfix/monitoramento-v0.6.2` | `main` | `ae2db33` | hotfix do monitoramento, `0.6.2-hotfix.1`, sem migração | aguardando autorização |
+| #7 | `ux/fluxos-de-trabalho` | #6 | `30c36f9` (`76d855d` + esta documentação) | UX v0.7.1; **contém #4, #5 e #6** | Draft até a validação integrada |
+| #8 | `hotfix/monitoramento-v0.6.2` | `main` | `b04142d` | hotfix do monitoramento, `0.6.2-hotfix.1`, sem migração | aguardando autorização |
 
 `main` = `8f80df8` = tag `v0.6.2` (produção). Ancestralidade conferida: #4 ⊂ #5, #4 ⊂ #6, #5 ⊂ #7 e #6 ⊂ #7. Não há commits duplicados entre os branches. O #8 parte da tag `v0.6.2` e não contém nada dos outros.
 
@@ -31,22 +31,22 @@ Assim a correção do monitoramento entra na linha principal **antes** da versã
 | `backend/clipper/workers/handlers.py` | Fica o `monitor_loop` novo (supervisionado) e se mantém o `handle_format` da 6C, que vinha logo depois do loop antigo. |
 | `dashboard/src/pages/Streamers.tsx` | Fica o layout do #5 com o `MonitorBadge`, o alerta "Monitoramento atrasado" e o retorno real do "Verificar agora". As cores usam o token `warning` do tema. |
 
-A simulação está no branch **local** `simulacao/integracao-0.7.1` (commit `91d02e6`, não enviado). As correções de texto que o #8 recebeu depois (`5b1162e`, `ae2db33`) já estão aplicadas nela.
+A simulação está no branch **local** `simulacao/integracao-0.7.1` (merge `92be0b7` = #7 `30c36f9` + #8 `b04142d`, não enviado). Os conflitos foram os mesmos 6, todos mecânicos.
 
 ## 4. Migrações
 
 A cadeia é única e linear: `0008 → 0009 → 0010 → 0011 (#4) → 0012 (#6)`, com head única. O hotfix não tem migração.
 
-## 5. Testes da versão integrada (simulação #7 + #8)
+## 5. Testes da versão integrada (simulação `92be0b7`)
 
 | Verificação | Resultado |
 |---|---|
-| `pytest` (suíte completa) | **364 passaram**, 3 pulados (precisam de modelos reais de IA, ausentes nesta máquina) |
+| `pytest` (suíte completa) | **368 passaram**, 3 pulados (precisam de modelos reais de IA, ausentes nesta máquina) |
 | e2e real (`test_e2e.py`: API e worker com o monitor novo, live detectada, captura, corte) | passou |
 | e2e de compartilhamento com duas contas | passou dentro da suíte |
 | Typecheck, `check:privacy`, build | ok |
 | Cenários Playwright (`dashboard/scripts/ux/scenarios.py`) contra a API e o frontend integrados | **21 passaram** |
-| Tela de Streamers integrada com canais sem verificação | mostra "Monitoramento atrasado" e o alerta no topo |
+| Tela de Streamers integrada (`check_streamers_ui.py`, API simulada) | 5 cenários passaram: estado atrasado, pedido recusado, aceito sem execução, resultado antigo e conclusão |
 
 Os 21 cenários cobrem:
 - login de administrador e de convidado;
@@ -79,12 +79,13 @@ Os 21 cenários cobrem:
 
 ## 7. Implantação e rollback (só com autorização)
 
-**Hotfix (agora):**
-- `asc-ctl status` e `asc-ctl compose logs worker-capture`, para registrar a evidência;
-- build `0.6.2-hotfix.1`, `set-tag` e `compose up`;
-- conferir `monitor.state` e as métricas do monitor avançando.
+**Hotfix (agora):** procedimento por serviço na seção 6 de `docs/INCIDENTE_MONITORAMENTO.md` (PR #8):
+1. diagnóstico somente leitura;
+2. imagens `app` e `vision` conferidas;
+3. `compose up worker-capture` no 206;
+4. `compose up api` no 210, numa janela sem publicação agendada.
 
-Rollback: `set-tag 0.6.2`.
+Rollback por serviço.
 
 **Versão unificada 0.7.1 (depois):**
 1. Pausar publicações (`clipper publish-pause on`) e registrar as agendadas.
