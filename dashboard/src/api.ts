@@ -18,10 +18,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     let detail = res.statusText;
     try {
       const j = await res.json();
-      detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+      detail = typeof j.detail === "string" ? j.detail : j.detail !== undefined ? JSON.stringify(j.detail) : detail;
     } catch {
       /* ignore */
     }
+    if (!detail) detail = `o servidor respondeu ${res.status}`;
     if (res.status === 401 && !path.endsWith("/login")) window.dispatchEvent(new Event("asc:unauthorized"));
     throw new ApiError(res.status, detail);
   }
@@ -473,4 +474,27 @@ export type GateDetail = {
   outcome: string; outcome_label: string; event: GateDim; narrative: GateDim; recovery: GateDim; technical: GateDim;
   fixes: { kind: string; detail: string; applicable: boolean; start: number | null; end: number | null }[];
   reasons: string[]; blocking: string[]; rework_runs: number; conflict: boolean; version: string;
+};
+
+/** Multi-user (v0.7): what the session may see. The backend authorizes every request; the UI only chooses what to show. */
+export type Me = { email: string; role: string; staff: boolean; areas: ("panel" | "library")[] };
+
+export type LibraryItem = {
+  clip_id: number; title: string; streamer: string; duration_s: number; shared_at: string | null; expires_at: string | null;
+  permissions: { view: boolean; download: boolean; variants: boolean }; version: string;
+  video_url: string; thumbnail_url: string; download_url: string | null;
+  variants: { name: string; label: string; video_url: string }[];
+};
+
+export type AdminUser = {
+  id: number; email: string; role: "viewer" | "admin"; active: boolean; active_shares: number;
+  created_at: string | null; last_login_at: string | null;
+};
+
+export type ClipShareRow = {
+  id: number; clip_id: number; clip_title: string | null; user_id: number; email: string | null;
+  follow_latest: boolean; shared_version: number | null; outdated: boolean;
+  can_view: boolean; can_download: boolean; can_variants: boolean;
+  expires_at: string | null; created_at: string | null; revoked_at: string | null;
+  state: "ativo" | "expirado" | "revogado";
 };

@@ -45,3 +45,18 @@ A imagem foi criada com o gerador de imagens integrado e exportada em WebP para 
 > Create an original cinematic editorial photograph for the AI Stream Clipper dashboard and sign-in art. View from across the boulevard of a fictional Miami Beach Art Deco oceanfront corner hotel at blue hour. A vivid peach sunset still burns across the horizon, dusty orchid sky, electric rose neon tracing a rounded Streamline Moderne canopy, cool aqua reflections in rain-dark pavement, and dark silhouettes of tall palms. A low wide camera, diagonal recession, foreground palms and premium precise architectural details. Horizontally composed around a 16:9 ratio with a wide usable crop. Concentrate the beautiful hotel facade and palm silhouettes in the right-center, with darker violet shadows at left. This should feel like a real location scouting photograph on 35mm film, rich colors with natural exposure, believable architecture, no artificial glowing atmosphere. No people in focus, no lettering or logos, no interface, entirely original architecture and scene unrelated to any specific game asset.
 
 </details>
+## Organização por tarefa (v0.7.1)
+
+A navegação, a tela Hoje, a Agenda semanal, o Diretor em linguagem simples, Parâmetros com essencial e avançado, a Minha Biblioteca e Pessoas e acesso estão descritos em [UX_FLUXOS.md](UX_FLUXOS.md), com a auditoria, a validação e as capturas de antes e depois.
+
+| Token novo | Uso |
+| --- | --- |
+| Aqua `#80DED6` (`--auto`) | Só o estado "Automático" da agenda, sempre acompanhado de anel e texto |
+
+<details>
+<summary>Prompts das artes originais da v0.7.1 (ForgeGUI)</summary>
+
+- `avenida-de-palmeiras.webp`: avenida costeira fictícia ladeada de palmeiras logo após o pôr do sol, asfalto molhado refletindo o céu pêssego e o néon rosa de uma lanchonete art déco ao fundo, sem pessoas, carros, letras ou logotipos.
+- `pier-ao-anoitecer.webp`: píer de madeira fictício na hora azul com uma pequena loja Streamline Moderne contornada por néon rosa, sem letras. A geração veio com uma faixa escura à esquerda, então só o recorte da direita é usado.
+
+</details>

@@ -15,6 +15,7 @@ export default {
         take: { DEFAULT: color("take"), dim: color("take-dim"), ink: color("take-ink") },
         action: { DEFAULT: color("action"), hover: color("action-hover"), ink: color("action-ink") },
         ok: color("ok"),
+        auto: { DEFAULT: color("auto"), dim: color("auto-dim") },
         warning: { DEFAULT: color("warning"), dim: color("warning-dim") },
         processing: { DEFAULT: color("processing"), dim: color("processing-dim") },
       },

@@ -1,13 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useId, useState, cloneElement, isValidElement, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useState, cloneElement, isValidElement, type ReactNode } from "react";
 import { AudioLines, BrainCircuit, ClipboardCheck, Scissors, Palette, SlidersHorizontal } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type AISettings, type ModelInfo } from "../api";
 import { ErrorNote, PageHeader, Skeleton } from "../components/ui";
 import { dimensionLabel } from "../lib/format";
 
-function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+/** Essential settings are always shown; advanced ones only after the person asks for them. */
+const Advanced = createContext(false);
+
+function Row({ label, hint, advanced, children }: { label: string; hint?: string; advanced?: boolean; children: ReactNode }) {
   const id = useId();
+  const showAdvanced = useContext(Advanced);
+  if (advanced && !showAdvanced) return null;
   return (
     <div className="grid grid-cols-1 gap-2 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,18rem)] sm:items-center sm:gap-8">
       <div>
@@ -23,8 +28,10 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
   );
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, advanced, children }: { title: string; advanced?: boolean; children: ReactNode }) {
   const id = useId();
+  const showAdvanced = useContext(Advanced);
+  if (advanced && !showAdvanced) return null;
   return (
     <section className="parameter-section" aria-labelledby={id}>
       <h2 id={id} className="display mb-1 text-lg">{title}</h2>
@@ -34,13 +41,17 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 }
 
 const parameterViews = [
-  { key: "deteccao", label: "Detecção", icon: AudioLines },
-  { key: "modelos", label: "Modelos", icon: BrainCircuit },
-  { key: "avaliacao", label: "Avaliação", icon: ClipboardCheck },
-  { key: "edicao", label: "Edição", icon: Scissors },
-  { key: "canal", label: "Marca do canal", icon: Palette },
-  { key: "operacao", label: "Operação", icon: SlidersHorizontal },
+  { key: "deteccao", label: "Detecção", icon: AudioLines, advanced: false },
+  { key: "edicao", label: "Edição e legendas", icon: Scissors, advanced: false },
+  { key: "canal", label: "Marca do canal", icon: Palette, advanced: false },
+  { key: "avaliacao", label: "Avaliação", icon: ClipboardCheck, advanced: false },
+  { key: "modelos", label: "Modelos de IA", icon: BrainCircuit, advanced: true },
+  { key: "operacao", label: "Operação", icon: SlidersHorizontal, advanced: true },
 ] as const;
+
+function readAdvanced() {
+  try { return localStorage.getItem("asc:settings-advanced") === "1"; } catch { return false; }
+}
 
 export default function Settings() {
   const [search] = useSearchParams();
@@ -54,6 +65,11 @@ export default function Settings() {
     return w.length ? `instalado em ${w.map((x) => x.host_label || x.worker).join(", ")}` : "não instalado em nenhum worker online";
   };
   const [draft, setDraft] = useState<Partial<AISettings>>({});
+  const [advanced, setAdvanced] = useState(readAdvanced);
+  const toggleAdvanced = (value: boolean) => {
+    setAdvanced(value);
+    try { localStorage.setItem("asc:settings-advanced", value ? "1" : "0"); } catch { /* per-viewer convenience only */ }
+  };
   const s = q.data ? { ...q.data, ...draft } : undefined;
   const save = useMutation({
     mutationFn: (values: AISettings) => api.put<AISettings>("/api/settings", values),
@@ -63,6 +79,7 @@ export default function Settings() {
     },
   });
   const dirty = !!s && JSON.stringify(s) !== JSON.stringify(q.data);
+  const changed = Object.keys(draft).filter((k) => JSON.stringify(draft[k as keyof AISettings]) !== JSON.stringify(q.data?.[k as keyof AISettings])).length;
   const update = (values: Partial<AISettings>) => setDraft((previous) => ({ ...previous, ...values }));
   const num = (key: keyof AISettings) => (event: React.ChangeEvent<HTMLInputElement>) => update({ [key]: Number(event.target.value) });
   const sel = (key: keyof AISettings) => (event: React.ChangeEvent<HTMLSelectElement>) => update({ [key]: event.target.value });
@@ -70,22 +87,28 @@ export default function Settings() {
 
   return (
     <div className="parameters">
-      <PageHeader title="Parâmetros" description="Configure detecção, modelos e edição dos cortes." />
+      <PageHeader title="Parâmetros da IA" description="Como a IA encontra, julga e edita os cortes. O essencial aparece primeiro; os ajustes finos ficam em Avançado.">
+        <label className="advanced-toggle">
+          <input type="checkbox" role="switch" checked={advanced} onChange={(e) => toggleAdvanced(e.target.checked)} />
+          <span>Mostrar ajustes avançados</span>
+        </label>
+      </PageHeader>
+      <Advanced.Provider value={advanced}>
       <div className="parameter-desk">
       <aside className="parameter-nav">
         <div className="min-w-0">
           <nav className="parameter-links" aria-label="Abas de parâmetros">
-            {parameterViews.map((item) => (
+            {parameterViews.filter((item) => advanced || !item.advanced || item.key === view.key).map((item) => (
               <Link key={item.key} to={item.key === "deteccao" ? "/ia" : `/ia?aba=${item.key}`}
                 className="parameter-link" aria-current={view.key === item.key ? "page" : undefined}>
-                <item.icon size={17} aria-hidden/>{item.label}
+                <item.icon size={17} aria-hidden/>{item.label}{item.advanced && <span className="sr-only"> (avançado)</span>}
               </Link>
             ))}
           </nav>
           {s && (
-            <div className="parameter-save">
+            <div className="parameter-save" data-dirty={dirty || undefined}>
               <p role="status" className="text-xs text-ink-muted">
-                {dirty ? "Alterações pendentes" : save.isSuccess ? "Parâmetros salvos." : ""}
+                {dirty ? (changed === 1 ? "1 alteração não salva" : `${changed} alterações não salvas`) : save.isSuccess ? "Parâmetros salvos." : ""}
               </p>
               {dirty && <button className="btn-quiet" disabled={save.isPending} onClick={() => {
                 setDraft({});
@@ -106,6 +129,13 @@ export default function Settings() {
         <fieldset disabled={save.isPending} className="min-w-0 disabled:opacity-70">
           <legend className="sr-only">{view.label}</legend>
           <div className="space-y-5">
+            {view.advanced && !advanced && (
+              <div className="empty-state">
+                <p className="font-semibold">Esta aba só tem ajustes avançados</p>
+                <p className="max-w-md text-sm text-ink-muted">Modelos e limites de processamento raramente precisam mudar.</p>
+                <button type="button" className="btn-quiet" onClick={() => toggleAdvanced(true)}>Mostrar ajustes avançados</button>
+              </div>
+            )}
             {view.key === "deteccao" && (
               <>
                 <Section title="Detecção de momentos">
@@ -130,14 +160,14 @@ export default function Settings() {
                 <Section title="Duração e contexto">
                   <Row label="Duração mínima (s)"><input type="number" className="field" value={s.min_clip_seconds} onChange={num("min_clip_seconds")} /></Row>
                   <Row label="Duração máxima (s)"><input type="number" className="field" value={s.max_clip_seconds} onChange={num("max_clip_seconds")} /></Row>
-                  <Row label="Contexto antes do acontecimento (s)"><input type="number" className="field" value={s.pre_context_seconds} onChange={num("pre_context_seconds")} /></Row>
-                  <Row label="Contexto depois do acontecimento (s)"><input type="number" className="field" value={s.post_context_seconds} onChange={num("post_context_seconds")} /></Row>
+                  <Row advanced label="Contexto antes do acontecimento (s)"><input type="number" className="field" value={s.pre_context_seconds} onChange={num("pre_context_seconds")} /></Row>
+                  <Row advanced label="Contexto depois do acontecimento (s)"><input type="number" className="field" value={s.post_context_seconds} onChange={num("post_context_seconds")} /></Row>
                 </Section>
               </>
             )}
             {view.key === "modelos" && (
               <>
-                <Section title="Transcrição">
+                <Section title="Transcrição" advanced>
                   <Row label="Modelo de transcrição" hint="Maior é mais preciso e usa mais CPU no servidor 206.">
                     <select className="field" value={s.whisper_model} onChange={sel("whisper_model")}>
                       <option value="tiny">Whisper tiny</option><option value="base">Whisper base</option><option value="small">Whisper small</option>
@@ -145,7 +175,7 @@ export default function Settings() {
                     </select>
                   </Row>
                 </Section>
-                <Section title="Análise visual">
+                <Section title="Análise visual" advanced>
                   <Row label="Analisar os quadros dos momentos candidatos">
                     <input type="checkbox" className="h-4 w-4" checked={s.vision_enabled} onChange={bool("vision_enabled")} />
                   </Row>
@@ -172,7 +202,7 @@ export default function Settings() {
                     <input type="number" className="field" min={0} max={30} value={s.analysis_context_seconds} onChange={num("analysis_context_seconds")} />
                   </Row>
                 </Section>
-                <Section title="Diretor e narrativa">
+                <Section title="Diretor e narrativa" advanced>
                   <Row label="Usar o diretor automático" hint="Combina fala, som e visão para decidir início, fim e se o corte fica.">
                     <input type="checkbox" className="h-4 w-4" checked={s.director_enabled} onChange={bool("director_enabled")} />
                   </Row>
@@ -193,20 +223,20 @@ export default function Settings() {
                   <Row label="Usar o Quality Gate" hint="Separa a qualidade do acontecimento da qualidade do corte: um bom momento mal cortado é reeditado antes de ser descartado.">
                     <input type="checkbox" className="h-4 w-4" checked={s.gate_enabled} onChange={bool("gate_enabled")} />
                   </Row>
-                  <Row label="Acontecimento mínimo (0–10)" hint="Abaixo disso (e fora da margem de dúvida) o momento é rejeitado.">
+                  <Row advanced label="Acontecimento mínimo (0–10)" hint="Abaixo disso (e fora da margem de dúvida) o momento é rejeitado.">
                     <input type="number" step={0.1} min={0} max={10} className="field" value={s.gate_event_min} onChange={num("gate_event_min")} />
                   </Row>
-                  <Row label="Narrativa mínima para 'pronto' (0–10)">
+                  <Row advanced label="Narrativa mínima para 'pronto' (0–10)">
                     <input type="number" step={0.1} min={0} max={10} className="field" value={s.gate_narrative_min} onChange={num("gate_narrative_min")} />
                   </Row>
-                  <Row label="Potencial mínimo para reeditar (0–10)">
+                  <Row advanced label="Potencial mínimo para reeditar (0–10)">
                     <input type="number" step={0.1} min={0} max={10} className="field" value={s.gate_recovery_min} onChange={num("gate_recovery_min")} />
                   </Row>
-                  <Row label="Reedições automáticas por corte" hint="Limite para não processar sem fim.">
+                  <Row advanced label="Reedições automáticas por corte" hint="Limite para não processar sem fim.">
                     <input type="number" min={0} max={5} className="field" value={s.gate_max_rework} onChange={num("gate_max_rework")} />
                   </Row>
                 </Section>
-                <Section title="Peso de cada critério">
+                <Section title="Peso de cada critério" advanced>
                   {Object.entries(s.weights).map(([k, v]) => (
                     <Row key={k} label={dimensionLabel[k] ?? k}>
                       <div className="flex items-center gap-3">
@@ -229,13 +259,13 @@ export default function Settings() {
                       <option value="minimalista">Minimalista: legenda limpa, sem zoom nem título</option>
                     </select>
                   </Row>
-                  <Row label="Intensidade do zoom no pico" hint="0 desliga. O zoom nunca passa de 1,35x.">
+                  <Row advanced label="Intensidade do zoom no pico" hint="0 desliga. O zoom nunca passa de 1,35x.">
                     <div className="flex items-center gap-3">
                       <input type="range" min={0} max={1.5} step={0.1} value={s.zoom_intensity} onChange={num("zoom_intensity")} className="w-full" aria-label="Intensidade do zoom" />
                       <span className="w-10 text-right text-sm">{s.zoom_intensity.toFixed(1)}</span>
                     </div>
                   </Row>
-                  <Row label="Normalizar o volume" hint="Ganho linear até -14 LUFS sem passar de -1 dBTP: não distorce nem comprime.">
+                  <Row advanced label="Normalizar o volume" hint="Ganho linear até -14 LUFS sem passar de -1 dBTP: não distorce nem comprime.">
                     <input type="checkbox" className="h-4 w-4" checked={s.normalize_audio} onChange={bool("normalize_audio")} />
                   </Row>
                 </Section>
@@ -245,13 +275,13 @@ export default function Settings() {
                       <option value="shadow">Sombra (comparar antes)</option><option value="on">Ligado</option><option value="off">Desligado</option>
                     </select>
                   </Row>
-                  <Row label="Pausa mínima removível (s)" hint="Silêncios maiores que isso podem ser cortados, nunca durante reações, o ponto alto ou o desfecho.">
+                  <Row advanced label="Pausa mínima removível (s)" hint="Silêncios maiores que isso podem ser cortados, nunca durante reações, o ponto alto ou o desfecho.">
                     <input type="number" step={0.1} min={0.4} max={3} className="field" value={s.editor_min_gap} onChange={num("editor_min_gap")} />
                   </Row>
-                  <Row label="Prévia do clímax no início" hint="Mostra 2–3 s do clímax com o aviso “Daqui a pouco…” e depois a sequência real, em ordem.">
+                  <Row advanced label="Prévia do clímax no início" hint="Mostra 2–3 s do clímax com o aviso “Daqui a pouco…” e depois a sequência real, em ordem.">
                     <input type="checkbox" className="h-4 w-4" checked={s.editor_teaser} onChange={bool("editor_teaser")} />
                   </Row>
-                  <Row label="Variantes automáticas por hora" hint="Orçamento de renderizações extras no servidor 206.">
+                  <Row advanced label="Variantes automáticas por hora" hint="Orçamento de renderizações extras no servidor 206.">
                     <input type="number" min={0} max={120} className="field" value={s.editor_variants_per_hour} onChange={num("editor_variants_per_hour")} />
                   </Row>
                   {(["police_chase", "shootout", "conflict", "funny_conversation", "scare"] as const).map((k) => (
@@ -265,7 +295,7 @@ export default function Settings() {
                   ))}
                 </Section>
                 <Section title="Legendas inteligentes">
-                  <Row label="Reconhecer quem está falando" hint="Separa a voz do streamer das outras (rádio, personagens). Confirme a voz na página Streamers.">
+                  <Row advanced label="Reconhecer quem está falando" hint="Separa a voz do streamer das outras (rádio, personagens). Confirme a voz na página Streamers.">
                     <input type="checkbox" className="h-4 w-4" checked={s.speakers_enabled} onChange={bool("speakers_enabled")} />
                   </Row>
                   <Row label="O que legendar" hint="“Só o streamer” vale apenas depois que você confirmar a voz; antes disso as outras vozes aparecem menores.">
@@ -291,7 +321,7 @@ export default function Settings() {
                       <option value="low">Embaixo</option><option value="middle">Meio</option><option value="high">Alto</option>
                     </select>
                   </Row>
-                  <Row label="Animação">
+                  <Row advanced label="Animação">
                     <select className="field" value={s.caption_animation} onChange={sel("caption_animation")}>
                       <option value="highlight">Palavra falada em destaque</option><option value="pop">Destaque com pulo</option><option value="none">Sem animação</option>
                     </select>
@@ -306,15 +336,15 @@ export default function Settings() {
                   </Row>
                 </Section>
                 <Section title="Exportação">
-                  <Row label="Qualidade (CRF)" hint="Menor é melhor e gera arquivos maiores. 18 a 23 é o usual.">
+                  <Row advanced label="Qualidade (CRF)" hint="Menor é melhor e gera arquivos maiores. 18 a 23 é o usual.">
                     <input type="number" className="field" min={14} max={32} value={s.export_crf} onChange={num("export_crf")} />
                   </Row>
-                  <Row label="Velocidade do codificador">
+                  <Row advanced label="Velocidade do codificador">
                     <select className="field" value={s.export_preset} onChange={sel("export_preset")}>
                       {["ultrafast", "veryfast", "faster", "fast", "medium", "slow"].map((p) => <option key={p}>{p}</option>)}
                     </select>
                   </Row>
-                  <Row label="Quadros por segundo"><input type="number" className="field" min={24} max={60} value={s.export_fps} onChange={num("export_fps")} /></Row>
+                  <Row advanced label="Quadros por segundo"><input type="number" className="field" min={24} max={60} value={s.export_fps} onChange={num("export_fps")} /></Row>
                   <Row label="Estilo de legenda padrão">
                     <select className="field" value={s.caption_style} onChange={sel("caption_style")}>
                       <option value="bold">Destaque</option><option value="clean">Limpa</option><option value="boxed">Com fundo</option><option value="none">Sem legenda</option>
@@ -358,14 +388,14 @@ export default function Settings() {
             )}
             {view.key === "operacao" && (
               <>
-                <Section title="Limites de processamento">
+                <Section title="Limites de processamento" advanced>
                   <Row label="Renderizações em paralelo (todos os servidores)"><input type="number" className="field" min={1} max={16} value={s.max_parallel_renders} onChange={num("max_parallel_renders")} /></Row>
                   <Row label="Análises de áudio em paralelo"><input type="number" className="field" min={1} max={32} value={s.max_parallel_audio} onChange={num("max_parallel_audio")} /></Row>
                   <Row label="Análises de formato (prints) por hora" hint="Viral Intelligence: roda nos servidores de visão com prioridade baixa, depois das lives.">
                     <input type="number" min={0} max={60} className="field" value={s.refs_analyses_per_hour} onChange={num("refs_analyses_per_hour")} />
                   </Row>
                 </Section>
-                <Section title="Retenção de vídeos">
+                <Section title="Retenção de vídeos" advanced>
                   <Row label="Apagar rejeitados após (dias)" hint="0 mantém para sempre."><input type="number" className="field" min={0} value={s.retention_rejected_days} onChange={num("retention_rejected_days")} /></Row>
                   <Row label="Apagar não revisados após (dias)"><input type="number" className="field" min={0} value={s.retention_unreviewed_days} onChange={num("retention_unreviewed_days")} /></Row>
                   <Row label="Apagar aprovados após (dias)"><input type="number" className="field" min={0} value={s.retention_approved_days} onChange={num("retention_approved_days")} /></Row>
@@ -377,6 +407,7 @@ export default function Settings() {
       )}
       </div>
       </div>
+      </Advanced.Provider>
     </div>
   );
 }

@@ -22,7 +22,7 @@ type Profile = { id: number; name: string; item_id: number | null; status: strin
   params: Params; has_image: boolean; has_avatar: boolean; analysis: { vlm?: Record<string, string>; vlm_error?: string };
   measured: { split?: number | null; caption?: { center: number } | null; badge?: string | null; faces?: unknown[] } };
 
-const TABS = [["refs", "Biblioteca"], ["cols", "Coleções"], ["formats", "Perfis de formato"], ["caps", "Capacidades das APIs"]] as const;
+const TABS = [["refs", "Exemplos guardados"], ["formats", "Perfis de formato"], ["cols", "Coleções"], ["caps", "O que cada plataforma permite"]] as const;
 const list = (s: string) => s.split(/[,;]+/).map((x) => x.trim()).filter(Boolean);
 const capabilityTone = { comprovado: "success", parcial: "warning", indisponível: "danger", proibido: "danger" } as const;
 const formatStatus = {
@@ -32,11 +32,41 @@ const formatStatus = {
   failed: ["Falhou", "danger"],
 } as const;
 
+/** Three steps with real progress (counts from the API), so a first-time user knows where to start. */
+function Guide({ onGo }: { onGo: (tab: (typeof TABS)[number][0]) => void }) {
+  const refs = useQuery({ queryKey: ["refs", ""], queryFn: () => api.get<Item[]>("/api/refs/items?") });
+  const formats = useQuery({ queryKey: ["formats"], queryFn: () => api.get<Profile[]>("/api/refs/formats") });
+  const nRefs = refs.data?.length ?? 0;
+  const nProfiles = formats.data?.length ?? 0;
+  const ready = (formats.data ?? []).filter((f) => f.status === "ready").length;
+  const steps = [
+    { done: nRefs > 0, title: "Guarde um exemplo", text: nRefs ? `${nRefs} ${nRefs === 1 ? "exemplo guardado" : "exemplos guardados"}.` : "Cole o link de um corte que funciona e anote por quê.", tab: "refs" as const, action: "Ir para exemplos" },
+    { done: ready > 0, title: "Ensine um formato", text: ready ? `${ready} ${ready === 1 ? "perfil pronto" : "perfis prontos"}.` : nProfiles ? "Envie o print de um perfil para a IA analisar." : "Crie um perfil e envie um print autorizado.", tab: "formats" as const, action: "Ir para perfis" },
+    { done: false, title: "Teste num corte seu", text: ready ? "Escolha um corte no perfil pronto e gere a prévia." : "Disponível quando um perfil estiver pronto.", tab: "formats" as const, action: "Ir para perfis", locked: ready === 0 },
+  ];
+  if (refs.isLoading || formats.isLoading) return null;
+  return (
+    <ol className="guide-steps" aria-label="Como usar o laboratório">
+      {steps.map((st, i) => (
+        <li key={st.title} data-done={st.done || undefined}>
+          <span className="guide-number" aria-hidden>{st.done ? "✓" : i + 1}</span>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold">{st.title}{st.done && <span className="sr-only"> (feito)</span>}</p>
+            <p className="text-xs text-ink-muted">{st.text}</p>
+          </div>
+          <button type="button" className="btn-quiet" disabled={st.locked} onClick={() => onGo(st.tab)}>{st.action}</button>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export default function References() {
   const [tab, setTab] = useState<(typeof TABS)[number][0]>("refs");
   return (
     <div>
-      <PageHeader title="Laboratório de referências" description="Organize referências editoriais, extraia parâmetros visuais de prints e teste formatos em cortes próprios." />
+      <PageHeader title="Laboratório de referências" description="Guarde exemplos de cortes que funcionam, deixe a IA aprender o formato visual de um print e teste esse formato num corte seu." />
+      <Guide onGo={setTab} />
       <nav className="view-switch mb-5" aria-label="Áreas do laboratório">
         {TABS.map(([key, label]) => (
           <button key={key} type="button" className="view-switch-item" aria-pressed={tab === key}
@@ -132,7 +162,9 @@ function Refs() {
         </div>
       </section>
       {items.isLoading && <Skeleton label="Carregando referências" />}
-      {items.data?.length === 0 && <Empty title="Nenhuma referência encontrada">Ajuste os filtros ou adicione uma referência à biblioteca.</Empty>}
+      {items.data?.length === 0 && (filter.q || filter.platform || filter.collection
+        ? <Empty title="Nenhum exemplo com esses filtros">Limpe a busca ou escolha outra plataforma ou coleção.</Empty>
+        : <Empty title="Nenhum exemplo guardado ainda">Abra “Adicionar referência” acima e cole o link de um corte que você admira. Só o link e as suas anotações são guardados; o vídeo não é baixado.</Empty>)}
       <ErrorNote error={items.error || cols.error || refresh.error || patch.error || del.error || img.error || member.error} />
       <ul className="grid gap-3 md:grid-cols-2">
         {(items.data ?? []).map((it) => (

@@ -1,72 +1,51 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Activity, CalendarDays, ChevronDown, ChevronRight, Clapperboard, ClipboardCheck, Gauge,
-  HardDrive, Library, Link2, LogOut, Menu, Radio, ScrollText, Send, Server, SlidersHorizontal, AudioLines, X,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, LogOut, Menu, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api, type Stats } from "../api";
-import { distributionView } from "../lib/publishing";
+import { currentNav, staffNav } from "../lib/navigation";
 import { Brand } from "./Brand";
 import { ErrorNote } from "./ui";
 
-const groups = [
-  { label: "Operação", items: [
-    { to: "/", label: "Visão geral", icon: Gauge },
-    { to: "/streamers", label: "Lives e streamers", icon: Radio },
-    { to: "/diagnostico", label: "Diagnóstico", icon: Activity },
-  ] },
-  { label: "Conteúdo", items: [
-    { to: "/cortes", label: "Central de cortes", icon: Clapperboard },
-    { to: "/avaliacao", label: "Avaliação editorial", icon: ClipboardCheck },
-  ] },
-  { label: "Distribuição", items: [
-    { to: "/publicacao", label: "Publicações", icon: Send },
-    { to: "/publicacao?aba=calendario", label: "Calendário", icon: CalendarDays },
-    { to: "/publicacao?aba=contas", label: "Contas conectadas", icon: Link2 },
-  ] },
-  { label: "Inteligência", items: [
-    { to: "/diretor", label: "Diretor IA", icon: AudioLines },
-    { to: "/referencias", label: "Referências", icon: Library },
-    { to: "/ia", label: "Parâmetros", icon: SlidersHorizontal },
-  ] },
-  { label: "Administração", items: [
-    { to: "/infra", label: "Infraestrutura", icon: Server },
-    { to: "/armazenamento", label: "Armazenamento", icon: HardDrive },
-    { to: "/patch-notes", label: "Histórico de versões", icon: ScrollText },
-  ] },
-];
+function readOpen(): Record<string, boolean> {
+  try { return JSON.parse(localStorage.getItem("asc:nav-open") ?? "{}"); } catch { return {}; }
+}
 
-function WorkspaceNav({ current, count, onNavigate }: { current: string; count: number; onNavigate?: () => void }) {
+function WorkspaceNav({ path, aba, count, onNavigate }: { path: string; aba: string | null; count: number; onNavigate?: () => void }) {
   const id = useId();
-  const [closed, setClosed] = useState<Record<string, string>>({});
+  const [open, setOpen] = useState<Record<string, boolean>>(readOpen);
+  const toggle = (key: string, value: boolean) => setOpen((previous) => {
+    const next = { ...previous, [key]: value };
+    try { localStorage.setItem("asc:nav-open", JSON.stringify(next)); } catch { /* per-viewer convenience only */ }
+    return next;
+  });
   return (
     <nav className="workspace-nav" aria-label="Navegação principal">
-      {groups.map(({ label, items }, i) => {
-        const groupId = `${id}-${i}`;
-        const active = items.some(({ to }) => to === current);
-        const expanded = closed[label] === undefined || (active && closed[label] !== current);
+      {staffNav.map((group) => {
+        const groupId = `${id}-${group.key}`;
+        const active = group.items.some((item) => item.match(path, aba));
+        const expanded = !group.collapsible || active || Boolean(open[group.key]);
         return (
-          <div key={label} className="nav-group">
-            <button type="button" className="nav-group-toggle" data-current={active || undefined} aria-expanded={expanded} aria-controls={groupId}
-              onClick={() => setClosed((previous) => {
-                const next = { ...previous };
-                if (expanded) next[label] = current;
-                else delete next[label];
-                return next;
-              })}>
-              {label}<ChevronDown size={14} aria-hidden />
-            </button>
+          <div key={group.key} className="nav-group" data-secondary={group.collapsible || undefined}>
+            {group.collapsible ? (
+              <button type="button" className="nav-group-toggle" data-current={active || undefined} aria-expanded={expanded}
+                aria-controls={groupId} onClick={() => !active && toggle(group.key, !expanded)}>
+                {group.label}<ChevronDown size={14} aria-hidden />
+              </button>
+            ) : <p className="nav-group-label">{group.label}</p>}
             <ul id={groupId} hidden={!expanded}>
-              {items.map(({ to, icon: Icon, label: name }) => (
-                <li key={to}>
-                  <Link to={to} className="workspace-link" aria-current={to === current ? "page" : undefined} onClick={onNavigate}>
-                    <Icon size={16} strokeWidth={1.75} aria-hidden />
-                    <span>{name}</span>
-                    {to === "/cortes" && count > 0 && <span className="nav-count" aria-label={`${count} cortes para revisar`}>{count}</span>}
-                  </Link>
-                </li>
-              ))}
+              {group.items.map(({ to, icon: Icon, label, match, badge }) => {
+                const current = match(path, aba);
+                return (
+                  <li key={to}>
+                    <Link to={to} className="workspace-link" aria-current={current ? "page" : undefined} onClick={onNavigate}>
+                      <Icon size={16} strokeWidth={1.75} aria-hidden />
+                      <span>{label}</span>
+                      {badge === "review" && count > 0 && <span className="nav-count" aria-label={`${count} cortes para revisar`}>{count}</span>}
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         );
@@ -79,14 +58,14 @@ export default function Layout({ email }: { email: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { pathname, search, hash } = useLocation();
-  const section = `/${pathname.split("/")[1] ?? ""}`;
-  const distribution = section === "/publicacao" ? distributionView(new URLSearchParams(search)) : undefined;
-  const current = distribution && ["contas", "calendario"].includes(distribution.key) ? distribution.to : section;
+  const aba = new URLSearchParams(search).get("aba");
+  const where = currentNav(pathname, aba);
+  const section = pathname.split("/")[1] ?? "";
   useEffect(() => {
     if (!hash) window.scrollTo(0, 0);
-  }, [current, hash]);
-  const group = groups.find(({ items }) => items.some(({ to }) => to === current));
-  const page = distribution?.label ?? group?.items.find(({ to }) => to === current)?.label;
+  }, [section, aba, hash]);
+  const group = where?.group;
+  const page = where?.item.label;
   const drawer = useRef<HTMLDialogElement>(null);
   const [logoutError, setLogoutError] = useState<unknown>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -123,7 +102,7 @@ export default function Layout({ email }: { email: string }) {
     <div className="workspace">
       <a className="skip-link" href="#conteudo">Ir para o conteúdo</a>
       <aside className="workspace-sidebar">
-        <WorkspaceNav current={current} count={toReview} />
+        <WorkspaceNav path={pathname} aba={aba} count={toReview} />
         <div className="sidebar-footer">
           <Link to="/patch-notes" className="font-mono text-xs">v{__APP_VERSION__}</Link>
           <span>HowTo.Software</span>
@@ -162,7 +141,7 @@ export default function Layout({ email }: { email: string }) {
                 <h2 className="display text-lg">Minha conta</h2>
                 <div className="border-b border-suite-line pb-3">
                   <div className="break-all text-sm font-medium">{email}</div>
-                  <p className="mt-1 text-xs text-ink-muted">HTS / HowTo.Software</p>
+                  <p className="mt-1 text-xs text-ink-muted">Administrador da equipe · HTS</p>
                 </div>
                 <button type="button" onClick={logout} disabled={isLoggingOut} className="btn-quiet mt-3 w-full">
                   <LogOut size={15} aria-hidden />{isLoggingOut ? "Saindo…" : "Sair"}
@@ -192,7 +171,7 @@ export default function Layout({ email }: { email: string }) {
             <Link to="/" onClick={() => drawer.current?.close()}><Brand /></Link>
             <button type="button" autoFocus className="icon-action" onClick={() => drawer.current?.close()} aria-label="Fechar navegação"><X size={18} aria-hidden /></button>
           </div>
-          <WorkspaceNav current={current} count={toReview} onNavigate={() => drawer.current?.close()} />
+          <WorkspaceNav path={pathname} aba={aba} count={toReview} onNavigate={() => drawer.current?.close()} />
         </div>
       </dialog>
     </div>

@@ -152,27 +152,33 @@ export function Disclosure({ title, children }: { title: string; children: React
   );
 }
 
-export function ConfirmAction({ title, description, confirmLabel, pending, onConfirm, children }: {
+/** Opens a dialog and runs `onConfirm` only after the explicit second click. Backwards compatible defaults. */
+export function ConfirmAction({ title, description, confirmLabel, pending, disabled, tone = "danger", onConfirm, children, label }: {
   title: string;
-  description: string;
+  description: ReactNode;
   confirmLabel: string;
   pending?: boolean;
+  disabled?: boolean;
+  tone?: "danger" | "quiet";
   onConfirm: () => void;
   children: ReactNode;
+  /** Accessible name of the trigger when its visible text is not specific enough (e.g. several "Revogar" in a list). */
+  label?: string;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const id = useId();
   return (
     <>
-      <button type="button" className="btn-danger" disabled={pending} onClick={() => dialog.current?.showModal()}>
+      <button type="button" className={tone === "danger" ? "btn-danger" : "btn-quiet"} disabled={pending || disabled} aria-label={label}
+        onClick={() => dialog.current?.showModal()}>
         {children}
       </button>
       <dialog ref={dialog} className="confirmation-modal" aria-labelledby={id} aria-describedby={id + "-description"}>
         <h2 id={id} className="display text-xl">{title}</h2>
-        <p id={id + "-description"} className="mt-2 text-sm text-ink-muted">{description}</p>
+        <div id={id + "-description"} className="mt-2 space-y-2 text-sm text-ink-muted">{description}</div>
         <div className="mt-6 flex flex-wrap justify-end gap-2">
           <button type="button" className="btn-quiet" onClick={() => dialog.current?.close()}>Voltar</button>
-          <button type="button" className="btn-danger" disabled={pending} onClick={() => {
+          <button type="button" className={tone === "danger" ? "btn-danger" : "btn-take"} disabled={pending} onClick={() => {
             dialog.current?.close();
             onConfirm();
           }}>{confirmLabel}</button>
@@ -180,4 +186,10 @@ export function ConfirmAction({ title, description, confirmLabel, pending, onCon
       </dialog>
     </>
   );
+}
+
+const decisionTone = { sugestao: "decision-suggestion", confirmado: "decision-confirmed", automatico: "decision-auto" } as const;
+/** Suggestion, confirmed or automatic: always icon shape + text, never colour alone. */
+export function DecisionChip({ kind, label }: { kind: "sugestao" | "confirmado" | "automatico"; label: string }) {
+  return <span className={`decision-chip ${decisionTone[kind]}`}><span className="decision-mark" aria-hidden />{label}</span>;
 }

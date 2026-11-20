@@ -6,6 +6,13 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.7.1", "date": "2026-11-19", "title": "Painel organizado por tarefa", "items": [
+        "Nova tela Hoje: mostra primeiro o que precisa de você (cortes, sugestões de publicação, envios incertos e falhas).",
+        "Central de cortes: barra Aprovar/Rejeitar/Próximo sempre à mão no celular, “Por que este corte?” em linguagem simples e atalhos com ?.",
+        "Agenda semanal: sugestão da IA, confirmado e automático têm formatos diferentes; a pausa de emergência pede confirmação.",
+        "Diretor IA responde: o que aconteceu, por que importa, o que a IA decidiu e o resultado. O técnico fica em Avançado.",
+        "Pessoas e acesso, aba Compartilhar e Minha Biblioteca para contas convidadas.",
+    ]},
     {"version": "0.7.0", "date": "2026-11-19", "title": "Contas e vídeos compartilhados", "items": [
         "O administrador cria contas (sem cadastro público e sem envio de e-mail) e compartilha cortes renderizados com elas.",
         "Contas externas só assistem ao que foi liberado; download e variantes são permissões separadas.",

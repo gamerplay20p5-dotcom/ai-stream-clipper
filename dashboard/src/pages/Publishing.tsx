@@ -6,7 +6,8 @@ import { api, type Streamer } from "../api";
 import { Disclosure, Empty, ErrorNote, Notice, PageHeader, Skeleton } from "../components/ui";
 import { distributionView, distributionViews } from "../lib/publishing";
 import PrivacyPicker, { initialPrivacy } from "../components/PrivacyPicker";
-import { EditorialCalendar, PauseBanner, Reports } from "../components/EditorialOps";
+import { Reports } from "../components/EditorialOps";
+import Agenda, { PauseControl } from "../components/Agenda";
 
 export type PubApp = { platform: string; name: string; configured: boolean; client_id: string; has_secret: boolean; redirect_uri: string; validated: boolean; config_id: string; callback_url: string; flow: string };
 export type PubAccount = { id: number; platform: string; platform_name: string; name: string; handle: string; status: string;
@@ -46,27 +47,29 @@ export default function Publishing() {
   const view = distributionView(qs);
   const ov = useQuery({ queryKey: ["publish-overview"], queryFn: () => api.get<Overview>("/api/publish/overview"), refetchInterval: 20_000 });
   const descriptions = {
-    publicacoes: "Acompanhe envios, falhas e resultados incertos. Horários de Brasília.",
-    calendario: "Revise propostas e horários dos próximos 14 dias no horário de Brasília.",
-    contas: "Gerencie as contas que recebem os cortes e as integrações OAuth.",
-    regras: "Defina permissões de republicação, horários e critérios editoriais.",
-    relatorios: "Consulte métricas oficiais de desempenho por plataforma.",
+    agenda: "O que vai ao ar e quando, no horário de Brasília. Sugestões da IA esperam a sua confirmação.",
+    envios: "Cada envio com o andamento, falhas e resultados que precisam de conferência.",
+    contas: "As contas que recebem os cortes e as integrações com cada plataforma.",
+    regras: "Quando a IA pode sugerir ou agendar sozinha, em quais horários e com qual privacidade.",
+    relatorios: "Visualizações e curtidas informadas pelas próprias plataformas.",
   };
+  const config = view.key === "contas" || view.key === "regras";
+  const tabs = distributionViews.filter((item) => (item.key === "contas" || item.key === "regras") === config);
   return (
     <div>
-      <PageHeader title={view.label} description={descriptions[view.key]} />
+      <PageHeader title={config ? "Contas e regras de publicação" : "Agenda de publicações"} description={descriptions[view.key]} />
       <nav className="view-switch mb-5" aria-label="Áreas da distribuição">
-        {distributionViews.map((item) => (
+        {tabs.map((item) => (
           <Link key={item.key} to={item.to} className="view-switch-item" aria-current={view.key === item.key ? "page" : undefined}>{item.label}</Link>
         ))}
       </nav>
       <div className="section-flow">
-        {(view.key === "publicacoes" || view.key === "calendario") && <PauseBanner />}
+        {view.key === "envios" && <PauseControl />}
         {qs.get("conectado") && <Notice>Conta conectada.</Notice>}
         {qs.get("erro") && <ErrorNote error={`Conexão não concluída: ${qs.get("erro")}`} />}
         <ErrorNote error={ov.error} />
-        {view.key === "publicacoes" && <Calendar accounts={ov.data?.accounts ?? []} />}
-        {view.key === "calendario" && <EditorialCalendar />}
+        {view.key === "envios" && <Calendar accounts={ov.data?.accounts ?? []} />}
+        {view.key === "agenda" && <Agenda />}
         {view.key === "contas" && (ov.data ? (
           <>
             <Accounts ov={ov.data} />
