@@ -23,7 +23,7 @@ x-hardening: &hardening
 x-app-env: &app-env
   ASC_ENV: production
   ASC_LOG_JSON: "true"
-  ASC_DATABASE_URL: postgresql+psycopg://asc:${ASC_DB_PASSWORD:?set ASC_DB_PASSWORD}@${ASC_DB_HOST:-postgres}:5432/asc
+  ASC_DATABASE_URL: postgresql+psycopg://asc:${ASC_DB_PASSWORD:?set ASC_DB_PASSWORD}@${ASC_DB_HOST:-postgres}:${ASC_DB_PORT:-5432}/asc
   ASC_INTERNAL_SECRET: ${ASC_INTERNAL_SECRET:?set ASC_INTERNAL_SECRET}
   ASC_API_URL: https://api:8780
   ASC_API_CA_FILE: /tls/ca.crt

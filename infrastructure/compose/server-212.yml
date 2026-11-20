@@ -1,0 +1,65 @@
+# Server 212 (hts-sql): dedicated database host, SHARED with other projects.
+# Only the asc PostgreSQL runs here, isolated: own container, own volume, own network, own port.
+#   * published only on 192.168.1.212:55432 (5432/3306/1433/27017 belong to other projects)
+#   * pg_hba (/opt/asc/pg, written by `asc-ctl init`): only user asc, database asc, from the API host 210
+#   * same major version as before (PostgreSQL 16), so a pg_dump restores 1:1
+# Deploy: sudo asc-ctl env-install asc.env (ASC_DB_PASSWORD only) ; sudo asc-ctl init ; sudo asc-ctl compose up postgres
+name: asc
+
+networks:
+  asc_net:
+    name: asc_net_212
+
+volumes:
+  asc_pgdata:
+    name: asc_pgdata
+
+services:
+  postgres:
+    image: postgres:16.4-bookworm
+    container_name: asc-postgres
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      POSTGRES_DB: asc
+      POSTGRES_USER: asc
+      POSTGRES_PASSWORD: ${ASC_DB_PASSWORD:?set ASC_DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/asc-pg/pg_hba.conf
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - shared_buffers=8GB
+      - -c
+      - effective_cache_size=24GB
+      - -c
+      - work_mem=32MB
+      - -c
+      - maintenance_work_mem=1GB
+      - -c
+      - max_connections=200
+      - -c
+      - random_page_cost=2.0
+      - -c
+      - wal_compression=on
+    volumes:
+      - { type: volume, source: asc_pgdata, target: /var/lib/postgresql/data }
+      - { type: bind, source: /opt/asc/pg, target: /etc/asc-pg, read_only: true }
+    ports:
+      - { host_ip: 192.168.1.212, target: 5432, published: "55432", protocol: tcp }
+    networks: [asc_net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asc -d asc"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits: { cpus: "4", memory: 32g }
+    shm_size: 2g
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
