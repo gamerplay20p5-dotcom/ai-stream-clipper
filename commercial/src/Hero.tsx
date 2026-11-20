@@ -154,6 +154,11 @@ function ProductPreview({ t }: { t: Editorial }) {
           <span className="fake-button"><Scissors size={14} />{hero.generate}</span>
         </div>
       </div>
+      {/* Neon "VI" outline from the approved mockup, included at the owner's request (2026-11-20) */}
+      <svg className="neon-vi" viewBox="0 0 200 120" aria-hidden="true" focusable="false">
+        <path d="M8 6h34l30 74 30-74h34l-48 108h-32z" />
+        <path d="M150 6h34v108h-34z" />
+      </svg>
       <div className="short-card" aria-hidden="true">
         <span className="short-label">{hero.short} · 0:05</span>
         <img src="/media/short-vertical.webp" width="450" height="800" alt="" />

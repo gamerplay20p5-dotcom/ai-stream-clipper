@@ -77,7 +77,8 @@ O que segue o mockup:
 Refinamentos em relação ao mockup:
 - Os botões usam exatamente `#FF4F62` com texto branco em tamanho grande (≥ 18,67 px em negrito), o que atende o WCAG AA para texto grande. Selos e o CTA do cabeçalho, que são menores, usam texto escuro.
 - O selo do Creator diz **"Recomendado"**, não "Mais escolhido". Ainda não há clientes, e a frase seria uma afirmação sem dado.
-- O "VI" grande do mockup foi omitido. É o logotipo de GTA VI, e o pedido proíbe usar marcas protegidas sem autorização. Qualquer outra arte do jogo também ficou de fora.
+- O "VI" néon do mockup foi incluído (SVG próprio, decorativo, atrás do Short, oculto no celular) por **decisão explícita da HTS em 20/11/2026**, que assumiu o risco de usar a marca. Ele lembra o logotipo de GTA VI: convém uma avaliação jurídica antes da publicação. Nenhuma outra arte do jogo foi usada.
+- O céu do hero continua em SVG por decisão da HTS. Quando houver créditos do ForgeGUI (a partir de 14/12), ele pode ser trocado por uma imagem gerada num commit separado.
 - Os marcadores de acerto viraram coral, no lugar do verde, para não introduzir uma cor fora da paleta.
 - "Como funciona" virou uma demonstração interativa ao lado do estúdio. Os planos ficaram numa seção própria com comparação completa, em vez de dividirem a mesma faixa. Com as duas lado a lado, a demonstração ficaria pequena demais para operar.
 
@@ -175,7 +176,8 @@ Detalhes:
 
 1. **Lives simultâneas do Creator:** `catalog.json` define 2. O estudo comercial v2 (PR #17) recomendava 1 no Basic e no Creator, deixando 2 só no Pro, para proteger a capacidade. A landing exibe o catálogo (2) e o mockup também. Precisa de decisão comercial antes da publicação.
 2. **Selo "Mais escolhido"** do mockup substituído por "Recomendado", até haver dados de clientes.
-3. **Privacidade e termos** continuam como documentos em preparação, como antes. Precisam ser publicados antes do lançamento.
+3. **"VI" néon:** incluído a pedido da HTS. Avaliar o risco de marca antes de publicar.
+4. **Privacidade e termos** continuam como documentos em preparação, como antes. Precisam ser publicados antes do lançamento.
 
 ## Descrição do PR
 
