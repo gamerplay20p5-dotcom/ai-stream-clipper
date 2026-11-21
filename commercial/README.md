@@ -39,15 +39,19 @@ O padrão é `commercial/data/waitlist.sqlite`. O banco guarda os dados de conta
 | `COMMERCIAL_PORT` | `8790` | Porta do serviço e destino do proxy de desenvolvimento. |
 | `COMMERCIAL_HOST` | `127.0.0.1` | Interface de escuta do serviço. |
 | `COMMERCIAL_TRUST_PROXY` | vazio | IP ou sub-rede do proxy confiável, quando aplicável. |
-| `COMMERCIAL_ORIGIN` | vazio | Origem pública no momento do build para gerar URLs absolutas em Open Graph e links alternativos por idioma. |
+| `COMMERCIAL_ORIGIN` | vazio | Origem pública: URLs absolutas em Open Graph, links alternativos por idioma e URLs de retorno do Stripe. |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | vazio | Chave e segredo do webhook do Stripe. Sem eles, o checkout fica desligado. |
+| `STRIPE_PORTAL_LOGIN_URL` | vazio | Link de login do portal do cliente do Stripe, opcional. |
 
 Para uma futura publicação, use um volume persistente fora da raiz servida e proteja o acesso ao arquivo e aos backups. Configure HTTPS no proxy. Ao ativar `COMMERCIAL_TRUST_PROXY`, restrinja o acesso direto ao serviço e configure o proxy para sobrescrever os cabeçalhos de encaminhamento recebidos do cliente. O limite de inscrições é por IP e por processo.
 
-## Cadastro e cobrança futuros
+## Pagamentos (Stripe)
 
-`catalog.json` concentra os IDs estáveis dos planos, franquias, mercados e valores mensais em centavos. O formulário salva esses IDs como **interesse**, sem criar conta, reserva ou assinatura. Uma integração futura pode associar esses IDs aos produtos de cobrança e usar a lista de espera para convidar criadores. O preço mostrado na landing é provisório.
+O checkout por assinatura usa o Stripe e segue o mesmo desenho do projeto de referência HowTo-Software/website.blog. Ele fica desligado até `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` e `COMMERCIAL_ORIGIN` estarem configurados. Até lá, os planos levam à lista de espera.
+- **Preços:** saem de `catalog.json` e são criados no Stripe com `npm run stripe:sync`. O servidor confere o preço do Stripe contra o catálogo antes de cada checkout.
+- **Assinaturas e faturas:** o webhook `POST /api/stripe/webhook` as registra no mesmo SQLite. O comando `npm run billing:report` resume o que foi registrado.
 
-As franquias e os recursos seguem a proposta revisada do [estudo comercial do PR #17](https://github.com/gamerplay20p5-dotcom/ai-stream-clipper/pull/17). Kick é uma opção de pesquisa no formulário.
+Ativação em modo de teste, eventos tratados, segurança e a lista do que fazer antes de cobrar de verdade estão em [docs/STRIPE.md](docs/STRIPE.md). As variáveis ficam em [.env.example](.env.example).
 
 ## Antes de publicar
 

@@ -45,6 +45,26 @@ export const content = {
       },
       interest: (name: string) => `Quero o ${name}`,
     },
+    billing: {
+      subscribe: (name: string) => `Assinar o ${name}`,
+      redirecting: 'Abrindo o pagamento seguro…',
+      orWaitlist: 'Ou entre na lista de espera',
+      secure: 'Pagamento processado pelo Stripe. A HTS não recebe nem armazena os dados do seu cartão',
+      errors: {
+        rate: 'Você fez várias tentativas. Aguarde alguns minutos e tente novamente.',
+        unavailable: 'Não foi possível abrir o pagamento agora. Tente novamente em instantes.',
+      },
+      manage: 'Gerenciar assinatura',
+      dismiss: 'Fechar aviso',
+      notice: {
+        checking: { title: 'Confirmando seu pagamento', detail: 'Estamos consultando o Stripe' },
+        confirmed: { title: 'Assinatura confirmada', detail: (plan: string) => `O pagamento do plano ${plan} foi aprovado. O recibo chega por e-mail, e a HTS enviará as instruções de acesso.` },
+        processing: { title: 'Pagamento em processamento', detail: () => 'O Stripe ainda está confirmando o pagamento. Você receberá um e-mail assim que ele for aprovado.' },
+        incomplete: { title: 'Pagamento não concluído', detail: () => 'O pagamento não foi finalizado e nenhuma cobrança foi feita. Você pode tentar de novo pelos planos.' },
+        cancelled: { title: 'Pagamento cancelado', detail: () => 'Nenhuma cobrança foi feita. Os planos continuam disponíveis quando você quiser.' },
+        unknown: { title: 'Não foi possível confirmar agora', detail: () => 'Se o pagamento foi aprovado, o recibo chega por e-mail. Atualize a página em alguns minutos para conferir.' },
+      },
+    },
     waitlist: {
       title: 'Seu canal no acesso antecipado',
       detail: 'Conte onde você transmite e qual plano combina com seu canal, e avisaremos por e-mail quando houver novos convites',
@@ -116,6 +136,26 @@ export const content = {
         pro: { tagline: 'For professional creators and teams', ai: 'Selective premium AI' },
       },
       interest: (name: string) => `Choose ${name}`,
+    },
+    billing: {
+      subscribe: (name: string) => `Subscribe to ${name}`,
+      redirecting: 'Opening secure checkout…',
+      orWaitlist: 'Or join the waitlist',
+      secure: 'Payments are processed by Stripe. HTS never receives or stores your card details',
+      errors: {
+        rate: 'You’ve made several attempts. Wait a few minutes and try again.',
+        unavailable: 'We couldn’t open checkout right now. Please try again in a moment.',
+      },
+      manage: 'Manage subscription',
+      dismiss: 'Dismiss notice',
+      notice: {
+        checking: { title: 'Confirming your payment', detail: 'We’re checking with Stripe' },
+        confirmed: { title: 'Subscription confirmed', detail: (plan: string) => `Your ${plan} payment was approved. Your receipt is on its way by email, and HTS will send your access instructions.` },
+        processing: { title: 'Payment processing', detail: () => 'Stripe is still confirming your payment. We’ll email you as soon as it’s approved.' },
+        incomplete: { title: 'Payment not completed', detail: () => 'The payment wasn’t finished and you haven’t been charged. You can try again from the plans.' },
+        cancelled: { title: 'Payment cancelled', detail: () => 'You haven’t been charged. The plans are here whenever you’re ready.' },
+        unknown: { title: 'We couldn’t confirm it yet', detail: () => 'If your payment went through, your receipt will arrive by email. Refresh the page in a few minutes to check.' },
+      },
     },
     waitlist: {
       title: 'Get early access for your channel',

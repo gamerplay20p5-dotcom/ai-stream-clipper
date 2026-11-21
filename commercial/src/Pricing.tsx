@@ -1,5 +1,7 @@
-import { ArrowUpRight, Check, Crown, Minus, Plus, Sparkles } from 'lucide-react'
-import type { Copy } from './content'
+import { useState } from 'react'
+import { ArrowUpRight, Check, Crown, LoaderCircle, Lock, Minus, Plus, Sparkles } from 'lucide-react'
+import { startCheckout, type BillingConfig, type CheckoutError } from './billing'
+import type { Copy, Language } from './content'
 import { formatPrice, planIds, plans, type Market, type PlanId } from './market'
 
 interface Props {
@@ -7,6 +9,8 @@ interface Props {
   market: Market
   onMarket: (market: Market) => void
   onInterest: (plan: PlanId) => void
+  billing: BillingConfig
+  language: Language
 }
 
 export function MarketSwitch({ market, onMarket, label }: Pick<Props, 'market' | 'onMarket'> & { label: string }) {
@@ -27,8 +31,19 @@ function planFeatures(id: PlanId, t: Copy['pricing']) {
   return [...common, t.rows.secondPass, t.rows.variants, t.exportLimit(plan.export4k), t.rows.priority]
 }
 
-export function Pricing({ copy, market, onMarket, onInterest }: Props) {
+export function Pricing({ copy, market, onMarket, onInterest, billing, language }: Props) {
   const t = copy.pricing
+  const b = copy.billing
+  const [pending, setPending] = useState<PlanId | null>(null)
+  const [error, setError] = useState<CheckoutError | null>(null)
+
+  async function subscribe(plan: PlanId) {
+    setPending(plan)
+    setError(null)
+    const problem = await startCheckout(plan, market, language)
+    // On success the browser is already leaving for Stripe Checkout
+    if (problem) { setError(problem); setPending(null) }
+  }
   const included = <><Check className="included" size={17} aria-hidden="true" /><span className="sr-only">{t.yes}</span></>
   const excluded = <><Minus size={16} aria-hidden="true" /><span className="sr-only">{t.no}</span></>
   const rows = [
@@ -69,12 +84,26 @@ export function Pricing({ copy, market, onMarket, onInterest }: Props) {
                 <ul className="plan-features" role="list">
                   {planFeatures(id, t).map(item => <li key={item}><Check size={16} aria-hidden="true" />{item}</li>)}
                 </ul>
-                <a className={`button ${id === 'creator' ? 'primary' : 'outline'}`} href="#acesso" onClick={() => onInterest(id)}>{t.interest(plan.name)}<ArrowUpRight size={16} aria-hidden="true" /></a>
+                {billing.enabled ? (
+                  <div className="plan-actions">
+                    <button type="button" className={`button ${id === 'creator' ? 'primary' : 'outline'}`} disabled={pending !== null} aria-busy={pending === id} onClick={() => subscribe(id)}>
+                      {pending === id ? <>{b.redirecting}<LoaderCircle className="form-spinner" size={16} aria-hidden="true" /></> : <>{b.subscribe(plan.name)}<ArrowUpRight size={16} aria-hidden="true" /></>}
+                    </button>
+                    <a className="plan-waitlist" href="#acesso" onClick={() => onInterest(id)}>{b.orWaitlist}</a>
+                  </div>
+                ) : (
+                  <a className={`button ${id === 'creator' ? 'primary' : 'outline'}`} href="#acesso" onClick={() => onInterest(id)}>{t.interest(plan.name)}<ArrowUpRight size={16} aria-hidden="true" /></a>
+                )}
               </article>
             )
           })}
         </div>
-        <div className="pricing-notes"><p><Check size={15} aria-hidden="true" />{t.shared}</p><p>{t.provisional}</p></div>
+        <div className="checkout-feedback" role="status">{error ? <p className="form-error">{b.errors[error]}</p> : null}</div>
+        <div className="pricing-notes">
+          <p><Check size={15} aria-hidden="true" />{t.shared}</p>
+          {billing.enabled ? <p className="secure-note"><Lock size={14} aria-hidden="true" />{b.secure}</p> : null}
+          <p>{t.provisional}</p>
+        </div>
         <div className="comparison">
           <h3 id="compare-heading">{t.compare}</h3>
           <div className="table-wrap">
