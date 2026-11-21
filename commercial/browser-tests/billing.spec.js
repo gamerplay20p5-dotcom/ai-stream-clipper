@@ -90,6 +90,14 @@ test('an InfinitePay return is confirmed by the server and offers no Stripe port
   expect(sent).toEqual({ orderNsu: 'asc-11111111-2222-3333-4444-555555555555', slug: 's1', transactionNsu: 't1' })
   await expect(page).toHaveURL(/\?lang=pt-BR&market=BR$/)
 
+  // Paid after an administrative cancellation: financial review, never a confirmation
+  await page.route('**/api/infinitepay/confirm', route => route.fulfill({ json: { result: 'review', plan: 'creator' } }))
+  await page.goto('/?lang=pt-BR&market=BR&checkout=success&provider=infinitepay&order_nsu=asc-11111111-2222-3333-4444-555555555555&slug=s1&transaction_nsu=t1')
+  await expect(page.getByRole('heading', { name: 'Pagamento em revisão financeira' })).toBeFocused()
+  await expect(page.locator('.checkout-notice')).toContainText('Nenhum acesso foi liberado')
+  await expect(page.locator('.checkout-notice')).not.toContainText('confirmad')
+  await expect(page.locator('.checkout-notice.is-review')).toHaveCount(1)
+
   await page.route('**/api/infinitepay/confirm', route => route.fulfill({ json: { result: 'processing', plan: 'creator' } }))
   await page.goto('/?lang=pt-BR&market=BR&checkout=success&provider=infinitepay&order_nsu=asc-11111111-2222-3333-4444-555555555555&slug=s1&transaction_nsu=t1')
   await expect(page.getByRole('heading', { name: 'Pagamento em processamento' })).toBeVisible()

@@ -114,6 +114,8 @@ export function migrateInfinitePay(db) {
       updated_at INTEGER NOT NULL
     ) STRICT;
     CREATE INDEX IF NOT EXISTS ip_subscriptions_email ON ip_subscriptions(email, plan, status);
+    -- Simultaneous checkouts of the same customer, plan and language share one pending subscription
+    CREATE UNIQUE INDEX IF NOT EXISTS ip_subscriptions_one_pending ON ip_subscriptions(email, plan, language) WHERE status = 'pending';
     CREATE TABLE IF NOT EXISTS ip_charges (
       order_nsu TEXT PRIMARY KEY,
       subscription_id TEXT NOT NULL REFERENCES ip_subscriptions(id),
@@ -123,6 +125,11 @@ export function migrateInfinitePay(db) {
       amount INTEGER NOT NULL CHECK (amount > 0),
       status TEXT NOT NULL CHECK (status IN ('creating', 'open', 'paid', 'expired', 'failed', 'refunded', 'reversal_review')),
       link_url TEXT NOT NULL DEFAULT '',
+      -- Exact /links payload, frozen at reservation: retries resend it byte for byte (idempotency), even
+      -- after a webhook token rotation or any other configuration change
+      request_json TEXT NOT NULL DEFAULT '',
+      -- '' or 'after_cancel': a confirmed payment that must not grant access and needs financial review
+      review TEXT NOT NULL DEFAULT '',
       valid_until INTEGER NOT NULL,
       link_attempts INTEGER NOT NULL DEFAULT 0,
       emailed_at INTEGER,
@@ -156,6 +163,10 @@ export function migrateInfinitePay(db) {
     CREATE TRIGGER IF NOT EXISTS ip_ledger_no_update BEFORE UPDATE ON ip_ledger BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
     CREATE TRIGGER IF NOT EXISTS ip_ledger_no_delete BEFORE DELETE ON ip_ledger BEGIN SELECT RAISE(ABORT, 'ledger is append-only'); END;
   `)
+  // Databases created by the first version of this module lack the newer columns
+  const columns = new Set(db.prepare('PRAGMA table_info(ip_charges)').all().map(column => column.name))
+  if (!columns.has('request_json')) db.exec("ALTER TABLE ip_charges ADD COLUMN request_json TEXT NOT NULL DEFAULT ''")
+  if (!columns.has('review')) db.exec("ALTER TABLE ip_charges ADD COLUMN review TEXT NOT NULL DEFAULT ''")
 }
 
 const copy = {
@@ -181,11 +192,9 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
 
   const q = {
     insertSubscription: db.prepare("INSERT INTO ip_subscriptions (id, email, plan, language, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)"),
-    reusableFirst: db.prepare(`SELECT c.* FROM ip_charges c JOIN ip_subscriptions s ON s.id = c.subscription_id
-      WHERE s.email = ? AND s.plan = ? AND s.language = ? AND s.status = 'pending' AND c.kind = 'first' AND c.status = 'open' AND c.valid_until > ?
-      ORDER BY c.created_at DESC LIMIT 1`),
-    insertCharge: db.prepare(`INSERT INTO ip_charges (order_nsu, subscription_id, cycle_key, kind, plan, amount, status, valid_until, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'creating', ?, ?)`),
+    pendingFor: db.prepare("SELECT * FROM ip_subscriptions WHERE email = ? AND plan = ? AND language = ? AND status = 'pending'"),
+    insertCharge: db.prepare(`INSERT INTO ip_charges (order_nsu, subscription_id, cycle_key, kind, plan, amount, status, request_json, valid_until, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'creating', ?, ?, ?)`),
     activeForCycle: db.prepare(`SELECT * FROM ip_charges WHERE subscription_id = ? AND cycle_key = ? AND status IN ${ACTIVE_CHARGE}`),
     opened: db.prepare("UPDATE ip_charges SET link_url = ?, status = 'open', link_attempts = link_attempts + 1 WHERE order_nsu = ? AND status = 'creating'"),
     attemptFailed: db.prepare('UPDATE ip_charges SET link_attempts = link_attempts + 1 WHERE order_nsu = ?'),
@@ -202,7 +211,10 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
     toAbandoned: db.prepare(`SELECT s.id FROM ip_subscriptions s WHERE s.status = 'pending'
       AND NOT EXISTS (SELECT 1 FROM ip_charges c WHERE c.subscription_id = s.id AND c.status IN ${ACTIVE_CHARGE})`),
     dueForRenewal: db.prepare(`SELECT * FROM ip_subscriptions WHERE status IN ('active', 'past_due') AND paid_until - ? <= ?`),
-    stuckCreating: db.prepare("SELECT * FROM ip_charges WHERE status = 'creating' AND kind = 'renewal' AND created_at <= ? AND valid_until > ?"),
+    // First and renewal charges left in 'creating' by a crash or network error, for live subscriptions only
+    stuckCreating: db.prepare(`SELECT c.* FROM ip_charges c JOIN ip_subscriptions s ON s.id = c.subscription_id
+      WHERE c.status = 'creating' AND c.created_at <= ? AND c.valid_until > ? AND s.status IN ('pending', 'active', 'past_due')`),
+    setReview: db.prepare('UPDATE ip_charges SET review = ? WHERE order_nsu = ?'),
     unsent: db.prepare(`SELECT c.*, s.email, s.language, s.paid_until AS access_until FROM ip_charges c JOIN ip_subscriptions s ON s.id = c.subscription_id
       WHERE c.kind = 'renewal' AND c.status = 'open' AND c.emailed_at IS NULL AND c.email_attempts < ? AND c.valid_until > ?
         AND s.status IN ('active', 'past_due')`),
@@ -232,7 +244,7 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
     if (status !== subscription.status) record(subscription.id, '', `status_${status}`, null, `from ${subscription.status}`)
   }
 
-  /** The documented /links body, rebuilt identically from the stored charge (the API treats identical requests idempotently). */
+  /** The documented /links body. Built once, when the charge is reserved, and stored in request_json. */
   function linkBody(charge, subscription) {
     const t = copy[subscription.language] ?? copy['pt-BR']
     return {
@@ -253,17 +265,20 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
 
   async function requestLink(charge, subscription) {
     try {
-      const url = linkUrl(await request('/links', linkBody(charge, subscription)))
+      // Always the stored payload: a retry must be identical to the first attempt
+      const body = charge.request_json ? JSON.parse(charge.request_json) : linkBody(charge, subscription)
+      const url = linkUrl(await request('/links', body))
       if (!url) throw Object.assign(new Error('InfinitePay link response without a usable URL'), { code: 'invalid_link_response' })
       if (q.opened.run(url, charge.order_nsu).changes) record(subscription.id, charge.order_nsu, 'link_created', charge.amount)
       return url
     } catch (error) {
       q.attemptFailed.run(charge.order_nsu)
-      const attempts = charge.link_attempts + 1
-      // First links fail fast (the buyer is waiting); renewals keep the same order_nsu and are retried later
-      if (charge.kind === 'first' || attempts >= MAX_LINK_ATTEMPTS) {
+      const attempts = q.charge.get(charge.order_nsu).link_attempts
+      // The charge stays 'creating' with the same order_nsu: the buyer's next click or the hourly job resends the
+      // identical payload, which InfinitePay may answer with the same link; after five attempts it is closed
+      if (attempts >= MAX_LINK_ATTEMPTS) {
         q.setChargeStatus.run('failed', charge.order_nsu, 'creating')
-        record(subscription.id, charge.order_nsu, charge.kind === 'first' ? 'link_failed' : 'link_gave_up', charge.amount, error.code ?? error.name)
+        record(subscription.id, charge.order_nsu, 'link_gave_up', charge.amount, error.code ?? error.name)
       }
       throw error
     }
@@ -273,8 +288,9 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
   function reserveCharge(subscription, kind, cycleKey, validUntil) {
     const orderNsu = `asc-${randomUUID()}`
     const amount = catalog.plans[subscription.plan].monthlyMinor[INFINITEPAY_MARKET]
+    const requestJson = JSON.stringify(linkBody({ order_nsu: orderNsu, plan: subscription.plan, amount, valid_until: validUntil }, subscription))
     try {
-      q.insertCharge.run(orderNsu, subscription.id, cycleKey, kind, subscription.plan, amount, validUntil, now())
+      q.insertCharge.run(orderNsu, subscription.id, cycleKey, kind, subscription.plan, amount, requestJson, validUntil, now())
     } catch (error) {
       if (String(error.message).includes('UNIQUE')) return null
       throw error
@@ -284,38 +300,64 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
 
   async function createCheckout({ plan, language, email }) {
     if (!enabled) throw Object.assign(new Error('InfinitePay is not configured'), { code: 'disabled' })
-    // A repeated click for the same email, plan and language reuses the open link instead of creating another charge
-    const existing = q.reusableFirst.get(email, plan, language, now() + 60 * 60)
-    if (existing) return existing.link_url
-    const id = randomUUID()
-    q.insertSubscription.run(id, email, plan, language, now(), now())
-    const subscription = q.subscription.get(id)
-    const charge = reserveCharge(subscription, 'first', 'first', now() + settings.firstLinkDays * DAY)
+    // One transaction (BEGIN IMMEDIATE serializes writers across processes): the same email, plan and language
+    // always share one pending subscription and one first charge, so double clicks, simultaneous requests and a
+    // retry after a crash reuse the same order_nsu instead of creating a second charge
+    const { subscription, charge, url } = transaction(() => {
+      const at = now()
+      let pending = q.pendingFor.get(email, plan, language)
+      if (!pending) {
+        q.insertSubscription.run(randomUUID(), email, plan, language, at, at)
+        pending = q.pendingFor.get(email, plan, language)
+      }
+      let current = q.activeForCycle.get(pending.id, 'first')
+      if (current?.status === 'open' && current.valid_until > at + 60 * 60) return { subscription: pending, charge: current, url: current.link_url }
+      if (current?.status === 'open') {
+        // About to expire: retire it locally (a payment that still arrives is honored) and issue a fresh link
+        q.setChargeStatus.run('expired', current.order_nsu, 'open')
+        record(pending.id, current.order_nsu, 'link_expired', null, 'replaced before checkout')
+        current = null
+      }
+      return { subscription: pending, charge: current ?? reserveCharge(pending, 'first', 'first', at + settings.firstLinkDays * DAY) ?? q.activeForCycle.get(pending.id, 'first') }
+    })
+    if (url) return url
+    // 'creating': first attempt, or recovery of an attempt interrupted by a crash or network error
     return requestLink(charge, subscription)
+  }
+
+  /** What the buyer and the webhook are told about a settled charge. */
+  function outcome(charge) {
+    if (charge.status === 'refunded') return 'refunded'
+    if (charge.status === 'reversal_review' || charge.review) return 'review'
+    return 'confirmed'
   }
 
   function applyPayment(charge, check, slug, transactionNsu) {
     return transaction(() => {
       const current = q.charge.get(charge.order_nsu)
-      if (current.status === 'paid' || current.status === 'reversal_review') return 'confirmed'
-      if (current.status === 'refunded') return 'refunded'
+      if (['paid', 'reversal_review', 'refunded'].includes(current.status)) return outcome(current)
       const subscription = q.subscription.get(charge.subscription_id)
+      const afterCancel = subscription.status === 'canceled'
       const paidAt = now()
       // Access continues through the grace period, so active and past-due subscriptions extend from the due
       // date (no free days); expired, pending or abandoned ones start a new month today
       const continuing = (subscription.status === 'active' || subscription.status === 'past_due') && subscription.paid_until > 0
-      const periodStart = continuing ? subscription.paid_until : paidAt
-      const periodEnd = addMonth(periodStart)
+      // A payment after an administrative cancellation covers no period: it grants nothing and a later refund
+      // must not shorten anything else
+      const periodStart = afterCancel ? paidAt : continuing ? subscription.paid_until : paidAt
+      const periodEnd = afterCancel ? paidAt : addMonth(periodStart)
       const changed = q.markPaid.run(slug, transactionNsu, String(check.capture_method ?? '').slice(0, 20), Number(check.paid_amount),
         Number.isInteger(check.installments) ? check.installments : null, periodStart, periodEnd, paidAt, charge.order_nsu).changes
       if (!changed) return 'processing'
       record(subscription.id, charge.order_nsu, 'payment_confirmed', Number(check.paid_amount), `${check.capture_method ?? ''} ${check.installments ?? ''}x`)
-      if (subscription.status === 'canceled') {
-        // Never reactivate a subscription the operator canceled: flag it for a manual refund or decision
+      if (afterCancel) {
+        // Never reactivate a subscription the operator canceled: the buyer is told it is under financial review
+        q.setReview.run('after_cancel', charge.order_nsu)
         record(subscription.id, charge.order_nsu, 'payment_after_cancel', Number(check.paid_amount))
-      } else {
-        setStatus(subscription, 'active', periodEnd)
+        log.warn('InfinitePay payment after cancellation needs review', charge.order_nsu.slice(0, 12))
+        return 'review'
       }
+      setStatus(subscription, 'active', periodEnd)
       return 'confirmed'
     })
   }
@@ -331,8 +373,8 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
     if (!charge) return { result: 'unknown', plan: '' }
     if (charge.status === 'refunded') return { result: 'refunded', plan: charge.plan }
     const settled = charge.status === 'paid' || charge.status === 'reversal_review'
-    if (settled && source === 'browser') return { result: 'confirmed', plan: charge.plan }
-    if (settled && (slug !== charge.slug || transactionNsu !== charge.transaction_nsu)) return { result: 'confirmed', plan: charge.plan }
+    if (settled && source === 'browser') return { result: outcome(charge), plan: charge.plan }
+    if (settled && (slug !== charge.slug || transactionNsu !== charge.transaction_nsu)) return { result: outcome(charge), plan: charge.plan }
 
     const check = await request('/payment_check', { handle: settings.handle, order_nsu: orderNsu, transaction_nsu: transactionNsu, slug })
     if (settled) {
@@ -344,7 +386,7 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
         log.warn('InfinitePay charge needs refund review', orderNsu.slice(0, 12))
         return { result: 'review', plan: charge.plan }
       }
-      return { result: 'confirmed', plan: charge.plan }
+      return { result: outcome(charge), plan: charge.plan }
     }
 
     const amount = Number(check?.amount)
@@ -388,8 +430,8 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
   function clearReview(orderNsu, reason = '') {
     return transaction(() => {
       const charge = q.charge.get(orderNsu)
-      if (charge?.status !== 'reversal_review') return false
-      q.setChargeStatus.run('paid', orderNsu, 'reversal_review')
+      if (charge?.status === 'reversal_review') q.setChargeStatus.run('paid', orderNsu, 'reversal_review')
+      else if (charge?.review !== 'after_cancel') return false
       record(charge.subscription_id, orderNsu, 'review_cleared', null, reason)
       return true
     })
@@ -457,9 +499,9 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
         if (!charge) continue
         try { await requestLink(charge, subscription); created++ } catch (error) { log.error('InfinitePay renewal link failed', error.code ?? error.name) }
       }
-      // Renewal links left in 'creating' by a crash or a network error: same order_nsu, identical body
+      // First and renewal links left in 'creating' by a crash or a network error: same order_nsu, stored payload
       for (const charge of q.stuckCreating.all(at - RETRY_CREATING_AFTER, at)) {
-        try { await requestLink(charge, q.subscription.get(charge.subscription_id)); created++ } catch (error) { log.error('InfinitePay renewal retry failed', error.code ?? error.name) }
+        try { await requestLink(charge, q.subscription.get(charge.subscription_id)); created++ } catch (error) { log.error('InfinitePay link retry failed', error.code ?? error.name) }
       }
 
       let emailed = 0
@@ -486,6 +528,7 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
   const router = express.Router()
   const noStore = (_req, res, next) => { res.set('Cache-Control', 'no-store'); next() }
   const limited = limit => rateLimit({ windowMs: 10 * 60 * 1000, limit, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'too_many_requests' } })
+  // Links keep the webhook URL frozen in their payload, so the previous token must stay accepted until they expire
   const tokens = [settings.webhookToken, settings.previousWebhookToken].filter(Boolean).map(value => Buffer.from(value))
 
   // Return from InfinitePay: forward only the validated identifiers to the page, which confirms them

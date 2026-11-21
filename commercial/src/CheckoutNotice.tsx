@@ -41,6 +41,7 @@ export function CheckoutNotice({ copy, billing }: { copy: Copy; billing: Billing
 
   if (!notice) return null
   const Icon = notice.result === 'confirmed' ? CircleCheck : notice.result === 'checking' || notice.result === 'processing' ? Clock3 : CircleAlert
+  // 'review' uses the alert icon and its own text: a payment under review is never presented as an active subscription
   const text = notice.result === 'checking' ? { title: t.notice.checking.title, detail: t.notice.checking.detail }
     : notice.result === 'confirmed' && notice.provider === 'infinitepay'
       ? { title: t.notice.confirmedBr.title, detail: t.notice.confirmedBr.detail(notice.plan ? plans[notice.plan].name : '') }

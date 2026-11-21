@@ -28,7 +28,8 @@ if (tables.has('ip_subscriptions')) {
   // Payments are recorded automatically, but dashboard access is still granted and revoked by hand
   console.log('InfinitePay — MANUAL ACCESS ACTIONS (last 30 days): grant on payment, revoke on expired/refunded/canceled')
   console.table(rows(`SELECT datetime(l.created_at, 'unixepoch') AS at, s.email, s.plan,
-      CASE WHEN l.type = 'payment_confirmed' THEN 'GRANT/EXTEND until ' || datetime(c.period_end, 'unixepoch')
+      CASE WHEN l.type = 'payment_confirmed' AND c.review = 'after_cancel' THEN 'DO NOT GRANT: paid after cancellation (financial review)'
+           WHEN l.type = 'payment_confirmed' THEN 'GRANT/EXTEND until ' || datetime(c.period_end, 'unixepoch')
            WHEN l.type IN ('status_expired', 'status_refunded', 'status_canceled') THEN 'REVOKE (' || substr(l.type, 8) || ')'
            ELSE l.type END AS action
     FROM ip_ledger l JOIN ip_subscriptions s ON s.id = l.subscription_id LEFT JOIN ip_charges c ON c.order_nsu = l.order_nsu

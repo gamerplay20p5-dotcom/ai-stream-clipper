@@ -56,7 +56,7 @@ function isProviderUrl(value: string, market: Market) {
   }
 }
 
-export type CheckoutResult = 'confirmed' | 'processing' | 'incomplete' | 'cancelled' | 'unknown'
+export type CheckoutResult = 'confirmed' | 'processing' | 'review' | 'incomplete' | 'cancelled' | 'unknown'
 
 export async function checkoutResult(sessionId: string): Promise<{ result: CheckoutResult; plan: PlanId | '' }> {
   try {
@@ -83,7 +83,9 @@ export async function confirmInfinitePay(orderNsu: string, slug: string, transac
     })
     if (!response.ok) return { result: 'unknown', plan: '' }
     const { result, plan } = await response.json() as { result?: string; plan?: PlanId | '' }
-    return { result: result === 'confirmed' ? 'confirmed' : result === 'processing' ? 'processing' : 'unknown', plan: plan ?? '' }
+    // 'review': paid, but held for financial review (for example after a cancellation); never shown as active
+    const known: CheckoutResult[] = ['confirmed', 'processing', 'review']
+    return { result: known.includes(result as CheckoutResult) ? result as CheckoutResult : 'unknown', plan: plan ?? '' }
   } catch {
     return { result: 'unknown', plan: '' }
   }

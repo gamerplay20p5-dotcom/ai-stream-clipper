@@ -60,8 +60,12 @@ Todo link é criado com `single_payment: true`, `valid_until` e `payment_methods
 
 - **Ciclo:** a primeira compra é o ciclo `first`. Cada renovação é o ciclo `due:<paid_until>`, ou seja, o vencimento que ela cobre.
 - **Índice único:** só pode existir uma cobrança ativa (`creating`, `open`, `paid` ou `reversal_review`) por assinatura e ciclo. Isso vale mesmo com reinicializações e vários processos ou agendadores rodando ao mesmo tempo.
-- **Reserva antes de chamar a API:** a cobrança é gravada como `creating` antes da chamada à InfinitePay. Se a rede falhar ou o processo cair, a próxima execução reenvia o **mesmo `order_nsu` com o mesmo corpo**. A documentação diz que uma requisição idêntica pode devolver o mesmo link. A nova tentativa só acontece depois de 10 minutos, para não duplicar uma chamada que ainda esteja em andamento, e para em 5 tentativas (`link_gave_up`).
-- **Clique duplo:** o mesmo e-mail, plano e idioma reaproveitam o link aberto. E-mails diferentes nunca compartilham cobrança.
+- **Reserva com o corpo congelado:** a cobrança é gravada como `creating` antes da chamada à InfinitePay, **junto com o corpo exato da requisição** (`request_json`). Toda nova tentativa reenvia esse corpo **byte a byte**, com o mesmo `order_nsu`, mesmo que a configuração tenha mudado no meio, por exemplo numa troca do token do webhook. A documentação diz que uma requisição idêntica pode devolver o mesmo link.
+- **Recuperação, inclusive da primeira compra:** uma falha de rede ou de resposta não encerra a cobrança, que continua em `creating` com o mesmo `order_nsu`. A recuperação acontece de duas formas:
+  - **Pelo cliente:** o próximo clique do mesmo cliente reenvia o corpo gravado.
+  - **Pelo agendador:** a cada hora, ele recupera as cobranças em `creating` com mais de 10 minutos (primeira compra e renovação), para não duplicar uma chamada que ainda esteja em andamento. Mesmo que o cliente não volte, o link fica pronto e um pagamento eventual é confirmado normalmente.
+  - **Limite:** depois de 5 tentativas, a cobrança é encerrada (`link_gave_up`) e um novo clique abre outra.
+- **Checkouts simultâneos do mesmo cliente:** um índice único permite **uma assinatura pendente por e-mail, plano e idioma**. A reserva acontece numa transação `BEGIN IMMEDIATE`, que serializa a escrita mesmo entre processos. Cliques duplos, abas simultâneas ou dois servidores no mesmo banco compartilham a mesma assinatura e a mesma cobrança. E-mails ou planos diferentes nunca compartilham.
 - **Confirmações repetidas:** webhook duplicado, navegador e webhook ao mesmo tempo, ou reconciliação, geram **um** pagamento e **um** mês de acesso. A garantia vem de uma transação `BEGIN IMMEDIATE`, da troca de status condicional e de um registro único `payment_confirmed` no histórico.
 
 ### Estados e renovações
@@ -76,7 +80,11 @@ Todo link é criado com `single_payment: true`, `valid_until` e `payment_methods
 - **Validade do link de renovação:** até o **fim da carência** (`paid_until + 3 dias`). O link e a assinatura vencem juntos.
 - **Pagamento em `active` ou `past_due`:** o novo mês começa no **vencimento**, sem dias de graça. Em `expired` ou `pending`, começa **hoje**.
 - **Pagamento que chega depois do prazo:** por exemplo, uma corrida bem no vencimento. O dinheiro foi recebido, então o pagamento é **aceito** e o mês começa hoje.
-- **Pagamento de assinatura cancelada:** é registrado, mas **não reativa** a assinatura. Fica marcado como `payment_after_cancel` para revisão e possível estorno.
+- **Pagamento de assinatura cancelada administrativamente:**
+  - **Registro:** o pagamento é gravado (`payment_confirmed` e `payment_after_cancel`), mas **não reativa** a assinatura e **não cobre nenhum período** (`period_start` igual a `period_end`). Um estorno posterior, portanto, não reduz nada.
+  - **O que o cliente vê:** **"Pagamento em revisão financeira"**, nunca uma confirmação de assinatura ativa. A resposta do webhook também é `review`.
+  - **No relatório:** o caso aparece como `DO NOT GRANT` nas ações de acesso e em **Precisa de revisão**.
+  - **Ação do operador:** decide entre o estorno (`refund`) e a conclusão da revisão (`clear-review`). Mesmo com a revisão concluída, o cliente continua vendo "em revisão", e não "ativo".
 - **E-mail:** é enviado uma vez por link. Se o SMTP falhar, o envio é repetido a cada execução até 5 vezes. Depois disso, o caso aparece como `email_gave_up` no relatório para envio manual. Falha de SMTP nunca trava o agendador.
 
 ### Estornos e histórico financeiro
@@ -117,7 +125,7 @@ Todo link é criado com `single_payment: true`, `valid_until` e `payment_methods
   ```caddyfile
   log_skip /api/infinitepay/webhook/*
   ```
-  Se o token vazar, gere um novo, mova o antigo para `INFINITEPAY_WEBHOOK_TOKEN_PREVIOUS` até os links antigos vencerem (no máximo 8 dias) e depois remova-o. O aplicativo nunca registra URLs, tokens, chaves ou e-mails nos próprios logs, e os testes verificam isso.
+  Se o token vazar, gere um novo, mova o antigo para `INFINITEPAY_WEBHOOK_TOKEN_PREVIOUS` até os links antigos vencerem (no máximo 8 dias) e depois remova-o. Cada link guarda no corpo congelado a URL com o token da época em que foi criado, e as novas tentativas mantêm essa URL. Por isso o token anterior precisa continuar aceito durante a troca. O aplicativo nunca registra URLs, tokens, chaves ou e-mails nos próprios logs, e os testes verificam isso.
 - **Outras proteções:** a rota de retorno repassa só identificadores validados. Os corpos JSON têm tamanho limitado e as rotas têm limite de tentativas. As chaves ficam só no ambiente.
 
 ### Tabelas
@@ -125,7 +133,7 @@ Todo link é criado com `single_payment: true`, `valid_until` e `payment_methods
 | Tabela | Conteúdo |
 | --- | --- |
 | `ip_subscriptions` | Assinatura BR: e-mail, plano, idioma, estado e `paid_until` |
-| `ip_charges` | Uma linha por link: ciclo, valor, estado (`creating`, `open`, `paid`, `expired`, `failed`, `refunded`, `reversal_review`), validade, tentativas de link e de e-mail, dados confirmados do pagamento e o período coberto (`period_start` a `period_end`) |
+| `ip_charges` | Uma linha por link: ciclo, valor, estado (`creating`, `open`, `paid`, `expired`, `failed`, `refunded`, `reversal_review`), corpo congelado da requisição (`request_json`), marca de revisão (`review = after_cancel`), validade, tentativas de link e de e-mail, dados confirmados do pagamento e o período coberto (`period_start` a `period_end`) |
 | `ip_ledger` | Histórico financeiro, só com inserções |
 
 ## Configuração
@@ -166,7 +174,11 @@ Copie `.env.example` para `.env`, que é ignorado pelo git.
 
 **BRL uses InfinitePay**, checked against the official documentation:
 - **API key:** `inchk_` is required. Every link is single-use and expires (`single_payment` and `valid_until`).
-- **One charge per subscription and cycle:** enforced by a unique index. Retries reuse the same `order_nsu` and the same request body, so restarts, network failures, duplicate webhooks and concurrent jobs cannot create a second charge.
+- **One charge per subscription and cycle:** a unique index enforces it, and the exact `/links` payload is frozen at reservation (`request_json`). Retries resend it byte for byte with the same `order_nsu`, even after a webhook token rotation.
+- **Crash recovery:** interrupted first checkouts and renewals are recovered by the buyer's next click or by the hourly job.
+- **Simultaneous checkouts:** one pending subscription per email, plan and language. Reservation runs in `BEGIN IMMEDIATE`, so simultaneous checkouts from one customer, even across processes, share one charge.
+- **Confirmation:** it is transactional and records exactly one `payment_confirmed`.
+- **Payments after an administrative cancellation:** they are recorded with no period and never reactivate. The buyer sees "payment under financial review" instead of a confirmation.
 - **Payments:** they only count after `payment_check` reports `paid: true` for the stored amount.
 - **State machine:** pending and abandoned, active, past due with a 3-day grace period, expired, refunded and canceled. Only active and past-due subscriptions get renewal links, and each link is valid until the end of grace.
 - **Refunds:** a reversal signal puts the charge under review without removing access. The operator records the refund with `npm run infinitepay -- refund`, which removes exactly that month.

@@ -20,6 +20,7 @@ const DOC = {
 }
 
 const TOKEN = 'tok_0123456789abcdefghijklmnopqrstuv'
+const NEW_TOKEN = 'new_0123456789abcdefghijklmnopqrstuv'
 const OLD_TOKEN = 'old_0123456789abcdefghijklmnopqrstuv'
 const KEY = 'inchk_secretkey123'
 const DAY = 86_400
@@ -29,9 +30,10 @@ const settings = (extra = {}) => infinitePaySettings(env(extra))
 
 /** Fake InfinitePay following the documented contract; identical /links requests return the same link. */
 function fakeApi() {
-  const api = { calls: [], payments: new Map(), failLinks: 0, failChecks: false, hangLinks: false, nextLink: null }
+  const api = { calls: [], payments: new Map(), failLinks: 0, failChecks: false, hangLinks: false, nextLink: null, delayMs: 0 }
   api.request = async (path, body) => {
     api.calls.push({ path, body: structuredClone(body) })
+    if (api.delayMs) await new Promise(resolve => setTimeout(resolve, api.delayMs))
     if (path === '/links') {
       if (api.hangLinks) throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })
       if (api.failLinks > 0) { api.failLinks--; throw Object.assign(new Error('503'), { code: 'http_503' }) }
@@ -169,12 +171,23 @@ test('checkout: catalog price, email required, double clicks reuse the link, cus
   assert.notEqual(pro.url, first.url)
   assert.deepEqual(ctx.read("SELECT plan, amount FROM ip_charges ORDER BY created_at, plan").map(row => row.amount).sort(), [13990, 13990, 27990])
 
-  // Link creation failure: the buyer gets 503 and the charge is closed as failed (nothing reusable)
+  // Link creation failure: the buyer gets 503, the charge keeps its order_nsu and the next click resends it
   ctx.api.failLinks = 1
   assert.equal((await buy(ctx.base, { email: 'fail@example.com' })).status, 503)
   ctx.api.nextLink = { url: 'https://evil.example/pay' }
-  assert.equal((await buy(ctx.base, { email: 'evil@example.com' })).status, 503)
-  assert.equal(ctx.read("SELECT COUNT(*) AS n FROM ip_charges WHERE status = 'failed'")[0].n, 2)
+  assert.equal((await buy(ctx.base, { email: 'fail@example.com' })).status, 503, 'a foreign URL is never handed out')
+  const retry = await buy(ctx.base, { email: 'fail@example.com' })
+  assert.equal(retry.status, 201)
+  const [failed] = ctx.read("SELECT c.order_nsu, c.status, c.link_attempts FROM ip_charges c JOIN ip_subscriptions s ON s.id = c.subscription_id WHERE s.email = 'fail@example.com'")
+  assert.deepEqual([failed.status, failed.link_attempts], ['open', 3])
+  assert.equal((await retry.json()).url, `https://checkout.infinitepay.io/hts/${failed.order_nsu}`)
+  // Five failed attempts close the charge; the next click starts a new one
+  ctx.api.failLinks = 5
+  for (let i = 0; i < 5; i++) assert.equal((await buy(ctx.base, { email: 'down@example.com' })).status, 503)
+  assert.deepEqual(ctx.read("SELECT c.status FROM ip_charges c JOIN ip_subscriptions s ON s.id = c.subscription_id WHERE s.email = 'down@example.com'"), [{ status: 'failed' }])
+  assert.equal(ctx.read("SELECT COUNT(*) AS n FROM ip_ledger WHERE type = 'link_gave_up'")[0].n, 1)
+  assert.equal((await buy(ctx.base, { email: 'down@example.com' })).status, 201)
+  assert.equal(ctx.read("SELECT COUNT(*) AS n FROM ip_subscriptions WHERE email = 'down@example.com'")[0].n, 1, 'same pending subscription')
 })
 
 test('payments count only after payment_check confirms the stored amount', async t => {
@@ -339,8 +352,9 @@ test('refunds: review on reversal signals, operator records the refund, access s
   assert.equal(ctx.read('SELECT status FROM ip_charges WHERE order_nsu = ?', order)[0].status, 'reversal_review')
   // Access is not removed automatically: the API does not document refund semantics
   assert.equal(ctx.read('SELECT status FROM ip_subscriptions')[0].status, 'active')
-  // A forged notice with other identifiers for a paid charge does not trigger anything
-  assert.equal((await (await hook(ctx.base, notice(order, 'other', 'other'))).json()).result, 'confirmed')
+  // A forged notice with other identifiers for a paid charge does not trigger anything (still under review)
+  assert.equal((await (await hook(ctx.base, notice(order, 'other', 'other'))).json()).result, 'review')
+  assert.equal(ctx.api.calls.filter(call => call.path === '/payment_check' && call.body.slug === 'other').length, 0)
 
   const { changed, subscription: after } = admin.refund(order, { reason: 'Estorno feito no app em 21/11' })
   assert.equal(changed, true)
@@ -385,15 +399,139 @@ test('refunding an earlier month keeps later paid months, and cancel stops renew
   assert.equal((await ctx.runRenewals()).created, 0)
 })
 
-test('payment after cancellation is recorded for review and does not reactivate', async t => {
+test('payment after cancellation: recorded, never reactivates, buyer sees financial review instead of a confirmation', async t => {
   const ctx = await start(t)
+  // Canceled before the first payment
   await buy(ctx.base)
   const [{ order_nsu: order, subscription_id: id }] = ctx.read('SELECT order_nsu, subscription_id FROM ip_charges')
-  ctx.admin().cancel(id, 'desistiu antes de pagar')
+  const admin = ctx.admin()
+  admin.cancel(id, 'desistiu antes de pagar')
   ctx.api.pay(order)
-  await hook(ctx.base, notice(order))
-  assert.equal(ctx.read('SELECT status FROM ip_subscriptions')[0].status, 'canceled')
+  assert.deepEqual(await (await hook(ctx.base, notice(order))).json(), { received: true, result: 'review' })
+  assert.deepEqual(await (await confirm(ctx.base, order)).json(), { result: 'review', plan: 'creator' })
+  assert.deepEqual(ctx.read('SELECT status, paid_until FROM ip_subscriptions'), [{ status: 'canceled', paid_until: 0 }])
+  const [charge] = ctx.read('SELECT status, review, period_start, period_end FROM ip_charges')
+  assert.deepEqual(charge, { status: 'paid', review: 'after_cancel', period_start: T0, period_end: T0 }, 'covers no period')
   assert.deepEqual(ctx.read("SELECT type FROM ip_ledger WHERE type IN ('payment_confirmed', 'payment_after_cancel') ORDER BY id").map(row => row.type), ['payment_confirmed', 'payment_after_cancel'])
+
+  // Canceled while active, then an old renewal link is paid: access is not extended
+  const active = await activate(ctx, 'active@example.com')
+  ctx.time.now = active.subscription.paid_until - 4 * DAY
+  await ctx.runRenewals()
+  const [renewal] = ctx.read("SELECT order_nsu FROM ip_charges WHERE kind = 'renewal' AND subscription_id = ?", active.subscription.id)
+  admin.cancel(active.subscription.id, 'cancelamento administrativo')
+  ctx.api.pay(renewal.order_nsu)
+  assert.equal((await (await confirm(ctx.base, renewal.order_nsu)).json()).result, 'review')
+  assert.deepEqual(ctx.read('SELECT status, paid_until FROM ip_subscriptions WHERE id = ?', active.subscription.id), [{ status: 'canceled', paid_until: active.subscription.paid_until }])
+
+  // Refunding it changes nothing else; clearing the review keeps it out of "active" for the buyer
+  const { subscription: refunded } = admin.refund(renewal.order_nsu, { reason: 'estorno do pagamento pós-cancelamento' })
+  assert.deepEqual([refunded.status, refunded.paid_until], ['canceled', active.subscription.paid_until])
+  assert.equal(admin.clearReview(order, 'cliente quer manter cancelado; estorno agendado'), true)
+  assert.equal((await (await confirm(ctx.base, order)).json()).result, 'review')
+  assert.equal(ctx.read("SELECT COUNT(*) AS n FROM ip_ledger WHERE type = 'review_cleared'")[0].n, 1)
+})
+
+test('restart during the first checkout: the same customer resumes the same charge with an identical payload', async t => {
+  const ctx = await start(t)
+  ctx.api.hangLinks = true
+  assert.equal((await buy(ctx.base)).status, 503)
+  const [stuck] = ctx.read('SELECT order_nsu, status FROM ip_charges')
+  assert.equal(stuck.status, 'creating')
+  await ctx.stop()
+  ctx.api.hangLinks = false
+  const restarted = await start(t, { api: ctx.api, directory: ctx.dir })
+  ctx.handles.push({ close: () => restarted.stop().catch(() => {}) })
+  const response = await buy(restarted.base)
+  assert.equal(response.status, 201)
+  assert.equal((await response.json()).url, `https://checkout.infinitepay.io/hts/${stuck.order_nsu}`)
+  const bodies = ctx.api.calls.filter(call => call.path === '/links').map(call => call.body)
+  assert.equal(bodies.length, 2)
+  assert.deepEqual(bodies[1], bodies[0])
+  assert.deepEqual(restarted.read('SELECT COUNT(*) AS subscriptions FROM ip_subscriptions'), [{ subscriptions: 1 }])
+  assert.deepEqual(restarted.read('SELECT order_nsu, status FROM ip_charges'), [{ order_nsu: stuck.order_nsu, status: 'open' }])
+})
+
+test('the hourly job recovers an interrupted first checkout even if the buyer never comes back', async t => {
+  const ctx = await start(t)
+  ctx.api.hangLinks = true
+  await buy(ctx.base)
+  ctx.api.hangLinks = false
+  ctx.time.now += 5 * 60
+  await ctx.runRenewals()
+  assert.equal(ctx.read('SELECT status FROM ip_charges')[0].status, 'creating', 'not while it may still be in flight')
+  ctx.time.now += 6 * 60
+  await ctx.runRenewals()
+  assert.equal(ctx.read('SELECT status FROM ip_charges')[0].status, 'open')
+  const bodies = ctx.api.calls.filter(call => call.path === '/links').map(call => call.body)
+  assert.deepEqual(bodies[1], bodies[0])
+  // A payment for the recovered link is confirmed normally
+  const [{ order_nsu: order }] = ctx.read('SELECT order_nsu FROM ip_charges')
+  ctx.api.pay(order)
+  assert.equal((await (await hook(ctx.base, notice(order))).json()).result, 'confirmed')
+})
+
+test('simultaneous checkouts of the same customer share one subscription and one charge, across processes', async t => {
+  const ctx = await start(t)
+  ctx.api.delayMs = 40
+  const responses = await Promise.all(Array.from({ length: 5 }, () => buy(ctx.base)))
+  const urls = await Promise.all(responses.map(async response => { assert.equal(response.status, 201); return (await response.json()).url }))
+  assert.equal(new Set(urls).size, 1)
+  assert.deepEqual(ctx.read('SELECT COUNT(*) AS n FROM ip_subscriptions'), [{ n: 1 }])
+  assert.deepEqual(ctx.read('SELECT COUNT(*) AS n FROM ip_charges'), [{ n: 1 }])
+  // Every request that reached InfinitePay sent the same order_nsu and payload
+  const bodies = ctx.api.calls.filter(call => call.path === '/links').map(call => JSON.stringify(call.body))
+  assert.equal(new Set(bodies).size, 1)
+
+  // A second server process on the same database
+  const second = await start(t, { api: ctx.api, directory: ctx.dir })
+  ctx.handles.push({ close: () => second.stop().catch(() => {}) })
+  second.time.now = ctx.time.now
+  const both = await Promise.all([buy(ctx.base, { email: 'twin@example.com' }), buy(second.base, { email: 'twin@example.com' }), buy(second.base, { email: 'twin@example.com' })])
+  assert.ok(both.every(response => response.status === 201))
+  assert.deepEqual(ctx.read("SELECT COUNT(*) AS n FROM ip_subscriptions WHERE email = 'twin@example.com'"), [{ n: 1 }])
+  assert.deepEqual(ctx.read("SELECT COUNT(*) AS n FROM ip_charges c JOIN ip_subscriptions s ON s.id = c.subscription_id WHERE s.email = 'twin@example.com'"), [{ n: 1 }])
+
+  // Different customers or plans never share
+  await Promise.all([buy(ctx.base, { email: 'a@example.com' }), buy(ctx.base, { email: 'b@example.com' }), buy(ctx.base, { email: 'a@example.com', plan: 'pro' })])
+  assert.deepEqual(ctx.read("SELECT COUNT(*) AS n FROM ip_subscriptions WHERE email IN ('a@example.com', 'b@example.com')"), [{ n: 3 }])
+})
+
+test('webhook token rotation during recovery: retries resend the original payload, old links keep working', async t => {
+  const ctx = await start(t)
+  // A renewal and a first checkout both interrupted while the old token is configured
+  const { subscription } = await activate(ctx)
+  ctx.time.now = subscription.paid_until - 4 * DAY
+  ctx.api.hangLinks = true
+  await ctx.runRenewals()
+  assert.equal((await buy(ctx.base, { email: 'later@example.com' })).status, 503)
+  ctx.api.hangLinks = false
+  const original = Object.fromEntries(ctx.api.calls.filter(call => call.path === '/links').slice(-2).map(call => [call.body.order_nsu, JSON.stringify(call.body)]))
+  for (const body of Object.values(original)) assert.ok(body.includes(`/api/infinitepay/webhook/${TOKEN}`))
+
+  // Rotation: new token, old one kept as previous, server restarted
+  await ctx.stop()
+  const rotated = await start(t, { api: ctx.api, directory: ctx.dir, ip: settings({ INFINITEPAY_WEBHOOK_TOKEN: NEW_TOKEN, INFINITEPAY_WEBHOOK_TOKEN_PREVIOUS: TOKEN }) })
+  ctx.handles.push({ close: () => rotated.stop().catch(() => {}) })
+  rotated.time.now = ctx.time.now + 11 * 60
+  await rotated.runRenewals()
+  assert.equal((await buy(rotated.base, { email: 'later@example.com' })).status, 201)
+  for (const [order, body] of Object.entries(original)) {
+    const resent = ctx.api.calls.filter(call => call.path === '/links' && call.body.order_nsu === order).map(call => JSON.stringify(call.body))
+    assert.ok(resent.length >= 2)
+    assert.ok(resent.every(value => value === body), 'byte-identical payload, old webhook URL included')
+    assert.equal(rotated.read('SELECT status FROM ip_charges WHERE order_nsu = ?', order)[0].status, 'open')
+  }
+
+  // New links use the new token; notices on both tokens are accepted, anything else is rejected
+  await buy(rotated.base, { email: 'new@example.com' })
+  assert.ok(JSON.stringify(ctx.api.calls.at(-1).body).includes(`/api/infinitepay/webhook/${NEW_TOKEN}`))
+  const [renewal] = rotated.read("SELECT order_nsu FROM ip_charges WHERE kind = 'renewal'")
+  ctx.api.pay(renewal.order_nsu)
+  assert.equal((await hook(rotated.base, notice(renewal.order_nsu), TOKEN)).status, 200)
+  assert.equal((await hook(rotated.base, notice(renewal.order_nsu), NEW_TOKEN)).status, 200)
+  assert.equal((await hook(rotated.base, notice(renewal.order_nsu), OLD_TOKEN)).status, 404)
+  assert.equal(rotated.read('SELECT paid_until FROM ip_subscriptions WHERE id = ?', subscription.id)[0].paid_until, addMonth(subscription.paid_until))
 })
 
 test('webhook token: previous token accepted during rotation, never logged, return route forwards only validated ids', async t => {
