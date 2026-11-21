@@ -8,13 +8,14 @@
   },
   "scripts": {
     "dev": "vite --port 5174 --strictPort",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && vite build --ssr src/prerender.tsx --outDir build/prerender && node build/prerender/prerender.js",
     "start": "node server/index.js",
-    "test": "node --test server/waitlist.test.js"
+    "test": "node --test server/waitlist.test.js",
+    "test:browser": "playwright test"
   },
   "dependencies": {
-    "@fontsource-variable/bricolage-grotesque": "5.3.0",
     "@fontsource-variable/instrument-sans": "5.3.0",
+    "@fontsource-variable/space-grotesk": "5.3.0",
     "express": "5.3.0",
     "express-rate-limit": "8.7.5",
     "lucide-react": "1.77.0",
@@ -22,6 +23,9 @@
     "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.65.1",
+    "@types/node": "24.19.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.3.0",

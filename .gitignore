@@ -7,6 +7,8 @@ data/
 node_modules/
 dashboard/dist/
 commercial/dist/
+/commercial/test-results/
+/commercial/playwright-report/
 .env
 .env.*
 !.env.example
