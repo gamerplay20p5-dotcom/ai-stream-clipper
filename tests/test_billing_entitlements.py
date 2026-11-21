@@ -88,16 +88,31 @@ def deliver(client, payload: dict, *, secret=BILLING_SECRET, caller="commercial"
     return client.post("/internal/billing/events", content=body, headers={**headers, "Content-Type": "application/json"})
 
 
-def owned_streamer(uid: int, name: str | None = None) -> int:
+def owned_streamer(uid: int, name: str | None = None, preset: str = "balanced") -> int:
+    """A channel followed by this customer (only by it, not by the HTS). Returns the streamer id."""
     from clipper.db import session_scope
-    from clipper.models import Streamer
+    from clipper.models import ChannelMonitor, Streamer
 
     name = name or uuid.uuid4().hex[:10]
     with session_scope() as db:
-        s = Streamer(platform="twitch", channel=name, url=f"https://www.twitch.tv/{name}", owner_id=uid)
+        s = Streamer(platform="twitch", channel=name, url=f"https://www.twitch.tv/{name}", hts_monitoring=False)
         db.add(s)
         db.flush()
+        db.add(ChannelMonitor(user_id=uid, streamer_id=s.id, preset=preset))
+        db.flush()
         return s.id
+
+
+def live_segment(sid: int, idx: int, start: float, duration: float) -> int:
+    """The channel goes live (shared session) and one segment is captured. Returns the session id."""
+    from clipper import pipeline
+    from clipper.db import session_scope
+
+    with session_scope() as db:
+        sess = pipeline.active_session(db, sid)
+        sess_id = sess.id if sess else pipeline.report_status(db, sid, live=True)["session_id"]
+        pipeline.register_segments(db, sess_id, "w1", "http://seg", [{"idx": idx, "start": start, "duration": duration}])
+        return sess_id
 
 
 def sub_state(c) -> dict:
@@ -208,10 +223,8 @@ def test_renewal_extends_the_period_and_resets_the_cycle(app, client):
     now = _now()
     deliver(client, snapshot(uid, seq=1, start=now - DAY, until=now + 29 * DAY))
     sid = owned_streamer(uid)
+    live_segment(sid, 1, 0, 3600)
     with session_scope() as db:
-        from clipper.models import Streamer
-
-        assert entitlements.meter_segment(db, db.get(Streamer, sid), 1, 0, 3600)
         assert entitlements.usage_summary(db, uid)["live_seconds"] == 3600
     deliver(client, snapshot(uid, seq=2, start=now + 29 * DAY - 10, until=now + 59 * DAY))
     state = sub_state(c)
@@ -236,32 +249,35 @@ def test_expiry_and_refund_remove_access_and_stop_work(app, client):
     deliver(client, snapshot(uid, seq=2, status="ended", financial="refunded", until=0))
     assert sub_state(c)["entitled"] is False
     with session_scope() as db:
-        assert db.get(StreamSession, session_id).stop_requested is True
-        assert db.get(Streamer, sid).enabled is False
+        # nobody else follows this live: the shared capture stops; the channel itself is never disabled by a plan
         assert pipeline.session_state(db, session_id)["stop"] is True
+        assert db.get(Streamer, sid).enabled is True
+        assert db.get(StreamSession, session_id) is not None
     # Time-based expiry: an "active" snapshot whose access_until already passed grants nothing
     uid2, c2 = customer(app)
     deliver(client, snapshot(uid2, seq=1, until=_now() - 60))
     assert sub_state(c2)["entitled"] is False
     with session_scope() as db:
-        assert entitlements.check_session_start(db, db.get(Streamer, owned_streamer(uid2))) == "assinatura inativa"
-    # Renewing again re-enables the channel that was paused by the system
+        assert "assinatura inativa" in entitlements.check_session_start(db, db.get(Streamer, owned_streamer(uid2)))
+    # Renewing again: the next live is followed again
     deliver(client, snapshot(uid, seq=3))
     with session_scope() as db:
-        assert db.get(Streamer, sid).enabled is True
+        assert entitlements.check_session_start(db, db.get(Streamer, sid)) == ""
 
 
 # 9: Basic customers cannot use Pro features
 def test_basic_customer_cannot_use_pro_features(app, client):
-    from clipper import entitlements
+    from clipper import editorial, entitlements, pipeline
     from clipper.db import session_scope
-    from clipper.models import Clip, Streamer, StreamSession
+    from clipper.models import Clip, Streamer
 
     basic_id, basic = customer(app)
     pro_id, pro = customer(app)
     deliver(client, snapshot(basic_id, plan="basic"))
     deliver(client, snapshot(pro_id, plan="pro"))
     bsid, psid = owned_streamer(basic_id), owned_streamer(pro_id)
+    live_segment(bsid, 0, 0, 60)
+    live_segment(psid, 0, 0, 60)
     with session_scope() as db:
         assert entitlements.has_feature(db, db.get(Streamer, bsid), "secondPass") is False
         assert entitlements.has_feature(db, db.get(Streamer, bsid), "variants") is False
@@ -273,12 +289,12 @@ def test_basic_customer_cannot_use_pro_features(app, client):
         assert entitlements.has_feature(db, hts, "secondPass") is True
         clips = {}
         for owner_sid, key in ((bsid, "basic"), (psid, "pro")):
-            sess = StreamSession(streamer_id=owner_sid, status="ended")
-            db.add(sess)
-            db.flush()
-            clip = Clip(session_id=sess.id, streamer_id=owner_sid, start=0, end=30, peak=15, score=80)
+            sess_id = pipeline.active_session(db, owner_sid).id
+            clip = Clip(session_id=sess_id, streamer_id=owner_sid, start=10, end=40, peak=15, score=80, status="ready",
+                        video_path=f"clips/x/{key}.mp4", file_size=1000)
             db.add(clip)
             db.flush()
+            editorial.deliver(db, clip)
             clips[key] = clip.id
     assert basic.post(f"/api/account/clips/{clips['basic']}/export-4k", headers=CSRF).status_code == 403
     # Pro passes the entitlement check; the renderer has no 4K output yet (honest 501, nothing consumed)
@@ -328,7 +344,7 @@ def test_simultaneous_operations_do_not_exceed_limits(app, client, monkeypatch):
     assert len(c.get("/api/account/channels").json()) == 1
 
     # Simultaneous lives: a second channel (inserted directly) cannot start while the first is live
-    first = c.get("/api/account/channels").json()[0]["id"]
+    first = _streamer_of_monitor(c.get("/api/account/channels").json()[0]["id"])
     second = owned_streamer(uid)
     with session_scope() as db:
         assert pipeline.report_status(db, first, live=True)["created"] is True
@@ -347,6 +363,14 @@ def test_simultaneous_operations_do_not_exceed_limits(app, client, monkeypatch):
         assert states[1] != "skipped" and states[2] == "skipped"
         assert pipeline.session_state(db, sess_id)["stop"] is True
         assert entitlements.usage_summary(db, uid)["live_seconds"] == 41 * 3600
+
+
+def _streamer_of_monitor(mid: int) -> int:
+    from clipper.db import session_scope
+    from clipper.models import ChannelMonitor
+
+    with session_scope() as db:
+        return db.get(ChannelMonitor, mid).streamer_id
 
 
 # 12: financial state survives restarts (it lives in the database, not in memory)
@@ -378,10 +402,12 @@ def test_customers_cannot_see_or_touch_other_accounts(app, client):
     a_id, a = customer(app)
     b_id, b = customer(app)
     deliver(client, snapshot(a_id, plan="pro"))
-    a_channel = owned_streamer(a_id)
+    owned_streamer(a_id)
+    a_monitor = a.get("/api/account/channels").json()[0]["id"]
     assert b.get("/api/account/subscription").json()["subscription"] is None
-    assert all(ch["id"] != a_channel for ch in b.get("/api/account/channels").json())
-    assert b.delete(f"/api/account/channels/{a_channel}", headers=CSRF).status_code == 404
+    assert b.get("/api/account/channels").json() == []
+    assert b.delete(f"/api/account/channels/{a_monitor}", headers=CSRF).status_code == 404
+    assert b.patch(f"/api/account/channels/{a_monitor}", json={"preset": "humor"}, headers=CSRF).status_code == 404
     # A snapshot cannot move a subscription to another account
     stolen = snapshot(b_id, seq=9, ref=f"sub_{a_id}")
     assert deliver(client, stolen).status_code == 422

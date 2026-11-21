@@ -10,7 +10,8 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import queue
@@ -69,7 +70,11 @@ def streamer_info(s: Streamer) -> dict:
 def monitor_targets(db: Session, min_interval_s: float) -> list[dict]:
     now = utcnow()
     out = []
-    for s in db.scalars(select(Streamer).where(Streamer.enabled.is_(True)).order_by(Streamer.id)):
+    from .models import ChannelMonitor
+
+    followed = select(ChannelMonitor.id).where(ChannelMonitor.streamer_id == Streamer.id, ChannelMonitor.removed_at.is_(None))
+    wanted = or_(Streamer.hts_monitoring.is_(True), followed.exists())
+    for s in db.scalars(select(Streamer).where(Streamer.enabled.is_(True), wanted).order_by(Streamer.id)):
         due = s.check_requested or s.last_checked_at is None or (now - s.last_checked_at).total_seconds() >= min_interval_s
         if not due:
             continue
@@ -81,7 +86,8 @@ def monitor_targets(db: Session, min_interval_s: float) -> list[dict]:
 
 def report_status(db: Session, streamer_id: int, live: bool, title: str = "", error: str = "",
                   note: str = "", channel_id: str = "") -> dict:
-    s = db.get(Streamer, streamer_id)
+    # Row lock (PostgreSQL): concurrent reports of the same live are serialized, so one capture starts
+    s = db.get(Streamer, streamer_id, with_for_update=True)
     if s is None:
         raise NotFound("streamer")
     now = utcnow()
@@ -118,9 +124,10 @@ def report_status(db: Session, streamer_id: int, live: bool, title: str = "", er
             sess.status = "failed" if job.status == "dead" else "ended"
             sess.ended_at = now
             sess.end_reason = f"capture job {job.status}"
+            db.flush()  # the one-live-session-per-channel index must see this session closed first
             sess = None
     if sess is None:
-        # Customer channels start only within the subscription (entitled, hours left, simultaneous lives, storage)
+        # Shared live: it starts when the HTS consumes the channel or at least one following customer may follow it
         from . import entitlements
 
         blocked = entitlements.check_session_start(db, s)
@@ -129,9 +136,20 @@ def report_status(db: Session, streamer_id: int, live: bool, title: str = "", er
             log.info("session not started (plan limits)", extra={"streamer_id": s.id, "reason": blocked})
             return result
         concurrent = db.scalar(select(func.count()).select_from(StreamSession).where(StreamSession.status == "live"))
-        sess = StreamSession(streamer_id=s.id, status="live", title=title[:500] or s.stream_title, started_at=now)
-        db.add(sess)
-        db.flush()
+        settings = load_ai_settings(db)
+        # The base analysis profile is pinned now: every consumer of this live reuses the same results
+        try:
+            with db.begin_nested():
+                sess = StreamSession(streamer_id=s.id, status="live", title=title[:500] or s.stream_title, started_at=now,
+                                     base_profile={"language": settings.language, "whisper_model": settings.whisper_model})
+                db.add(sess)
+                db.flush()
+        except IntegrityError:
+            # another report of the same live won the race (unique live session per channel): join it
+            sess = active_session(db, s.id)
+            result["session_id"] = sess.id if sess else None
+            return result
+        entitlements.attach_consumers(db, sess, from_t=0.0)
         queue.enqueue(
             db, "capture",
             {"session_id": sess.id, "streamer_id": s.id, "platform": s.platform, "url": s.url},
@@ -154,10 +172,10 @@ def session_state(db: Session, session_id: int) -> dict:
         raise NotFound("session")
     streamer = db.get(Streamer, sess.streamer_id)
     next_idx = db.scalar(select(func.max(Segment.idx)).where(Segment.session_id == session_id))
-    # A customer's capture stops as soon as access ends or the cycle's hours run out (checked on every poll)
+    # The shared capture continues while the HTS or any customer still follows this live (checked on every poll)
     from . import entitlements
 
-    over_plan = bool(streamer is not None and entitlements.capture_stop_reason(db, streamer))
+    over_plan = bool(entitlements.session_stop_reason(db, streamer, sess))
     return {
         "session_id": sess.id,
         "status": sess.status,
@@ -176,6 +194,10 @@ def register_segments(db: Session, session_id: int, worker_id: str, base_url: st
     from . import entitlements
 
     streamer = db.get(Streamer, sess.streamer_id)
+    # Same base analysis for every consumer: the profile pinned at the start of the live, not today's settings
+    profile = sess.base_profile or {"language": settings.language, "whisper_model": settings.whisper_model}
+    if sess.base_profile is None:
+        sess.base_profile = profile
     if base_url:
         sess.segment_base_url = base_url
         sess.capture_worker_id = worker_id
@@ -195,25 +217,26 @@ def register_segments(db: Session, session_id: int, worker_id: str, base_url: st
         row.sha256 = str(seg.get("sha256", ""))
         row.available = True
         sess.covered_until = max(sess.covered_until, row.start + row.duration)
-        # Customer channels: every new segment is metered once (live:{session}:{idx}); beyond the plan it is
-        # kept out of the analysis so no further work is consumed
-        if new and streamer is not None and not entitlements.meter_segment(db, streamer, session_id, idx, row.duration):
+        # Every attached customer is charged once per new segment (live:{user}:{session}:{idx}); a segment that
+        # nobody needs any more (no HTS, no customer within its plan) is kept out of the analysis
+        if new and streamer is not None and not entitlements.meter_segment(db, streamer, sess, idx, row.start, row.duration):
             row.analysis_state = "skipped"
             continue
-        if row.analysis_state == "skipped" and streamer is not None and streamer.owner_id is not None:
+        if row.analysis_state == "skipped" and streamer is not None and not streamer.hts_monitoring:
             continue
         queue.enqueue(
             db, "audio_analyze",
             {
                 "session_id": session_id, "segment_idx": idx, "start": row.start, "duration": row.duration,
                 "sha256": row.sha256, "segment_url": f"{sess.segment_base_url}/segments/{session_id}/{idx}",
-                "language": settings.language, "whisper_model": settings.whisper_model,
+                "language": profile.get("language", settings.language),
+                "whisper_model": profile.get("whisper_model", settings.whisper_model),
             },
             idempotency_key=f"audio:{session_id}:{idx}", priority=50, max_attempts=3,
         )
     db.flush()
     sess.segment_count = db.scalar(select(func.count()).select_from(Segment).where(Segment.session_id == session_id))
-    if streamer is not None and entitlements.capture_stop_reason(db, streamer):
+    if entitlements.session_stop_reason(db, streamer, sess):
         sess.stop_requested = True
     return added
 
@@ -620,16 +643,17 @@ def enqueue_render(db: Session, clip: Clip) -> Job | None:
     from . import entitlements
 
     streamer = db.get(Streamer, clip.streamer_id)
-    blocked = entitlements.render_block_reason(db, streamer) if streamer is not None else ""
+    blocked = entitlements.render_block_reason(db, streamer, clip) if streamer is not None else ""
     if blocked:
-        # Customer over its storage (or without access): nothing is rendered; it can be retried after cleanup
+        # Nobody entitled to this moment has room (or access): nothing is rendered; retried after cleanup
         clip.status = "failed"
         clip.error = f"render não iniciado: {blocked}"
         return None
     clip.status = "rendering"
     clip.error = ""
     # Plans with priority processing render ahead of the default queue position
-    priority = 60 if streamer is not None and streamer.owner_id is not None and entitlements.has_feature(db, streamer, "priority") else 70
+    priority = 60 if (streamer is not None and not streamer.hts_monitoring
+                      and entitlements.has_feature(db, streamer, "priority", clip)) else 70
     job = queue.enqueue(db, "render", {"clip_id": clip.id, "version": clip.version, "render_id": uuid.uuid4().hex[:12]},
                         idempotency_key=f"render:{clip.id}:v{clip.version}", priority=priority, max_attempts=3)
     # the delivery must carry this id (an existing job of the same key keeps its own id)

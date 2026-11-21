@@ -182,10 +182,16 @@ def on_clip_status(db: Session, clip: Clip) -> None:
     if clip.status in ("approved", "ready"):
         for g in active_grants(db, streamer_id=clip.streamer_id):
             _share_from_grant(db, g, clip)
+        from . import editorial
+
+        editorial.deliver(db, clip)  # customers following this live receive it per their own preset and plan
         return
     now = utcnow()
-    for s in db.scalars(select(ClipShare).where(ClipShare.clip_id == clip.id, ClipShare.grant_id.is_not(None),
-                                                ClipShare.revoked_at.is_(None))):
+    # A customer's own delivery follows ITS selection, not the HTS editorial review: only a failed clip leaves
+    revoked = ClipShare.grant_id.is_not(None)
+    if clip.status == "failed":
+        revoked = or_(revoked, ClipShare.monitor_id.is_not(None))
+    for s in db.scalars(select(ClipShare).where(ClipShare.clip_id == clip.id, revoked, ClipShare.revoked_at.is_(None))):
         s.revoked_at = now
 
 

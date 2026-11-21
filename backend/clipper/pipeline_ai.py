@@ -417,7 +417,8 @@ def _needs_deep(db: Session, clip: Clip, decision: DirectorDecision, judgement: 
     from . import entitlements
     from .models import Job, Streamer
 
-    if not entitlements.has_feature(db, db.get(Streamer, clip.streamer_id), "secondPass"):
+    # shared work: it runs once, and only when a customer entitled to this moment has the feature (or the HTS)
+    if not entitlements.has_feature(db, db.get(Streamer, clip.streamer_id), "secondPass", clip):
         return False
 
     queued = db.query(Job).filter(Job.type == "vision_analyze", Job.status == "queued").count()

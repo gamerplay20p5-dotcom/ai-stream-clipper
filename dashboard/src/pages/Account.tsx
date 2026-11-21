@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CreditCard, ExternalLink, Film, KeyRound, LogOut, Radio, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, type AccountChannel, type AccountState } from "../api";
+import { api, type AccountChannel, type AccountPreset, type AccountState } from "../api";
 import { Brand } from "../components/Brand";
 import { ConfirmAction, Empty, ErrorNote, LanguagePicker, Notice, Skeleton, Status } from "../components/ui";
 import { locale, t } from "../i18n";
@@ -102,46 +102,83 @@ function Manage({ state }: { state: AccountState }) {
   );
 }
 
+const PRESET_LABELS: Record<AccountPreset, () => string> = {
+  balanced: () => t("Seleção equilibrada"),
+  best: () => t("Melhores momentos"),
+  humor: () => t("Humor e reações"),
+  highlights: () => t("Jogadas e highlights"),
+  intense: () => t("Momentos intensos"),
+};
+
+function monitoringText(ch: AccountChannel): string {
+  switch (ch.monitoring.state) {
+    case "watching": return t("Acompanhando a live agora");
+    case "live_pending": return t("Ao vivo agora");
+    case "paused": return t("Pausado pelo plano");
+    case "not_following": return t("Fora do seu plano nesta live: {reason}", { reason: ch.monitoring.note });
+    default: return t("{n} cortes", { n: String(ch.clips) });
+  }
+}
+
 function Channels({ state }: { state: AccountState }) {
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ["account-channels"], queryFn: () => api.get<AccountChannel[]>("/api/account/channels") });
+  const presets = useQuery({ queryKey: ["account-presets"], queryFn: () => api.get<{ id: AccountPreset; allowed: boolean }[]>("/api/account/presets") });
   const [url, setUrl] = useState("");
   const refresh = () => { void qc.invalidateQueries({ queryKey: ["account-channels"] }); void qc.invalidateQueries({ queryKey: ["account"] }); };
   const add = useMutation({ mutationFn: () => api.post("/api/account/channels", { url }), onSuccess: () => { setUrl(""); refresh(); } });
   const remove = useMutation({ mutationFn: (id: number) => api.del(`/api/account/channels/${id}`), onSuccess: refresh });
+  const setPreset = useMutation({
+    mutationFn: ({ id, preset }: { id: number; preset: AccountPreset }) => api.patch(`/api/account/channels/${id}`, { preset }),
+    onSuccess: refresh,
+  });
   const limit = state.limits?.channels ?? 0;
   const channels = list.data ?? [];
+  const options = presets.data ?? [];
+  const canChoose = options.some((o) => o.allowed && o.id !== "balanced");
   return (
     <section className="account-card" aria-labelledby="channels-title">
-      <h2 id="channels-title" className="account-card-title">{t("Canais monitorados")}</h2>
+      <h2 id="channels-title" className="account-card-title">{t("Meus canais")}</h2>
       <ErrorNote error={list.error} />
       {list.isLoading && <Skeleton label={t("Carregando canais")} lines={2} />}
-      {list.data && channels.length === 0 && <Empty title={t("Nenhum canal ainda")}>{t("Adicione o link do seu canal da Twitch ou do YouTube para o Clipper acompanhar suas lives.")}</Empty>}
+      {list.data && channels.length === 0 && <Empty title={t("Nenhum canal ainda")}>{t("Adicione o link de um canal da Twitch ou do YouTube para o Clipper acompanhar as lives e gerar os seus Shorts.")}</Empty>}
       <ul className="account-channels">
         {channels.map((ch) => (
           <li key={ch.id}>
-            <Radio size={16} aria-hidden className={ch.status === "live" ? "text-take" : "text-ink-muted"} />
-            <div className="min-w-0">
+            <Radio size={16} aria-hidden className={ch.monitoring.state === "watching" ? "text-take" : "text-ink-muted"} />
+            <div className="min-w-0 flex-1">
               <p className="truncate text-sm">{ch.display_name || ch.channel} <span className="text-xs text-ink-muted">{ch.platform}</span></p>
-              <p className="text-xs text-ink-muted">{ch.note || (ch.status === "live" ? t("Ao vivo agora") : t("{n} cortes", { n: String(ch.clips) }))}</p>
+              <p className="text-xs text-ink-muted">{monitoringText(ch)}</p>
+              <label className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-muted">
+                <span className="shrink-0">{t("Preferência de cortes")}</span>
+                <select className="field w-auto py-1 text-xs" value={ch.preset} disabled={!canChoose || setPreset.isPending}
+                  onChange={(e) => setPreset.mutate({ id: ch.id, preset: e.target.value as AccountPreset })}>
+                  {options.filter((o) => o.allowed || o.id === ch.preset).map((o) => (
+                    <option key={o.id} value={o.id}>{PRESET_LABELS[o.id]()}</option>
+                  ))}
+                </select>
+              </label>
             </div>
-            <ConfirmAction title={t("Remover este canal?")} description={t("O monitoramento para e os cortes deste canal são apagados.")}
+            <ConfirmAction title={t("Parar de acompanhar este canal?")} description={t("O acompanhamento para. Os Shorts que você já recebeu continuam na sua biblioteca.")}
               confirmLabel={t("Remover")} pending={remove.isPending} onConfirm={() => remove.mutate(ch.id)} label={t("Remover {name}", { name: ch.display_name || ch.channel })}>
               <Trash2 size={15} aria-hidden />
             </ConfirmAction>
           </li>
         ))}
       </ul>
+      {channels.length > 0 && !canChoose && presets.data && (
+        <p className="text-xs text-ink-muted">{t("No Basic, os cortes seguem a seleção equilibrada. Creator e Pro escolhem a preferência por canal.")}</p>
+      )}
       {state.entitled && channels.length < limit && (
         <form className="account-add" onSubmit={(e: FormEvent) => { e.preventDefault(); add.mutate(); }}>
           <label className="label" htmlFor="channel-url">{t("Link do canal")}</label>
           <div className="flex gap-2">
-            <input id="channel-url" className="field" type="url" required placeholder="https://www.twitch.tv/seucanal" value={url} onChange={(e) => setUrl(e.target.value)} />
+            <input id="channel-url" className="field" type="url" required placeholder="https://www.twitch.tv/canal" value={url} onChange={(e) => setUrl(e.target.value)} />
             <button className="btn-take" disabled={add.isPending}>{add.isPending ? t("Adicionando…") : t("Adicionar")}</button>
           </div>
         </form>
       )}
-      <ErrorNote error={add.error ?? remove.error} />
+      <ErrorNote error={add.error ?? remove.error ?? setPreset.error} />
     </section>
   );
 }

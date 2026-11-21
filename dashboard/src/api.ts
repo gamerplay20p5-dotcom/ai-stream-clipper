@@ -518,9 +518,12 @@ export type AccountState = {
   entitled: boolean; subscription: AccountSubscription | null; limits: AccountLimits | null; checkout_available: boolean;
   usage: { channels: number; storage_bytes: number; live_sessions: number; live_seconds: number; exports_4k: number };
 };
+export type AccountPreset = "balanced" | "best" | "humor" | "highlights" | "intense";
+/** A channel this customer follows. Only its own view: never other customers or internal processing. */
 export type AccountChannel = {
-  id: number; platform: string; channel: string; url: string; display_name: string; enabled: boolean;
-  status: string; note: string; clips: number; last_live_at: string | null;
+  id: number; platform: string; channel: string; url: string; display_name: string;
+  status: string; clips: number; last_live_at: string | null; preset: AccountPreset;
+  monitoring: { state: "watching" | "live_pending" | "waiting" | "paused" | "not_following"; note: string };
 };
 
 export type LibraryItem = {

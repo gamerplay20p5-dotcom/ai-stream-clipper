@@ -74,14 +74,20 @@ class Streamer(Base):
     last_error: Mapped[str] = mapped_column(Text, default="")
     check_requested: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    # NULL = HTS channel (no quotas, unchanged behaviour); set = channel of a customer account (subscription limits)
+    # Deprecated since 0018 (kept, unused): customers follow channels through ChannelMonitor, never own them
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True)
+    # The HTS itself consumes this channel (every channel created by staff). Channels added only by customers are
+    # False: captured while at least one entitled customer follows them. ``enabled`` stays the global switch.
+    hts_monitoring: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
 
     sessions: Mapped[list[StreamSession]] = relationship(back_populates="streamer", cascade="all, delete-orphan")
 
 
 class StreamSession(Base):
     __tablename__ = "stream_sessions"
+    # One live session per channel, enforced by the database: the shared capture never runs twice for one live
+    __table_args__ = (Index("uq_stream_sessions_one_live", "streamer_id", unique=True,
+                            postgresql_where=text("status = 'live'"), sqlite_where=text("status = 'live'")),)
     id: Mapped[int] = mapped_column(primary_key=True)
     streamer_id: Mapped[int] = mapped_column(ForeignKey("streamers.id", ondelete="CASCADE"), index=True)
     status: Mapped[str] = mapped_column(String(20), default="live", index=True)  # live|ended|failed
@@ -98,6 +104,9 @@ class StreamSession(Base):
     stop_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     # scoring diagnostics: rejected moments by reason, best rejected score, last scoring time
     stats: Mapped[dict] = mapped_column(JSON, default=dict)
+    # analysis profile pinned when the live starts (language, whisper model): every consumer reuses the same
+    # base analysis, and a settings change during the live never mixes incompatible results
+    base_profile: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     streamer: Mapped[Streamer] = relationship(back_populates="sessions")
 
@@ -638,6 +647,7 @@ class ClipShare(Base):
     variants: Mapped[dict] = mapped_column(JSON, default=dict)  # {name: {video_path, sha256, label}}
     follow_latest: Mapped[bool] = mapped_column(Boolean, default=False)
     grant_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # created by a StreamerGrant
+    monitor_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # a customer's monitor delivery
 
 
 class StreamerGrant(Base):
@@ -780,6 +790,50 @@ class BillingEvent(Base):
     seq: Mapped[int] = mapped_column(BigInteger)
     outcome: Mapped[str] = mapped_column(String(20))  # applied | stale
     received_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ChannelMonitor(Base):
+    """A customer follows a source channel with its own editorial preset (the channel itself is shared).
+
+    Many customers can follow the same channel; one capture and one base analysis serve all of them."""
+
+    __tablename__ = "channel_monitors"
+    __table_args__ = (
+        Index("uq_channel_monitors_active", "user_id", "streamer_id", unique=True,
+              postgresql_where=text("removed_at IS NULL"), sqlite_where=text("removed_at IS NULL")),
+        Index("ix_channel_monitors_streamer", "streamer_id", "removed_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    streamer_id: Mapped[int] = mapped_column(ForeignKey("streamers.id", ondelete="CASCADE"))
+    preset: Mapped[str] = mapped_column(String(20), default="balanced")
+    paused_reason: Mapped[str] = mapped_column(String(120), default="")  # set by the plan (over the channel limit)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class MonitorSession(Base):
+    """One customer attached to one live session: the part of the live it is entitled to and consumes.
+
+    ``from_t``/``until_t`` are positions on the session timeline (seconds). A customer that runs out of hours
+    or access stops here; the shared capture continues for everyone else."""
+
+    __tablename__ = "monitor_sessions"
+    __table_args__ = (
+        UniqueConstraint("monitor_id", "session_id", name="uq_monitor_session"),
+        Index("ix_monitor_sessions_session", "session_id", "state"),
+        Index("ix_monitor_sessions_user", "user_id", "state"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    monitor_id: Mapped[int] = mapped_column(ForeignKey("channel_monitors.id", ondelete="CASCADE"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    session_id: Mapped[int] = mapped_column(ForeignKey("stream_sessions.id", ondelete="CASCADE"))
+    state: Mapped[str] = mapped_column(String(16), default="watching")  # watching | stopped
+    from_t: Mapped[float] = mapped_column(Float, default=0.0)
+    until_t: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stop_reason: Mapped[str] = mapped_column(String(120), default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class UsageEntry(Base):

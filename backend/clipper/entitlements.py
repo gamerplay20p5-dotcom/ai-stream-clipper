@@ -5,8 +5,11 @@ Source of truth split:
   sends a full **entitlement snapshot** per subscription through a transactional outbox (HMAC, at-least-once);
 * this module owns **access**: ``apply_snapshot`` stores the snapshot idempotently (event id) and in order
   (outbox sequence); ``current`` answers "is this account entitled now, to which limits";
-* the pipeline asks the ``check_*`` / ``meter_*`` helpers before and during work for channels owned by a
-  customer. HTS channels (``owner_id IS NULL``) are never limited: behaviour unchanged.
+* the pipeline asks the ``check_*`` / ``meter_*`` helpers before and during work. A channel is SHARED: many
+  customers follow it (``ChannelMonitor``) and one capture and one base analysis serve all of them. Each customer
+  is attached to a live (``MonitorSession``) only within its own plan, consumes its own hours and receives its own
+  library; one customer running out never stops the others. Channels the HTS consumes itself
+  (``streamers.hts_monitoring``) are never limited: behaviour unchanged.
 
 Plan limits are NOT hard-coded here: they come inside each snapshot, from ``commercial/catalog.json``.
 """
@@ -22,7 +25,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .db import utcnow
-from .models import AccountSubscription, BillingEvent, Clip, StreamSession, Streamer, UsageEntry, User
+from .models import (AccountSubscription, BillingEvent, ChannelMonitor, Clip, ClipShare, MonitorSession, StreamSession,
+                     Streamer, UsageEntry, User)
 
 log = logging.getLogger(__name__)
 
@@ -179,17 +183,23 @@ def record_usage(db: Session, user_id: int, metric: str, source_key: str, period
 
 
 def storage_bytes(db: Session, user_id: int) -> int:
-    return int(db.scalar(select(func.coalesce(func.sum(Clip.file_size), 0)).join(Streamer, Streamer.id == Clip.streamer_id)
-                         .where(Streamer.owner_id == user_id)) or 0)
+    """Bytes in the customer's own library. A file shared physically with other customers still counts for each
+    library that holds it, so following a channel someone else already follows never frees quota."""
+    return int(db.scalar(select(func.coalesce(func.sum(ClipShare.video_bytes), 0)).where(
+        ClipShare.user_id == user_id, ClipShare.monitor_id.is_not(None), ClipShare.revoked_at.is_(None))) or 0)
 
 
-def live_sessions(db: Session, user_id: int) -> int:
-    return int(db.scalar(select(func.count()).select_from(StreamSession).join(Streamer, Streamer.id == StreamSession.streamer_id)
-                         .where(Streamer.owner_id == user_id, StreamSession.status == "live")) or 0)
+def live_sessions(db: Session, user_id: int, exclude_session: int | None = None) -> int:
+    q = (select(func.count()).select_from(MonitorSession).join(StreamSession, StreamSession.id == MonitorSession.session_id)
+         .where(MonitorSession.user_id == user_id, MonitorSession.state == "watching", StreamSession.status == "live"))
+    if exclude_session is not None:
+        q = q.where(MonitorSession.session_id != exclude_session)
+    return int(db.scalar(q) or 0)
 
 
 def channel_count(db: Session, user_id: int) -> int:
-    return int(db.scalar(select(func.count()).select_from(Streamer).where(Streamer.owner_id == user_id)) or 0)
+    return int(db.scalar(select(func.count()).select_from(ChannelMonitor).where(
+        ChannelMonitor.user_id == user_id, ChannelMonitor.removed_at.is_(None))) or 0)
 
 
 def usage_summary(db: Session, user_id: int) -> dict:
@@ -203,7 +213,7 @@ def usage_summary(db: Session, user_id: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# checks used by the pipeline (customer channels only)
+# shared lives: who consumes a live session
 # ---------------------------------------------------------------------------
 
 
@@ -212,68 +222,162 @@ def _lock_account(db: Session, ent: Entitlement) -> None:
     db.scalar(select(AccountSubscription.id).where(AccountSubscription.id == ent.subscription_id).with_for_update())
 
 
-def check_session_start(db: Session, streamer: Streamer) -> str:
-    """'' when a live session may start for this channel, otherwise the reason it may not."""
-    if streamer.owner_id is None:
-        return ""
-    ent = current(db, streamer.owner_id)
+def active_monitors(db: Session, streamer_id: int) -> list[ChannelMonitor]:
+    return list(db.scalars(select(ChannelMonitor).where(ChannelMonitor.streamer_id == streamer_id,
+                                                        ChannelMonitor.removed_at.is_(None))
+                           .order_by(ChannelMonitor.created_at, ChannelMonitor.id)))
+
+
+def attach_block_reason(db: Session, monitor: ChannelMonitor, ent: Entitlement | None, session_id: int | None) -> str:
+    """'' when this customer may follow a live of the channel now, otherwise why not (shown to that customer only)."""
     if ent is None:
         return "assinatura inativa"
-    _lock_account(db, ent)
+    if monitor.paused_reason:
+        return monitor.paused_reason
     if used(db, ent, "live_seconds") >= ent.limits["hours"] * 3600:
         return "franquia de horas do ciclo esgotada"
-    if live_sessions(db, streamer.owner_id) >= ent.limits["simultaneous"]:
+    if live_sessions(db, ent.user_id, exclude_session=session_id) >= ent.limits["simultaneous"]:
         return "limite de lives simultâneas do plano"
-    if storage_bytes(db, streamer.owner_id) >= ent.limits["storage_gb"] * GB:
+    if storage_bytes(db, ent.user_id) >= ent.limits["storage_gb"] * GB:
         return "armazenamento do plano cheio"
     return ""
 
 
-def capture_stop_reason(db: Session, streamer: Streamer) -> str:
-    """Checked on every capture poll: a running capture stops when access ends or the hours run out."""
-    if streamer.owner_id is None:
+def attachments(db: Session, session_id: int, state: str | None = None) -> list[MonitorSession]:
+    q = select(MonitorSession).where(MonitorSession.session_id == session_id)
+    if state:
+        q = q.where(MonitorSession.state == state)
+    return list(db.scalars(q.order_by(MonitorSession.id)))
+
+
+def _stop(att: MonitorSession, at: float, reason: str) -> None:
+    att.state, att.until_t, att.stop_reason, att.stopped_at = "stopped", at, reason[:120], utcnow()
+
+
+def attach_consumers(db: Session, sess: StreamSession, from_t: float = 0.0) -> int:
+    """Attach every customer that follows the channel and may follow this live now. Idempotent: a customer is
+    attached at most once per session (unique monitor+session). A refusal is recorded and retried on the next
+    segment (the customer may renew meanwhile); a customer that consumed part of the live and stopped stays stopped."""
+    added = 0
+    for m in active_monitors(db, sess.streamer_id):
+        att = db.scalar(select(MonitorSession).where(MonitorSession.monitor_id == m.id, MonitorSession.session_id == sess.id))
+        if att is not None and att.state != "refused":
+            continue
+        ent = current(db, m.user_id)
+        if ent is not None:
+            _lock_account(db, ent)
+        reason = attach_block_reason(db, m, ent, sess.id)
+        if att is None:
+            att = MonitorSession(monitor_id=m.id, user_id=m.user_id, session_id=sess.id, from_t=from_t)
+            db.add(att)
+        if reason:
+            att.state, att.stop_reason, att.from_t, att.until_t = "refused", reason[:120], from_t, from_t
+        else:
+            att.state, att.stop_reason, att.from_t, att.until_t, att.started_at = "watching", "", from_t, None, utcnow()
+            added += 1
+        db.flush()
+    return added
+
+
+def check_session_start(db: Session, streamer: Streamer) -> str:
+    """'' when a live session may start: the HTS consumes the channel, or at least one following customer may."""
+    if streamer.hts_monitoring:
         return ""
-    ent = current(db, streamer.owner_id)
-    if ent is None:
-        return "assinatura inativa"
-    if used(db, ent, "live_seconds") >= ent.limits["hours"] * 3600:
-        return "franquia de horas do ciclo esgotada"
-    return ""
+    monitors = active_monitors(db, streamer.id)
+    if not monitors:
+        return "nenhum assinante acompanha este canal"
+    reasons = []
+    for m in monitors:
+        reason = attach_block_reason(db, m, current(db, m.user_id), None)
+        if not reason:
+            return ""
+        reasons.append(reason)
+    return f"nenhum assinante pode acompanhar agora ({reasons[0]})"
 
 
-def meter_segment(db: Session, streamer: Streamer, session_id: int, idx: int, seconds: float) -> bool:
-    """Counts one captured segment against the cycle's hours. Returns False when it must NOT be analysed
-    (no entitlement, or the franchise was already exhausted before this segment)."""
-    if streamer.owner_id is None:
-        return True
-    ent = current(db, streamer.owner_id)
-    if ent is None:
-        return False
-    _lock_account(db, ent)
-    if used(db, ent, "live_seconds") >= ent.limits["hours"] * 3600:
-        return False
-    # The segment that crosses the limit is still analysed; the capture is told to stop right after
-    record_usage(db, ent.user_id, "live_seconds", f"live:{session_id}:{idx}", ent.period_key, max(0, round(seconds)))
-    return True
-
-
-def render_block_reason(db: Session, streamer: Streamer) -> str:
-    if streamer.owner_id is None:
+def session_stop_reason(db: Session, streamer: Streamer | None, sess: StreamSession) -> str:
+    """Checked on every capture poll: the shared capture continues while the HTS or any customer still follows it."""
+    if streamer is None or not streamer.enabled:
+        return "canal desativado"
+    if streamer.hts_monitoring:
         return ""
-    ent = current(db, streamer.owner_id)
-    if ent is None:
-        return "assinatura inativa"
-    if storage_bytes(db, streamer.owner_id) >= ent.limits["storage_gb"] * GB:
-        return "armazenamento do plano cheio"
-    return ""
+    if attachments(db, sess.id, "watching"):
+        return ""
+    return "nenhum assinante acompanhando esta live"
 
 
-def has_feature(db: Session, streamer: Streamer | None, name: str) -> bool:
-    """Plan feature for a customer channel; HTS channels keep every feature (unchanged behaviour)."""
-    if streamer is None or streamer.owner_id is None:
+def meter_segment(db: Session, streamer: Streamer, sess: StreamSession, idx: int, start: float, seconds: float) -> bool:
+    """One new captured segment: every attached customer is charged once for it (``live:{user}:{session}:{idx}``)
+    within its own franchise. A customer that runs out stops here; the others continue. Returns False when nobody
+    (HTS or customer) needs this segment, so it is not analysed."""
+    attach_consumers(db, sess, from_t=start)
+    for att in attachments(db, sess.id, "watching"):
+        monitor = db.get(ChannelMonitor, att.monitor_id)
+        if monitor is None or monitor.removed_at is not None:
+            _stop(att, start, "canal removido pelo assinante")
+            continue
+        if monitor.paused_reason:
+            _stop(att, start, monitor.paused_reason)
+            continue
+        ent = current(db, att.user_id)
+        if ent is None:
+            _stop(att, start, "assinatura inativa")
+            continue
+        _lock_account(db, ent)
+        limit = ent.limits["hours"] * 3600
+        if used(db, ent, "live_seconds") >= limit:
+            _stop(att, start, "franquia de horas do ciclo esgotada")
+            continue
+        # The segment that crosses the limit is still delivered to this customer; it stops right after it
+        record_usage(db, att.user_id, "live_seconds", f"live:{att.user_id}:{sess.id}:{idx}", ent.period_key,
+                     max(0, round(seconds)))
+        if used(db, ent, "live_seconds") >= limit:
+            _stop(att, start + seconds, "franquia de horas do ciclo esgotada")
+    db.flush()
+    if streamer.hts_monitoring:
         return True
-    ent = current(db, streamer.owner_id)
-    return ent is not None and ent.feature(name)
+    return any(a.state == "watching" or (a.until_t is not None and a.until_t > start)
+               for a in attachments(db, sess.id) if a.state != "refused")
+
+
+def consumers_of_clip(db: Session, clip: Clip) -> list[MonitorSession]:
+    """Customers whose followed window of the live contains this moment (only they may receive it)."""
+    return [a for a in attachments(db, clip.session_id) if a.state != "refused" and a.from_t <= clip.start
+            and (a.until_t is None or clip.start < a.until_t)]
+
+
+def render_block_reason(db: Session, streamer: Streamer, clip: Clip | None = None) -> str:
+    """'' when the (shared) render may run: the HTS needs it, or a customer entitled to this moment has room."""
+    if streamer.hts_monitoring or clip is None:
+        return ""
+    reason = "nenhum assinante neste trecho da live"
+    for att in consumers_of_clip(db, clip):
+        ent = current(db, att.user_id)
+        if ent is None:
+            reason = "assinatura inativa"
+        elif storage_bytes(db, att.user_id) >= ent.limits["storage_gb"] * GB:
+            reason = "armazenamento do plano cheio"
+        else:
+            return ""
+    return reason
+
+
+def has_feature(db: Session, streamer: Streamer | None, name: str, clip: Clip | None = None) -> bool:
+    """A premium step (second pass, variants, priority) runs on shared work only when someone needs it: the HTS,
+    or a customer entitled to this moment whose plan includes the feature. It never runs once per customer."""
+    if streamer is None or streamer.hts_monitoring:
+        return True
+    if clip is not None:
+        consumers = consumers_of_clip(db, clip)
+    else:
+        live = db.scalar(select(StreamSession.id).where(StreamSession.streamer_id == streamer.id,
+                                                        StreamSession.status == "live").order_by(StreamSession.id.desc()))
+        consumers = attachments(db, live, "watching") if live else []
+    for att in consumers:
+        ent = current(db, att.user_id)
+        if ent is not None and ent.feature(name):
+            return True
+    return False
 
 
 def export_4k_block_reason(db: Session, user_id: int) -> str:
@@ -302,22 +406,25 @@ def reserve_export_4k(db: Session, user_id: int, clip_id: int) -> str:
     return ""
 
 
+PLAN_PAUSE = "pausado: fora do limite do plano"
+
+
 def enforce_account(db: Session, user_id: int) -> None:
-    """Apply the account's current entitlement to running work right away (after every snapshot):
-    no entitlement -> live captures of its channels are asked to stop; channels beyond the plan are paused
-    (the oldest ones stay enabled). Clips already produced are kept."""
+    """Apply the account's current entitlement right away (after every snapshot), for THIS customer only:
+    monitors beyond the plan are paused (the oldest stay active) and come back when the plan allows; without
+    access, or when paused, its attachments to running lives stop. Shared channels and captures are never
+    touched here: other customers and the HTS keep going. Clips already in the library are kept."""
     ent = current(db, user_id)
-    channels = db.scalars(select(Streamer).where(Streamer.owner_id == user_id).order_by(Streamer.created_at, Streamer.id)).all()
+    monitors = db.scalars(select(ChannelMonitor).where(ChannelMonitor.user_id == user_id, ChannelMonitor.removed_at.is_(None))
+                          .order_by(ChannelMonitor.created_at, ChannelMonitor.id)).all()
     allowed = int(ent.limits["channels"]) if ent else 0
-    for position, streamer in enumerate(channels):
-        over = position >= allowed
-        if over and streamer.enabled:
-            streamer.enabled = False
-            streamer.last_error = "pausado: fora do limite do plano" if ent else "pausado: assinatura inativa"
-        elif not over and not streamer.enabled and streamer.last_error.startswith("pausado: "):
-            streamer.enabled = True
-            streamer.last_error = ""
-    if ent is None:
-        for sess in db.scalars(select(StreamSession).join(Streamer, Streamer.id == StreamSession.streamer_id)
-                               .where(Streamer.owner_id == user_id, StreamSession.status == "live")):
-            sess.stop_requested = True
+    for position, m in enumerate(monitors):
+        if ent is not None and position >= allowed:
+            m.paused_reason = PLAN_PAUSE
+        elif m.paused_reason == PLAN_PAUSE:
+            m.paused_reason = ""
+    paused = {m.id for m in monitors if m.paused_reason}
+    for att in db.scalars(select(MonitorSession).where(MonitorSession.user_id == user_id, MonitorSession.state == "watching")):
+        if ent is None or att.monitor_id in paused:
+            sess = db.get(StreamSession, att.session_id)
+            _stop(att, sess.covered_until if sess else 0.0, "assinatura inativa" if ent is None else PLAN_PAUSE)
