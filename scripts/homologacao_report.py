@@ -53,12 +53,15 @@ def console(log: Path) -> dict | None:
 def main(run: Path) -> int:
     steps = [json.loads(l) for l in (run / "steps.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
     env = json.loads((run / "environment.json").read_text(encoding="utf-8")) if (run / "environment.json").is_file() else {}
-    rows, problems, pending = [], [], []
+    rows, problems, pending, skipped_optional = [], [], [], []
     for s in steps:
         counts = junit(run / f"{s['step']}.xml") or console(run / f"{s['step']}.log")
         s["counts"] = counts
         if s["status"] == "not_run":
-            pending.append(s)
+            if s.get("required", True):
+                pending.append(s)
+            else:
+                skipped_optional.append(s)
         elif s["status"] != "passed" and s.get("required", True):
             problems.append(s)
         if s["step"] in PG_STEPS and s["status"] == "passed":
@@ -115,10 +118,12 @@ def main(run: Path) -> int:
         lines += ["", "## Problemas / Problems", ""]
         for p in problems:
             lines.append(f"- {p['step']}: {p.get('why', 'falhou / failed')} (log: `{p['step']}.log`)")
-    if pending:
+    if pending or skipped_optional:
         lines += ["", "## Não executado / Not run", ""]
         for p in pending:
-            lines.append(f"- {p['step']}: {p.get('reason', '')}")
+            lines.append(f"- {p['step']} (obrigatória / required): {p.get('reason', '')}")
+        for p in skipped_optional:
+            lines.append(f"- {p['step']} (opcional nesta máquina / optional here): {p.get('reason', '')}")
     lines += ["", "## Classificação / Classification", "",
               "- **Executado de verdade / Really executed**: as etapas com situação \"passou\" ou \"FALHOU\" acima.",
               "- **Apenas preparado / Only prepared**: as etapas \"não executada\".",
