@@ -1,6 +1,6 @@
 import {
   Activity, AudioLines, CalendarDays, Clapperboard, ClipboardCheck, HardDrive, Library, Link2, Radio, ScrollText,
-  Server, SlidersHorizontal, Sun, Users, type LucideIcon,
+  Briefcase, Server, SlidersHorizontal, Sun, Users, type LucideIcon,
 } from "lucide-react";
 import { t } from "../i18n";
 
@@ -29,6 +29,7 @@ export const staffNav: NavGroup[] = [
   { key: "acervo", label: t("Acervo e pessoas"), items: [
     { to: "/referencias", label: t("Referências"), icon: Library, match: at("/referencias") },
     { to: "/pessoas", label: t("Pessoas e acesso"), icon: Users, match: at("/pessoas") },
+    { to: "/clientes", label: t("Clientes"), icon: Briefcase, match: at("/clientes") },
   ] },
   { key: "config", label: t("Configuração"), collapsible: true, items: [
     { to: "/streamers", label: t("Canais monitorados"), icon: Radio, match: at("/streamers") },

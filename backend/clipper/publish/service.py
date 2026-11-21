@@ -27,14 +27,15 @@ from ..models import (
     Review,
     Streamer,
 )
-from . import crypto, instagram, tiktok, youtube
+from . import crypto, facebook, instagram, tiktok, youtube
 from .base import App, PublishError, Tokens, pkce_pair
 
 log = logging.getLogger(__name__)
 
-PROVIDERS = {"youtube": youtube, "tiktok": tiktok, "instagram": instagram}
-PLATFORM_NAME = {"youtube": "YouTube Shorts", "tiktok": "TikTok", "instagram": "Instagram Reels"}
-MAX_DURATION = {"youtube": 180.0, "tiktok": 600.0, "instagram": 900.0}
+PROVIDERS = {"youtube": youtube, "tiktok": tiktok, "instagram": instagram, "facebook": facebook}
+PLATFORM_NAME = {"youtube": "YouTube Shorts", "tiktok": "TikTok", "instagram": "Instagram Reels",
+                 "facebook": "Facebook Reels"}
+MAX_DURATION = {"youtube": 180.0, "tiktok": 600.0, "instagram": 900.0, "facebook": 90.0}
 STATE_TTL = timedelta(minutes=15)
 ACTIVE = ("scheduled", "uploading", "processing", "uncertain")
 # a failed publication may only be reused when it is CERTAIN nothing reached the platform
@@ -135,7 +136,8 @@ def get_app(db: Session, platform: str) -> App:
     return App(platform, row.client_id, crypto.decrypt(row.client_secret_enc), row.redirect_uri, row.config_id or "")
 
 
-def start_oauth(db: Session, platform: str, user: str, return_to: str = "") -> dict:
+def start_oauth(db: Session, platform: str, user: str, return_to: str = "", owner_id: int | None = None) -> dict:
+    """``owner_id`` set: a CUSTOMER connects its own destination (the account will belong to it)."""
     app = get_app(db, platform)
     if platform == "instagram" and not app.config_id:
         # apps created with "API do Instagram (login unificado)" only accept the Facebook Login for
@@ -145,7 +147,7 @@ def start_oauth(db: Session, platform: str, user: str, return_to: str = "") -> d
     db.query(OAuthState).filter(OAuthState.created_at < utcnow() - STATE_TTL).delete()
     state = secrets.token_urlsafe(24)
     verifier, challenge = pkce_pair()
-    db.add(OAuthState(state=state, platform=platform, created_by=user,
+    db.add(OAuthState(state=state, platform=platform, created_by=user, owner_id=owner_id,
                       verifier_enc=crypto.encrypt({"v": verifier, "r": return_to[:300]})))
     return {"auth_url": provider(platform).auth_url(app, state, challenge), "state": state,
             "redirect_uri": app.redirect_uri}
@@ -160,6 +162,12 @@ def return_to(db: Session, state: str) -> str:
     """Panel origin (scheme://host:port) that started this authorization, '' if unknown."""
     st = db.get(OAuthState, state) if state else None
     return _state_data(st).get("r", "") if st is not None else ""
+
+
+def state_owner(db: Session, state: str) -> int | None:
+    """Customer that started this authorization (None: the HTS)."""
+    st = db.get(OAuthState, state) if state else None
+    return st.owner_id if st is not None else None
 
 
 def parse_redirect(text: str) -> tuple[str, str]:
@@ -181,6 +189,7 @@ def finish_oauth(db: Session, platform: str, code: str, state: str, user: str | 
         raise PublishRefused(["autorização expirada ou inválida: comece de novo em Conectar conta"])
     user = user or st.created_by
     verifier = _state_data(st)["v"]
+    owner_id = st.owner_id
     db.delete(st)  # one-shot (replay protection)
     app = get_app(db, platform)
     prov = provider(platform)
@@ -190,13 +199,27 @@ def finish_oauth(db: Session, platform: str, code: str, state: str, user: str | 
     except PublishError as exc:
         raise PublishRefused([str(exc)]) from exc
     first = None
+    refused: list[str] = []
     for one in [info] + list(info.get("additional") or []):  # Meta can share several accounts at once
         tk = Tokens(tokens.access_token, tokens.refresh_token, tokens.expires_at, tokens.scope,
                     {**tokens.extra, **(one.get("token_extra") or {})})
         acct = db.scalar(select(PublishAccount).where(PublishAccount.platform == platform,
                                                       PublishAccount.external_id == one["external_id"]))
+        is_new = acct is None
+        if owner_id is None and acct is not None and acct.owner_id is not None:
+            refused.append("esta conta pertence a um cliente e não pode ser conectada pela HTS")
+            continue
         if acct is None:
             acct = PublishAccount(platform=platform, external_id=one["external_id"])
+        if owner_id is not None:
+            from ..customer_publish import Refused, claim_connected
+
+            try:
+                claim_connected(db, owner_id, acct, is_new)
+            except Refused as exc:  # beyond the plan, or someone else's account: that one is skipped
+                refused.append(str(exc))
+                continue
+        if is_new:
             db.add(acct)
         acct.name, acct.handle, acct.meta = one.get("name", ""), one.get("handle", ""), one.get("meta") or {}
         acct.tokens_enc = crypto.encrypt(tk.as_dict())
@@ -205,6 +228,8 @@ def finish_oauth(db: Session, platform: str, code: str, state: str, user: str | 
         acct.connected_by, acct.connected_at = user, utcnow()
         db.flush()
         first = first or acct
+    if first is None:
+        raise PublishRefused(refused or ["nenhuma conta foi conectada"])
     return first
 
 
@@ -469,7 +494,9 @@ def auto_scan(db: Session, lookback_hours: int = 48) -> int:
         return 0
     made = 0
     since = utcnow() - timedelta(hours=lookback_hours)
-    for rule in db.scalars(select(PublishRule).where(PublishRule.enabled.is_(True), PublishRule.mode != "manual")):
+    # HTS rules only: customer rules are planned by clipper.customer_publish (own limits and authorization)
+    for rule in db.scalars(select(PublishRule).where(PublishRule.enabled.is_(True), PublishRule.mode != "manual",
+                                                     PublishRule.owner_id.is_(None))):
         acct = db.get(PublishAccount, rule.account_id)
         if acct is None or acct.status != "connected":
             continue

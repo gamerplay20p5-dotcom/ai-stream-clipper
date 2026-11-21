@@ -123,6 +123,14 @@ def media_for(pub: Publication, clip: Clip) -> tuple[str | None, str]:
     return clip.video_path, clip.sha256 or ""
 
 
+def _settle_customer(db, pub: Publication) -> None:
+    """A customer's daily unit follows the outcome (consumed if it may be online, released if nothing was)."""
+    if pub.owner_id is not None:
+        from .. import customer_publish
+
+        customer_publish.settle(db, pub)
+
+
 def run_publish(job_id: int, pub_id: int) -> None:
     wid = worker_id()
     with session_scope() as db:
@@ -133,7 +141,23 @@ def run_publish(job_id: int, pub_id: int) -> None:
         acct = db.get(PublishAccount, pub.account_id)
         clip = db.get(Clip, pub.clip_id) if pub.clip_id else None
         rule = db.get(PublishRule, pub.rule_id) if pub.rule_id else None
-        problems = ["o corte foi excluído"] if clip is None else service.eligibility(
+        if pub.owner_id is not None:
+            # a customer's publication: its plan, pause, authorization, library and daily allowance decide
+            from .. import customer_publish
+
+            verdict, why = customer_publish.before_upload(db, pub)
+            if verdict == "defer":
+                customer_publish.defer(db, pub, why)
+                queue.complete(db, job_id, wid, {"deferred": why[:200]})
+                return
+            if verdict == "refuse":
+                pub.status, pub.last_error = "failed", why[:2000]
+                pub.remote_status = {**(pub.remote_status or {}), "failure": "before_publish"}
+                service.log_event(pub, "refused", why)
+                customer_publish.settle(db, pub)
+                queue.complete(db, job_id, wid, {"refused": why[:200]})
+                return
+        problems = ["o corte foi excluído"] if clip is None else [] if pub.owner_id is not None else service.eligibility(
             db, clip, acct, auto=pub.origin in ("auto", "semi"), rule=rule, privacy=pub.privacy, rights_confirmed=True,
             semi=pub.origin == "semi")
         if problems:  # conditions changed since scheduling (rejected, reviewed as bad, account revoked...)
@@ -218,6 +242,7 @@ def run_publish(job_id: int, pub_id: int) -> None:
             if platform == "youtube":
                 _add_quota(acct, uploads=1)
             service.log_event(pub, "uploaded", f"id remoto {res.remote_id}")
+            _settle_customer(db, pub)
             queue.complete(db, job_id, wid, {"remote_id": res.remote_id})
             return
         if err.auth:
@@ -231,6 +256,7 @@ def run_publish(job_id: int, pub_id: int) -> None:
             pub.status, pub.last_error = "failed", str(err)[:2000]
             pub.remote_status = {**(pub.remote_status or {}), "failure": "before_publish"}
             service.log_event(pub, "failed", str(err))
+        _settle_customer(db, pub)
         queue.complete(db, job_id, wid, {"error": str(err)[:300]})
 
 
@@ -287,6 +313,7 @@ def poll_processing() -> None:
             elif pub.status == "uncertain" and st.get("media_id"):
                 pub.status = "processing"  # reconciled: the Reel was found
                 service.log_event(pub, "reconciled", str(st.get("reconciled", "")))
+            _settle_customer(db, pub)
 
 
 def refresh_metrics(force_ids: list[int] | None = None) -> None:
@@ -324,6 +351,11 @@ def tick(state: dict) -> None:
             made = service.auto_scan(db)
             if made:
                 log.info("automatic publications scheduled", extra={"count": made})
+            from .. import customer_publish
+
+            customer = customer_publish.tick(db)  # customers: own rules, limits and authorization
+            if customer["created"]:
+                log.info("customer publications queued", extra=customer)
             state["scan"] = now
         from .editorial import expire_proposals, is_paused
 

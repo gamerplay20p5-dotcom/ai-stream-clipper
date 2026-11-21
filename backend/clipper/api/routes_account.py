@@ -167,7 +167,8 @@ def _provider_url(url: str, market: str) -> bool:
 def checkout(body: CheckoutIn, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(customer_user)):
     """Starts a checkout bound to THIS account. The payment only becomes access once the provider confirms it
     (webhook / payment_check) and the commercial service delivers the snapshot."""
-    if entitlements.current(db, user.id) is not None:
+    ent = entitlements.current(db, user.id)
+    if ent is not None and ent.provider != "hts":  # an HTS courtesy never prevents buying a plan
         raise HTTPException(409, "você já tem uma assinatura ativa: use as opções de gerenciamento")
     try:
         status, data = billing_link.call("/internal/billing/checkout", {

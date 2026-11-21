@@ -173,7 +173,7 @@ def test_migration_0013_upgrade_downgrade_keeps_history(tmp_path):
     upgrade_db(url)
     eng = sa.create_engine(url)
     with eng.begin() as c:
-        assert c.execute(sa.text("select version_num from alembic_version")).scalar() in ("0013", "0014", "0015", "0016", "0017", "0018")  # head moves on with later migrations
+        assert c.execute(sa.text("select version_num from alembic_version")).scalar() in ("0013", "0014", "0015", "0016", "0017", "0018", "0019")  # head moves on with later migrations
         c.execute(sa.text("insert into users (email, password_hash, role, active, session_version, created_at) "
                           "values ('h@x', 'x', 'viewer', 1, 0, '2026-11-20')"))
         c.execute(sa.text("insert into streamers (platform, channel, url, display_name, enabled, preferences, status, "

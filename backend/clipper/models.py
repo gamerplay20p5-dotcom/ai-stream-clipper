@@ -429,6 +429,8 @@ class OAuthState(Base):
     verifier_enc: Mapped[str] = mapped_column(Text, default="")  # PKCE code verifier (encrypted)
     created_by: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # NULL = HTS (internal, unchanged); set = a customer account owns it (multi-tenant publishing, PR #25)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
 
 
 class PublishAccount(Base):
@@ -448,6 +450,10 @@ class PublishAccount(Base):
     last_error: Mapped[str] = mapped_column(Text, default="")
     connected_by: Mapped[str] = mapped_column(String(255), default="")
     connected_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # NULL = HTS (internal, unchanged); set = a customer account owns it (multi-tenant publishing, PR #25)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    # customer destinations only: why it cannot publish now (beyond the plan's destinations, blocked by the HTS)
+    paused_reason: Mapped[str] = mapped_column(String(120), default="", server_default="")
 
 
 class PublishRule(Base):
@@ -470,6 +476,11 @@ class PublishRule(Base):
     templates: Mapped[dict] = mapped_column(JSON, default=dict)  # title/description/hashtags per platform
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    # NULL = HTS (internal, unchanged); set = a customer account owns it (multi-tenant publishing, PR #25)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    # customer rules: the owner declared, for THIS channel, that it holds the rights / authorization to republish
+    rights_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rights_note: Mapped[str] = mapped_column(String(500), default="", server_default="")
 
 
 class Publication(Base):
@@ -507,6 +518,8 @@ class Publication(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+    # NULL = HTS (internal, unchanged); set = a customer account owns it (multi-tenant publishing, PR #25)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -853,6 +866,60 @@ class UsageEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     # the paid period (subscription, plan and limits at that moment) that this unit was charged to
     period_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
+
+class CustomerPublishSettings(Base):
+    """A customer's automatic publishing switch. Off for every new customer until they turn it on themselves."""
+
+    __tablename__ = "customer_publish_settings"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    timezone: Mapped[str] = mapped_column(String(64), default="America/Sao_Paulo")  # defines the publishing day
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # explicit authorization
+    blocked_reason: Mapped[str] = mapped_column(String(200), default="")  # set by the HTS (security, abuse, claims)
+    blocked_by: Mapped[str] = mapped_column(String(255), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class PublishUnit(Base):
+    """One unit of a customer's daily publishing allowance = one Short sent to one destination.
+
+    Unique per publication: retries, worker restarts and repeated callbacks never count twice. ``day`` is the
+    calendar day in the customer's timezone when the unit was reserved. ``reserved`` -> ``consumed`` when the
+    upload starts producing a post; ``released`` (slot returned) when nothing was published."""
+
+    __tablename__ = "publish_units"
+    __table_args__ = (UniqueConstraint("publication_id", name="uq_publish_unit_publication"),
+                      Index("ix_publish_units_user_day", "user_id", "day", "state"))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    publication_id: Mapped[int] = mapped_column(ForeignKey("publications.id", ondelete="CASCADE"))
+    day: Mapped[str] = mapped_column(String(10))
+    state: Mapped[str] = mapped_column(String(10), default="reserved")  # reserved | consumed | released
+    reason: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class CourtesyGrant(Base):
+    """A plan given by the HTS (courtesy, trial) with validity and reason. Kept apart from Stripe/InfinitePay: it
+    is materialized as its own ``account_subscriptions`` row (provider ``hts``) and never touches payments, the
+    commercial ledger or paid snapshots."""
+
+    __tablename__ = "courtesy_grants"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    subscription_id: Mapped[int | None] = mapped_column(ForeignKey("account_subscriptions.id", ondelete="SET NULL"),
+                                                        nullable=True)
+    plan: Mapped[str] = mapped_column(String(20))
+    starts_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    ends_at: Mapped[datetime] = mapped_column(DateTime)
+    reason: Mapped[str] = mapped_column(String(300))
+    created_by: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_by: Mapped[str] = mapped_column(String(255), default="")
+    revoke_reason: Mapped[str] = mapped_column(String(300), default="")
 
 
 class EntitlementPeriod(Base):

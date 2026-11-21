@@ -493,8 +493,8 @@ def test_migration_0018_downgrade_and_repeat(tmp_path):
 
     url = f"sqlite:///{(tmp_path / 'rt.db').as_posix()}"
     _seed_0017(url, duplicate_lives=False)
-    upgrade_db(url)
-    upgrade_db(url)  # repeat: no-op
+    upgrade_db(url, "0018")
+    upgrade_db(url, "0018")  # repeat: no-op
     command.downgrade(alembic_config(url), "0017")
     eng = sa.create_engine(url)
     with eng.begin() as c:
@@ -505,7 +505,7 @@ def test_migration_0018_downgrade_and_repeat(tmp_path):
         assert "hts_monitoring" not in {col["name"] for col in insp.get_columns("streamers")}
         assert c.execute(sa.text("SELECT COUNT(*) FROM stream_sessions")).scalar() == 1, "history kept"
     eng.dispose()
-    upgrade_db(url)
+    upgrade_db(url, "0018")
     eng = sa.create_engine(url)
     with eng.begin() as c:
         assert c.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == "0018"

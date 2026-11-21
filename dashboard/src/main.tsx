@@ -13,6 +13,8 @@ import Evaluation from "./pages/Evaluation";
 import Publishing from "./pages/Publishing";
 import Infrastructure from "./pages/Infrastructure";
 import AccountApp from "./pages/Account";
+import CustomerPublishing from "./pages/CustomerPublishing";
+import Customers from "./pages/Customers";
 import LibraryApp from "./pages/Library";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
@@ -61,6 +63,7 @@ function App() {
         <Route path="/biblioteca" element={<LibraryApp email={user.email} />} />
         {customer && <Route path="/conta" element={<AccountApp email={user.email} />} />}
         {customer && <Route path="/conta/assinatura" element={<AccountApp email={user.email} />} />}
+        {customer && <Route path="/conta/publicacao" element={<CustomerPublishing />} />}
         {/* a plan chosen on the landing page (?plan=&market=) survives the login */}
         <Route path="*" element={<KeepQuery to={home} />} />
       </Routes>
@@ -86,6 +89,7 @@ function App() {
           <Route path="referencias" element={<References />} />
           <Route path="publicacao" element={<Publishing />} />
           <Route path="pessoas" element={<People />} />
+          <Route path="clientes" element={<Customers />} />
           <Route path="conta/senha" element={<ChangePassword back="/" />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

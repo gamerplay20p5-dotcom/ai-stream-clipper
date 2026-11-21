@@ -36,6 +36,8 @@ RUN groupadd --gid 10001 asc && useradd --uid 10001 --gid asc --home /app --shel
 WORKDIR /app
 COPY backend/pyproject.toml ./backend/
 COPY backend/clipper ./backend/clipper
+# plan limits for HTS courtesy plans: same file as the commercial service (single source of truth)
+COPY commercial/catalog.json /app/catalog.json
 ARG EXTRAS=capture,audio,vision
 RUN pip install "./backend[${EXTRAS}]" && rm -rf /root/.cache
 

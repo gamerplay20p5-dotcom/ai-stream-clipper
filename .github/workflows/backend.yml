@@ -42,7 +42,7 @@ jobs:
       - name: Fast suite (includes billing, entitlements and quota tests)
         run: python -m pytest -q -m "not e2e and not models" -p no:cacheprovider
       - name: Billing and entitlement tests (explicit)
-        run: python -m pytest -q ../tests/test_billing_entitlements.py ../tests/test_shared_lives.py ../tests/test_delivery_rights.py ../tests/test_outbox_link.py ../tests/test_accounts.py ../tests/test_multiuser.py ../tests/test_public_origin.py -p no:cacheprovider
+        run: python -m pytest -q ../tests/test_billing_entitlements.py ../tests/test_shared_lives.py ../tests/test_delivery_rights.py ../tests/test_customer_publishing.py ../tests/test_facebook_reels.py ../tests/test_outbox_link.py ../tests/test_accounts.py ../tests/test_multiuser.py ../tests/test_public_origin.py -p no:cacheprovider
       - name: Migration chain upgrades and downgrades
         run: python -m pytest -q ../tests/test_migration_0009.py ../tests/test_streamer_grants.py -p no:cacheprovider
 
@@ -72,7 +72,7 @@ jobs:
           cache-dependency-path: backend/pyproject.toml
       - run: python -m pip install --upgrade pip && pip install -e ".[dev]"
       - name: Migrations and shared lives on PostgreSQL
-        run: python -m pytest -q -m postgres ../tests/test_postgres_shared_lives.py -p no:cacheprovider
+        run: python -m pytest -q -m postgres ../tests/test_postgres_shared_lives.py ../tests/test_postgres_customer_publishing.py -p no:cacheprovider
 
   e2e:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
