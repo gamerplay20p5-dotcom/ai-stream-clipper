@@ -46,6 +46,34 @@ jobs:
       - name: Migration chain upgrades and downgrades
         run: python -m pytest -q ../tests/test_migration_0009.py ../tests/test_streamer_grants.py -p no:cacheprovider
 
+  postgres:
+    # Real PostgreSQL (same version as production) for row locks, partial unique indexes and concurrent
+    # connections of the shared-lives pipeline. Disposable service container: never a real server.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16.4-bookworm
+        env:
+          POSTGRES_USER: asc_test
+          POSTGRES_PASSWORD: asc_test
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U asc_test" --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      ASC_TEST_PG_URL: postgresql+psycopg://asc_test:asc_test@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - run: python -m pip install --upgrade pip && pip install -e ".[dev]"
+      - name: Migrations and shared lives on PostgreSQL
+        run: python -m pytest -q -m postgres ../tests/test_postgres_shared_lives.py -p no:cacheprovider
+
   e2e:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04

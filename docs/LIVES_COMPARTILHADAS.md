@@ -44,7 +44,21 @@ Complementa `docs/ASSINATURAS.md`. O SaaS atende donos de canais, clipadores e e
    - o segmento só é analisado se alguém (a HTS ou um cliente) ainda precisa dele.
 3. **Captura:** continua enquanto a HTS consome o canal ou algum cliente está em `watching`. Quando não sobra ninguém, ela recebe `stop`.
 4. **Recursos premium sobre o trabalho compartilhado:** segunda análise, variantes e prioridade rodam **uma vez** e só quando um cliente com o recurso no plano cobre aquele momento (ou quando a HTS consome o canal).
-5. **Entrega:** quando o corte fica pronto, ele entra na biblioteca de cada cliente cujo trecho cobre o momento, cujo preset o seleciona e cujo armazenamento comporta o arquivo.
+5. **Entrega:** quando o corte fica pronto, ele entra na biblioteca de cada cliente cujo trecho cobre o corte **inteiro**, cujo preset o seleciona e cujo armazenamento comporta o arquivo.
+
+### Cobertura temporal
+
+O intervalo completo do Short (`start` até `end`) precisa estar dentro do trecho acompanhado pelo cliente (`from_t` até `until_t`). A tolerância é de **0,5 s**, só para arredondamento entre segmentos e cortes.
+
+| Caso | Entregue? |
+| --- | --- |
+| Começa antes de o cliente aderir | Não |
+| Termina depois de a franquia esgotar | Não |
+| Inteiramente dentro do trecho | Sim |
+| Cruza uma suspensão, um cancelamento ou um estorno | Não |
+| Capturado dentro do trecho, mas pronto depois de o acesso acabar (cancelamento, expiração ou suspensão) | Sim: as horas foram pagas enquanto o acesso valia |
+| O mesmo caso, depois de um estorno, de uma contestação ou com o pagamento em revisão | Não |
+| Entregue antes do fim do acesso | Continua na biblioteca: entregas legítimas nunca são retiradas por isso |
 
 ## Cotas
 
@@ -103,13 +117,28 @@ Não há diferença de modelo de IA entre os planos. A interface não promete is
 
 O cliente não controla nem agenda processos internos.
 
+## Concorrência (PostgreSQL)
+
+- **Uma sessão `live` por canal:** índice único parcial, trava da linha do canal (`FOR UPDATE`) e inserção em savepoint. Quem perde a corrida entra na sessão existente.
+- **Contas:** as linhas de assinatura de todos os clientes envolvidos são travadas **em ordem de id** antes das decisões de cota (`lock_accounts`). Dois workers na mesma live não entram em deadlock.
+- **Inserções que podem colidir:** participação na live (única por inscrição e sessão), entrega (um compartilhamento ativo por corte e conta) e job (`idempotency_key`). Todas rodam em savepoint e, se colidirem, reaproveitam o registro do vencedor.
+- **Canais por plano:** além da trava, há uma recontagem depois da inserção.
+- **Testes reais:** `tests/test_postgres_shared_lives.py` usa um PostgreSQL descartável (`infrastructure/compose/test-postgres.yml` ou o serviço do job `postgres` no CI).
+  - Só roda com `ASC_TEST_PG_URL`.
+  - Recusa qualquer host que não seja local ou o do CI, e recusa sempre a 212.
+
 ## Compatibilidade e migração (0018)
 
 - **Só aditiva:**
   - tabelas `channel_monitors` e `monitor_sessions`;
   - colunas `streamers.hts_monitoring` (verdadeira para todos os canais existentes, então a HTS não muda), `stream_sessions.base_profile` e `clip_shares.monitor_id`;
   - índice `uq_stream_sessions_one_live`.
-- **Índice único de live:** só é criado se não houver duas sessões `live` do mesmo canal. Se houver, a migração avisa e não reescreve dados. A trava da linha continua valendo.
+- **Índice único de live:** se houver duas sessões `live` do mesmo canal, a migração **falha antes de qualquer alteração**.
+  - O erro lista os canais e os ids das sessões.
+  - Nada é apagado nem corrigido.
+  - O operador encerra as duplicatas e roda de novo.
+  - No fim, a migração confere que o índice único existe.
+  - Testado: falha, repetição, `downgrade` e nova aplicação.
 - **Canais do PR #23:** cada canal com `owner_id` vira uma inscrição desse cliente e passa a `hts_monitoring = false`. O acesso por streamer que o dono recebia é encerrado, e os cortes continuam na biblioteca. `owner_id` fica na tabela, sem uso.
 - **Workers:** sem mudança de contrato. O job de áudio recebe o perfil fixado da sessão nos mesmos campos (`language`, `whisper_model`).
 
@@ -143,7 +172,18 @@ One capture and one base analysis per live, however many customers follow the ch
 - Each customer's library is a set of `clip_shares` (`monitor_id`), with backend authorization and cleanup protection, so a file is never deleted while anyone still holds it.
 - Leaving a channel keeps the customer's library. HTS editorial rejection does not remove customers' deliveries; a failed render does.
 
-**Migration 0018** is additive. PR #23 owned channels become monitors, and `owner_id` stays unused.
+**Migration 0018** is additive, and PR #23 owned channels become monitors (`owner_id` stays unused). It **fails before changing anything** when a channel has duplicate live sessions, listing them; it never fixes data itself, and it verifies the unique index at the end.
+
+**Temporal coverage:** a Short is delivered only if its whole interval lies inside the customer's followed window (0.5 s tolerance).
+- Clips captured while access was valid but ready after it ended are still delivered, except after a refund, a chargeback or during a payment review.
+- Earlier deliveries are never withdrawn.
+
+**PostgreSQL:** concurrency relies on:
+- the partial unique index and row locks;
+- account rows locked in id order;
+- savepoint inserts for attachments, deliveries and jobs.
+
+`tests/test_postgres_shared_lives.py` runs against a disposable PostgreSQL only (test compose or CI service) and refuses 212.
 
 **Known limits:**
 - one base profile per live;

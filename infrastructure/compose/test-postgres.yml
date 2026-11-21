@@ -1,0 +1,26 @@
+# Disposable PostgreSQL for the homologation tests (tests/test_postgres_shared_lives.py). NOT for any server:
+# loopback only, data in memory (tmpfs), its own project name, nothing shared with the production stacks.
+#
+#   docker compose -p asc-test -f infrastructure/compose/test-postgres.yml up -d --wait
+#   ASC_TEST_PG_URL=postgresql+psycopg://asc_test:asc_test@127.0.0.1:55432/postgres \
+#     python -m pytest -m postgres ../tests/test_postgres_shared_lives.py      # from backend/
+#   docker compose -p asc-test -f infrastructure/compose/test-postgres.yml down
+#
+# Same major/minor as production (postgres:16.4-bookworm). Each test run creates and drops its own database.
+name: asc-test
+services:
+  postgres-test:
+    image: postgres:16.4-bookworm
+    container_name: asc-test-postgres
+    environment:
+      POSTGRES_USER: asc_test
+      POSTGRES_PASSWORD: asc_test  # throwaway credential of a loopback-only test container
+      POSTGRES_DB: postgres
+    ports: ["127.0.0.1:55432:5432"]
+    tmpfs: ["/var/lib/postgresql/data"]
+    command: ["postgres", "-c", "max_connections=200", "-c", "fsync=off"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asc_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

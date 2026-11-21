@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from . import entitlements
@@ -73,8 +74,9 @@ def selects(clip: Clip, preset: str, min_score: float) -> bool:
 
 
 def deliver(db: Session, clip: Clip, min_score: float | None = None) -> int:
-    """Put a rendered clip in the library of every customer entitled to that moment whose preset selects it.
-    Idempotent: never duplicates an active share; a customer whose storage is full does not receive it."""
+    """Put a rendered clip in the library of every customer whose followed window contains the WHOLE clip and
+    whose preset selects it. Idempotent: never duplicates an active share; a customer whose storage is full does
+    not receive it. Shares already delivered are never withdrawn here."""
     if clip.is_test or clip.status not in DELIVERABLE or not clip.video_path:
         return 0
     if min_score is None:
@@ -86,7 +88,9 @@ def deliver(db: Session, clip: Clip, min_score: float | None = None) -> int:
         monitor = db.get(ChannelMonitor, att.monitor_id)
         if monitor is None or monitor.removed_at is not None:
             continue
-        ent = entitlements.current(db, att.user_id)
+        # the moment was followed while access was valid: delivered even if the clip is ready after the end,
+        # never after a refund/chargeback or during a payment review
+        ent = entitlements.delivery_entitlement(db, att.user_id)
         if ent is None:
             continue
         if not selects(clip, effective_preset(monitor, ent), min_score):
@@ -99,10 +103,14 @@ def deliver(db: Session, clip: Clip, min_score: float | None = None) -> int:
             continue
         from .sharing import snapshot
 
-        share = ClipShare(clip_id=clip.id, user_id=att.user_id, created_by=None, can_view=True, can_download=True,
-                          can_variants=bool(ent.feature("variants")), monitor_id=monitor.id)
-        snapshot(share, clip)
-        db.add(share)
-        db.flush()
+        try:
+            with db.begin_nested():
+                share = ClipShare(clip_id=clip.id, user_id=att.user_id, created_by=None, can_view=True, can_download=True,
+                                  can_variants=bool(ent.feature("variants")), monitor_id=monitor.id)
+                snapshot(share, clip)
+                db.add(share)
+                db.flush()
+        except IntegrityError:
+            continue  # delivered concurrently (one active share per clip and account, enforced by the database)
         delivered += 1
     return delivered

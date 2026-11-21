@@ -15,6 +15,9 @@ Create Date: 2026-11-21
 * ``clip_shares.monitor_id``: shares created for a monitor (the customer's library); same authorization,
   snapshot and cleanup protection as every other share.
 
+Refuses to run (raises, nothing changed) while a channel has more than one 'live' session: the unique index is
+what guarantees one shared capture per live, so the revision never completes without it.
+
 Data: each channel that PR #23 gave to a customer (``owner_id``) becomes a monitor of that customer, and the
 access-by-streamer the owner received is closed (its clips stay in the library). ``owner_id`` is kept, unused.
 Additive only. The downgrade drops what this revision added.
@@ -28,9 +31,30 @@ branch_labels = None
 depends_on = None
 
 
+class DuplicateLiveSessions(RuntimeError):
+    """More than one 'live' session for a channel: the one-capture-per-live guarantee cannot be installed."""
+
+
+def _check_no_duplicate_lives(bind) -> None:
+    """Runs BEFORE any change. Nothing is deleted or fixed automatically: the operator decides which session
+    to end, then runs the migration again."""
+    dups = bind.execute(sa.text(
+        "SELECT streamer_id, COUNT(*) AS n, MIN(id) AS first_id, MAX(id) AS last_id FROM stream_sessions "
+        "WHERE status = 'live' GROUP BY streamer_id HAVING COUNT(*) > 1 ORDER BY streamer_id")).fetchall()
+    if dups:
+        detail = "; ".join(f"streamer {r.streamer_id}: {r.n} sessões live (ids {r.first_id}..{r.last_id})" for r in dups[:20])
+        raise DuplicateLiveSessions(
+            "0018 interrompida: há canais com mais de uma sessão 'live', então o índice único "
+            "uq_stream_sessions_one_live não pode ser criado. Nenhum dado foi alterado. Encerre as sessões "
+            "duplicadas (status 'ended' ou 'failed') e rode a migração de novo. " + detail)
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    indexes = {i['name'] for i in inspector.get_indexes('stream_sessions')}
+    if 'uq_stream_sessions_one_live' not in indexes:
+        _check_no_duplicate_lives(bind)
     tables = set(inspector.get_table_names())
     streamer_cols = {c['name'] for c in inspector.get_columns('streamers')}
     if 'hts_monitoring' not in streamer_cols:
@@ -77,17 +101,13 @@ def upgrade() -> None:
         op.create_index('ix_monitor_sessions_session', 'monitor_sessions', ['session_id', 'state'])
         op.create_index('ix_monitor_sessions_user', 'monitor_sessions', ['user_id', 'state'])
 
-    # One live session per channel. Created only when the data already respects it (nothing is rewritten);
-    # otherwise the code-level lock still applies and the operator ends the duplicates before re-running.
-    indexes = {i['name'] for i in inspector.get_indexes('stream_sessions')}
+    # One live session per channel (duplicates were refused above, before any change)
     if 'uq_stream_sessions_one_live' not in indexes:
-        dup = bind.execute(sa.text("SELECT streamer_id FROM stream_sessions WHERE status = 'live' "
-                                   "GROUP BY streamer_id HAVING COUNT(*) > 1")).first()
-        if dup is None:
-            op.create_index('uq_stream_sessions_one_live', 'stream_sessions', ['streamer_id'], unique=True,
-                            postgresql_where=sa.text("status = 'live'"), sqlite_where=sa.text("status = 'live'"))
-        else:
-            print("0018: more than one live session for a channel; unique live index NOT created (end the duplicates first)")
+        op.create_index('uq_stream_sessions_one_live', 'stream_sessions', ['streamer_id'], unique=True,
+                        postgresql_where=sa.text("status = 'live'"), sqlite_where=sa.text("status = 'live'"))
+    after = {i['name']: i for i in sa.inspect(bind).get_indexes('stream_sessions')}
+    if not (after.get('uq_stream_sessions_one_live') or {}).get('unique'):
+        raise RuntimeError("0018: o índice único uq_stream_sessions_one_live não existe após a migração")
 
     # Channels owned by a customer (PR #23) become that customer's monitors
     owned = bind.execute(sa.text(

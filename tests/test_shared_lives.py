@@ -164,7 +164,7 @@ def test_presets_libraries_and_media_are_per_customer(app, client, ten, channel_
     by = {i: p["uid"] for i, p in enumerate(ten)}
     expected = {
         0: False,  # ran out of hours before this moment
-        1: False,  # suspended
+        1: True,  # suspended AFTER this moment: it was followed and paid while access was valid
         2: True, 3: True,  # Basic: base selection (score 60 >= 55)
         4: True,  # Creator humor
         5: False,  # Creator intense: low intensity
@@ -359,4 +359,155 @@ def test_migration_turns_owned_channels_into_monitors(tmp_path):
     upgrade_db(url)  # idempotent: no duplicate monitor
     with eng.begin() as c:
         assert c.execute(sa.text("SELECT COUNT(*) FROM channel_monitors")).scalar() == 1
+    eng.dispose()
+
+
+def test_a_short_is_delivered_only_when_its_whole_interval_was_followed(app, client, channel_url):
+    """Temporal coverage: the entire clip must lie inside the customer's followed window (0.5 s tolerance).
+
+    Timeline (segments of 600 s): A from 0 with a 1-hour franchise; B joins at 600; C, D and E from 0;
+    at 1800 C cancels, D is suspended and E is refunded."""
+    from clipper import pipeline, sharing
+    from clipper.db import session_scope
+    from clipper.models import Clip
+
+    a = subscriber(app, client, "pro", hours=1)
+    c_ = subscriber(app, client, "pro")
+    d = subscriber(app, client, "pro")
+    e = subscriber(app, client, "pro")
+    b = subscriber(app, client, "pro")
+    for _, cl in (a, c_, d, e):
+        assert cl.post("/api/account/channels", json={"url": channel_url}, headers=CSRF).status_code == 201
+    sid = _streamer_id(channel_url)
+    with session_scope() as db:
+        sess_id = pipeline.report_status(db, sid, live=True)["session_id"]
+
+    def seg(idx):
+        with session_scope() as db:
+            pipeline.register_segments(db, sess_id, "w1", "http://seg", [{"idx": idx, "start": idx * 600.0, "duration": 600.0}])
+
+    def clip(start, end):
+        with session_scope() as db:
+            row = Clip(session_id=sess_id, streamer_id=sid, start=start, end=end, peak=start + 5, score=80, status="ready",
+                       video_path=f"clips/{uuid.uuid4().hex}/v1.mp4", file_size=1_000_000)
+            db.add(row)
+            db.flush()
+            sharing.on_clip_status(db, row)
+            return row.id
+
+    def library(cl):
+        return {x["clip_id"] for x in cl.get("/api/library").json()["items"]}
+
+    seg(0)
+    assert b[1].post("/api/account/channels", json={"url": channel_url}, headers=CSRF).status_code == 201
+    seg(1)  # B attached from 600
+    seg(2)
+    inside = clip(700, 730)  # fully inside everyone's window, delivered BEFORE the cancellations
+    assert all(inside in library(cl) for _, cl in (a, b, c_, d, e))
+
+    now = __import__("test_billing_entitlements")._now()
+    ended = {"status": "ended", "until": now - 1}
+    deliver(client, {**snapshot(c_[0], plan="pro", seq=2, financial="canceled", **ended), "limits": PLANS["pro"]})
+    deliver(client, {**snapshot(d[0], plan="pro", seq=2, status="suspended"), "limits": PLANS["pro"]})
+    deliver(client, {**snapshot(e[0], plan="pro", seq=2, financial="refunded", **ended), "limits": PLANS["pro"]})
+    for idx in range(3, 7):
+        seg(idx)  # A's franchise (3600 s) ends with segment 5
+
+    before_join = clip(590, 620)  # starts before B joined
+    after_quota = clip(3590, 3610)  # ends after A's franchise ran out
+    crosses = clip(1790, 1810)  # crosses the cancellation / suspension / refund at 1800
+    late = clip(1000, 1030)  # captured while access was valid, rendered after it ended
+    rounding = clip(599.7, 630)  # 0.3 s before B joined: within the rounding tolerance
+
+    lib = {name: library(cl) for name, (_, cl) in {"A": a, "B": b, "C": c_, "D": d, "E": e}.items()}
+    assert before_join not in lib["B"] and before_join in lib["A"]
+    assert rounding in lib["B"]
+    assert after_quota not in lib["A"] and after_quota in lib["B"]
+    for who in ("C", "D", "E"):
+        assert crosses not in lib[who], who
+    assert crosses in lib["A"] and crosses in lib["B"]
+    # Followed and paid while valid -> delivered after the end (cancel, suspension); never after a refund
+    assert late in lib["C"] and late in lib["D"] and late not in lib["E"]
+    # Shorts legitimately delivered before stay available, also after cancellation or refund
+    for who in ("C", "D", "E"):
+        assert inside in lib[who], who
+    assert e[1].get(f"/api/library/{inside}").status_code == 200
+
+
+def _seed_0017(url: str, *, duplicate_lives: bool) -> None:
+    import sqlalchemy as sa
+
+    from clipper.migrate import upgrade_db
+
+    upgrade_db(url, "0017")
+    eng = sa.create_engine(url)
+    with eng.begin() as c:
+        c.execute(sa.text("INSERT INTO streamers (id, platform, channel, url, display_name, enabled, preferences, status, "
+                          "stream_title, last_error, check_requested, created_at) VALUES (5, 'twitch', 'dup', "
+                          "'https://www.twitch.tv/dup', '', 1, '{}', 'live', '', '', 0, CURRENT_TIMESTAMP)"))
+        for sid in ((11, 12) if duplicate_lives else (11,)):
+            c.execute(sa.text("INSERT INTO stream_sessions (id, streamer_id, status, title, started_at, end_reason, "
+                              "capture_worker_id, segment_base_url, covered_until, analyzed_until, scored_until, "
+                              "segment_count, stop_requested, stats) VALUES (:i, 5, 'live', '', CURRENT_TIMESTAMP, '', '', "
+                              "'', 0, 0, 0, 0, 0, '{}')"), {"i": sid})
+    eng.dispose()
+
+
+def test_migration_0018_refuses_duplicate_lives_without_touching_data(tmp_path):
+    import sqlalchemy as sa
+
+    from clipper.migrate import upgrade_db
+
+    url = f"sqlite:///{(tmp_path / 'dup.db').as_posix()}"
+    _seed_0017(url, duplicate_lives=True)
+    with pytest.raises(Exception) as err:
+        upgrade_db(url)
+    message = str(err.value)
+    assert "uq_stream_sessions_one_live" in message and "streamer 5: 2 sessões live (ids 11..12)" in message
+    eng = sa.create_engine(url)
+    with eng.begin() as c:
+        assert c.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == "0017"
+        assert "channel_monitors" not in sa.inspect(c).get_table_names(), "nothing changed"
+        assert c.execute(sa.text("SELECT COUNT(*) FROM stream_sessions WHERE status = 'live'")).scalar() == 2, "no data fixed"
+        # The operator ends the duplicate, then the migration completes with the unique index
+        c.execute(sa.text("UPDATE stream_sessions SET status = 'ended' WHERE id = 11"))
+    eng.dispose()
+    upgrade_db(url)
+    eng = sa.create_engine(url)
+    with eng.begin() as c:
+        index = {i["name"]: i for i in sa.inspect(c).get_indexes("stream_sessions")}["uq_stream_sessions_one_live"]
+        assert index["unique"]
+        with pytest.raises(sa.exc.IntegrityError):
+            c.execute(sa.text("INSERT INTO stream_sessions (id, streamer_id, status, title, started_at, end_reason, "
+                              "capture_worker_id, segment_base_url, covered_until, analyzed_until, scored_until, "
+                              "segment_count, stop_requested, stats) VALUES (13, 5, 'live', '', CURRENT_TIMESTAMP, '', '', "
+                              "'', 0, 0, 0, 0, 0, '{}')"))
+    eng.dispose()
+
+
+def test_migration_0018_downgrade_and_repeat(tmp_path):
+    import sqlalchemy as sa
+    from alembic import command
+
+    from clipper.migrate import alembic_config, upgrade_db
+
+    url = f"sqlite:///{(tmp_path / 'rt.db').as_posix()}"
+    _seed_0017(url, duplicate_lives=False)
+    upgrade_db(url)
+    upgrade_db(url)  # repeat: no-op
+    command.downgrade(alembic_config(url), "0017")
+    eng = sa.create_engine(url)
+    with eng.begin() as c:
+        insp = sa.inspect(c)
+        assert c.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == "0017"
+        assert {"channel_monitors", "monitor_sessions"}.isdisjoint(insp.get_table_names())
+        assert "uq_stream_sessions_one_live" not in {i["name"] for i in insp.get_indexes("stream_sessions")}
+        assert "hts_monitoring" not in {col["name"] for col in insp.get_columns("streamers")}
+        assert c.execute(sa.text("SELECT COUNT(*) FROM stream_sessions")).scalar() == 1, "history kept"
+    eng.dispose()
+    upgrade_db(url)
+    eng = sa.create_engine(url)
+    with eng.begin() as c:
+        assert c.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == "0018"
+        assert "uq_stream_sessions_one_live" in {i["name"] for i in sa.inspect(c).get_indexes("stream_sessions")}
     eng.dispose()

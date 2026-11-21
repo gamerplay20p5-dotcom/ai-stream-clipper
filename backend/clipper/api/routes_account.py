@@ -307,6 +307,11 @@ async def add_channel(body: ChannelIn, request: Request, db: Session = Depends(g
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, "você já acompanha este canal") from exc
+    # Second barrier (the row lock above serializes on PostgreSQL; SQLite has no row locks): recount after the
+    # insert and undo it if a concurrent request took the last slot first
+    if entitlements.channel_count(db, user.id) > int(ent.limits["channels"]):
+        db.rollback()
+        raise HTTPException(409, f"o plano permite {int(ent.limits['channels'])} canal(is)")
     s.check_requested = True
     audit(db, request, user, "account.channel_add", f"monitor:{m.id}", {"url": ref.url})
     db.commit()

@@ -222,6 +222,16 @@ def _lock_account(db: Session, ent: Entitlement) -> None:
     db.scalar(select(AccountSubscription.id).where(AccountSubscription.id == ent.subscription_id).with_for_update())
 
 
+def lock_accounts(db: Session, user_ids) -> None:
+    """Lock the subscription rows of several accounts in ONE deterministic order (by id). Every path that decides
+    quotas for many customers at once (segments, attachments) takes them this way first, so two workers handling
+    the same live can never deadlock on PostgreSQL. Re-locking a row already held is a no-op."""
+    ids = sorted(set(user_ids))
+    if ids:
+        db.scalars(select(AccountSubscription.id).where(AccountSubscription.user_id.in_(ids))
+                   .order_by(AccountSubscription.id).with_for_update()).all()
+
+
 def active_monitors(db: Session, streamer_id: int) -> list[ChannelMonitor]:
     return list(db.scalars(select(ChannelMonitor).where(ChannelMonitor.streamer_id == streamer_id,
                                                         ChannelMonitor.removed_at.is_(None))
@@ -259,23 +269,28 @@ def attach_consumers(db: Session, sess: StreamSession, from_t: float = 0.0) -> i
     attached at most once per session (unique monitor+session). A refusal is recorded and retried on the next
     segment (the customer may renew meanwhile); a customer that consumed part of the live and stopped stays stopped."""
     added = 0
-    for m in active_monitors(db, sess.streamer_id):
+    monitors = active_monitors(db, sess.streamer_id)
+    lock_accounts(db, [m.user_id for m in monitors])
+    for m in monitors:
         att = db.scalar(select(MonitorSession).where(MonitorSession.monitor_id == m.id, MonitorSession.session_id == sess.id))
         if att is not None and att.state != "refused":
             continue
         ent = current(db, m.user_id)
-        if ent is not None:
-            _lock_account(db, ent)
         reason = attach_block_reason(db, m, ent, sess.id)
-        if att is None:
-            att = MonitorSession(monitor_id=m.id, user_id=m.user_id, session_id=sess.id, from_t=from_t)
-            db.add(att)
-        if reason:
-            att.state, att.stop_reason, att.from_t, att.until_t = "refused", reason[:120], from_t, from_t
-        else:
-            att.state, att.stop_reason, att.from_t, att.until_t, att.started_at = "watching", "", from_t, None, utcnow()
+        try:
+            with db.begin_nested():
+                if att is None:
+                    att = MonitorSession(monitor_id=m.id, user_id=m.user_id, session_id=sess.id, from_t=from_t)
+                    db.add(att)
+                if reason:
+                    att.state, att.stop_reason, att.from_t, att.until_t = "refused", reason[:120], from_t, from_t
+                else:
+                    att.state, att.stop_reason, att.from_t, att.until_t, att.started_at = "watching", "", from_t, None, utcnow()
+                db.flush()
+        except IntegrityError:
+            continue  # a concurrent request attached this customer first (unique monitor+session): keep theirs
+        if not reason:
             added += 1
-        db.flush()
     return added
 
 
@@ -311,7 +326,9 @@ def meter_segment(db: Session, streamer: Streamer, sess: StreamSession, idx: int
     within its own franchise. A customer that runs out stops here; the others continue. Returns False when nobody
     (HTS or customer) needs this segment, so it is not analysed."""
     attach_consumers(db, sess, from_t=start)
-    for att in attachments(db, sess.id, "watching"):
+    watching = attachments(db, sess.id, "watching")
+    lock_accounts(db, [a.user_id for a in watching])
+    for att in watching:
         monitor = db.get(ChannelMonitor, att.monitor_id)
         if monitor is None or monitor.removed_at is not None:
             _stop(att, start, "canal removido pelo assinante")
@@ -340,10 +357,45 @@ def meter_segment(db: Session, streamer: Streamer, sess: StreamSession, idx: int
                for a in attachments(db, sess.id) if a.state != "refused")
 
 
+# Segment boundaries and clip bounds are floats from different workers: half a second absorbs rounding only
+COVERAGE_TOLERANCE_S = 0.5
+
+
+def covers(att: MonitorSession, start: float, end: float) -> bool:
+    """The WHOLE moment lies inside the part of the live this customer followed (and paid hours for)."""
+    if att.state == "refused":
+        return False
+    if start < att.from_t - COVERAGE_TOLERANCE_S:
+        return False  # starts before the customer joined
+    return att.until_t is None or end <= att.until_t + COVERAGE_TOLERANCE_S  # ends after it stopped
+
+
 def consumers_of_clip(db: Session, clip: Clip) -> list[MonitorSession]:
-    """Customers whose followed window of the live contains this moment (only they may receive it)."""
-    return [a for a in attachments(db, clip.session_id) if a.state != "refused" and a.from_t <= clip.start
-            and (a.until_t is None or clip.start < a.until_t)]
+    """Customers whose followed window contains the entire clip: only they may receive it."""
+    return [a for a in attachments(db, clip.session_id) if covers(a, clip.start, clip.end)]
+
+
+_REVOKED = ("refund", "chargeback", "dispute")
+
+
+def delivery_entitlement(db: Session, user_id: int) -> Entitlement | None:
+    """Entitlement that governs delivering a moment the customer ALREADY followed (hours charged while access was
+    valid). The current one when access is valid; otherwise the latest subscription, so a clip captured during
+    the paid period and rendered after the end is still delivered. Never after a refund, a chargeback or while the
+    payment is under review."""
+    ent = current(db, user_id)
+    if ent is not None:
+        return ent
+    row = db.scalar(select(AccountSubscription).where(AccountSubscription.user_id == user_id)
+                    .order_by(AccountSubscription.updated_at.desc(), AccountSubscription.id.desc()).limit(1))
+    if row is None or row.review or any(word in (row.financial_status or "") for word in _REVOKED):
+        return None
+    if not _valid_limits(row.limits):
+        return None
+    anchor = row.period_start or row.period_end or row.access_until or row.updated_at
+    return Entitlement(row.user_id, row.id, row.provider, row.plan, row.access_status, row.access_until or anchor,
+                       f"{row.provider}:{row.subscription_ref}:{int(anchor.replace(tzinfo=timezone.utc).timestamp())}",
+                       dict(row.limits or {}), row.review or "")
 
 
 def render_block_reason(db: Session, streamer: Streamer, clip: Clip | None = None) -> str:
@@ -352,7 +404,7 @@ def render_block_reason(db: Session, streamer: Streamer, clip: Clip | None = Non
         return ""
     reason = "nenhum assinante neste trecho da live"
     for att in consumers_of_clip(db, clip):
-        ent = current(db, att.user_id)
+        ent = delivery_entitlement(db, att.user_id)
         if ent is None:
             reason = "assinatura inativa"
         elif storage_bytes(db, att.user_id) >= ent.limits["storage_gb"] * GB:
