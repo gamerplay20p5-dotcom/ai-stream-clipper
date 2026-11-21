@@ -22,20 +22,35 @@ if (tables.has('subscriptions')) {
     FROM invoices WHERE status IN ('payment_failed', 'open', 'uncollectible') ORDER BY updated_at DESC LIMIT 20`))
 }
 
-if (tables.has('br_subscriptions')) {
+if (tables.has('ip_subscriptions')) {
   console.log('\nInfinitePay (BR) — subscriptions by plan and status')
-  console.table(rows('SELECT plan, status, COUNT(*) AS total FROM br_subscriptions GROUP BY plan, status ORDER BY plan, status'))
+  console.table(rows('SELECT plan, status, COUNT(*) AS total FROM ip_subscriptions GROUP BY plan, status ORDER BY plan, status'))
+  // Payments are recorded automatically, but dashboard access is still granted and revoked by hand
+  console.log('InfinitePay — MANUAL ACCESS ACTIONS (last 30 days): grant on payment, revoke on expired/refunded/canceled')
+  console.table(rows(`SELECT datetime(l.created_at, 'unixepoch') AS at, s.email, s.plan,
+      CASE WHEN l.type = 'payment_confirmed' THEN 'GRANT/EXTEND until ' || datetime(c.period_end, 'unixepoch')
+           WHEN l.type IN ('status_expired', 'status_refunded', 'status_canceled') THEN 'REVOKE (' || substr(l.type, 8) || ')'
+           ELSE l.type END AS action
+    FROM ip_ledger l JOIN ip_subscriptions s ON s.id = l.subscription_id LEFT JOIN ip_charges c ON c.order_nsu = l.order_nsu
+    WHERE l.created_at >= unixepoch() - 30 * 86400 AND l.type IN ('payment_confirmed', 'status_expired', 'status_refunded', 'status_canceled')
+    ORDER BY l.id`))
+  console.log('InfinitePay — NEEDS REVIEW: possible refunds, amount mismatches, payments after cancel, gave-up links or emails')
+  console.table(rows(`SELECT datetime(l.created_at, 'unixepoch') AS at, l.type, l.order_nsu, s.email, l.amount, l.detail
+    FROM ip_ledger l JOIN ip_subscriptions s ON s.id = l.subscription_id
+    WHERE l.type IN ('reversal_reported', 'amount_mismatch', 'payment_after_cancel', 'link_gave_up', 'email_gave_up')
+      AND NOT EXISTS (SELECT 1 FROM ip_ledger r WHERE r.order_nsu = l.order_nsu AND r.type IN ('refund_recorded', 'review_cleared'))
+    ORDER BY l.id DESC LIMIT 50`))
   console.log('InfinitePay — access ending in the next 7 days or overdue')
-  console.table(rows(`SELECT id, email, plan, status, datetime(paid_until, 'unixepoch') AS paid_until FROM br_subscriptions
+  console.table(rows(`SELECT id, email, plan, status, datetime(paid_until, 'unixepoch') AS paid_until FROM ip_subscriptions
     WHERE status IN ('active', 'past_due') AND paid_until < unixepoch() + 7 * 86400 ORDER BY paid_until`))
-  // Without SMTP these links must be sent by hand; they are single-use and expire on valid_until
+  // Without SMTP (or after 5 failed attempts) these single-use links must be sent by hand before valid_until
   console.log('InfinitePay — open renewal links not emailed yet')
-  console.table(rows(`SELECT c.order_nsu, s.email, c.plan, c.amount, c.link_url, datetime(c.valid_until, 'unixepoch') AS valid_until
-    FROM br_charges c JOIN br_subscriptions s ON s.id = c.subscription_id
+  console.table(rows(`SELECT c.order_nsu, s.email, c.plan, c.amount, c.email_attempts, c.link_url, datetime(c.valid_until, 'unixepoch') AS valid_until
+    FROM ip_charges c JOIN ip_subscriptions s ON s.id = c.subscription_id
     WHERE c.kind = 'renewal' AND c.status = 'open' AND c.emailed_at IS NULL ORDER BY c.created_at`))
 }
 
-if (!tables.has('subscriptions') && !tables.has('br_subscriptions')) {
+if (!tables.has('subscriptions') && !tables.has('ip_subscriptions')) {
   console.log('No payment data yet: configure Stripe or InfinitePay and receive a payment first')
 }
 db.close()

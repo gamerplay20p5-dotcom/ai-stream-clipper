@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import Stripe from 'stripe'
 import { createApp } from './app.js'
 import { billingSettings } from './billing.js'
-import { infinitePayClient, infinitePaySettings } from './infinitepay.js'
+import { infinitePayClient, infinitePaySettings, missingInfinitePaySettings } from './infinitepay.js'
 import { createMailer, mailSettings } from './mailer.js'
 
 process.umask(0o077)
@@ -19,7 +19,7 @@ const { app, markets, runRenewals, close } = createApp({
   stripe,
   billing,
   infinitepay,
-  infinitepayRequest: infinitepay.handle ? infinitePayClient(infinitepay) : null,
+  infinitepayRequest: infinitepay.handle && infinitepay.apiKey ? infinitePayClient(infinitepay) : null,
   mailer: createMailer(mailSettings()),
 })
 
@@ -29,7 +29,11 @@ renewals.unref()
 runRenewals().catch(error => console.error('Renewal run failed', error.code ?? error.name))
 const port = Number(process.env.COMMERCIAL_PORT ?? 8790)
 const host = process.env.COMMERCIAL_HOST ?? '127.0.0.1'
-const server = app.listen(port, host, () => console.log(`Commercial site listening on http://${host}:${port} (checkout US ${markets.US ? 'on' : 'off'}, BR ${markets.BR ? 'on' : 'off'})`))
+const server = app.listen(port, host, () => {
+  console.log(`Commercial site listening on http://${host}:${port} (checkout US ${markets.US ? 'on' : 'off'}, BR ${markets.BR ? 'on' : 'off'})`)
+  // Names only, never values: BR checkout stays off until every required InfinitePay setting is present
+  if (!markets.BR) console.log(`InfinitePay checkout off, missing: ${missingInfinitePaySettings(infinitepay).join(', ')}`)
+})
 
 function shutdown() {
   clearInterval(renewals)
