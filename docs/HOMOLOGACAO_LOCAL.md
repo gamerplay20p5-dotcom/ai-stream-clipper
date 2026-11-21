@@ -152,6 +152,28 @@ cd commercial && npx playwright install --with-deps chromium firefox webkit && c
 
 O veredito precisa sair **APROVADO**, com `backend-postgres-suite` e `postgres-concurrency-migrations` passando e 0 testes de PostgreSQL ignorados. Qualquer falha em PostgreSQL deve ser investigada e corrigida no código, nunca contornada.
 
+## Homologação em servidor, executada pelo administrador (sem alterar o `asc-ctl`)
+
+Para uma máquina Linux com Docker onde a conta `asc` **não** tem acesso ao Docker (por exemplo, a 206). O `asc-ctl` de produção **não é substituído**. O administrador roda uma única vez `infrastructure/homolog/homologacao-pg.sh` com `sudo`, e nenhuma permissão nova é dada à conta `asc`.
+
+**O que o script faz:**
+- **Verificação prévia, só leitura:**
+  - mínimos de 10 GB livres para o Docker, 12 GB de RAM disponível, 6 CPUs e carga abaixo de 70%;
+  - recusa a .212;
+  - `--check` faz só isso, sem criar nada.
+- **Isolamento:**
+  - tudo leva um id de execução (`asc-homolog-<hora UTC>`) e um rótulo próprio;
+  - PostgreSQL 16.4 numa **rede Docker interna, sem porta publicada**, com dados em memória, senha fictícia e limite de 2 CPUs e 2 GB;
+  - os testes rodam num container Python 3.12 descartável, com 4 CPUs, 6 GB, prioridade baixa e o código montado **somente leitura**;
+  - só `backend[dev,vision]` é instalado: **sem Whisper, ONNX ou modelos de IA**.
+- **Testes:**
+  - a suíte inteira do backend sobre PostgreSQL (exceto o e2e com Whisper, homologado na máquina do desenvolvedor);
+  - os testes de concorrência e de migração com `ASC_REQUIRE_PG=1`.
+- **Limpeza:** remove só os containers e a rede desta execução, e as duas imagens base apenas se esta execução as baixou. Nenhum serviço, container, volume ou imagem existente é tocado. Nada de `prune`.
+- **Relatório:** `reports/homologacao/<id>/RELATORIO.md`, mais os logs e o JUnit. Código de saída `0` = APROVADO, `1` = REPROVADO, `2` = PENDENTE.
+
+**Espaço:** cerca de 0,6 GB de imagens, cerca de 2 GB de ambiente de teste (na camada do container, removida no fim) e menos de 20 MB de relatório.
+
 ## Cadeia de integração (verificada em 2026-11-21, só com objetos temporários do git)
 
 | Verificação | Resultado |
