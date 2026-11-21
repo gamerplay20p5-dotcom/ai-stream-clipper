@@ -130,6 +130,7 @@ export default function LibraryApp({ email }: { email: string }) {
                         </span>
                         <span className="mt-2.5 block text-sm font-semibold leading-tight">{item.title}</span>
                         <span className="mt-2 flex flex-wrap gap-1.5">
+                          {item.approved === false && <Status tone="warning">{t("Em revisão")}</Status>}
                           {item.permissions.download ? <Status tone="success">{t("Download liberado")}</Status> : <Status>{t("Só assistir")}</Status>}
                           {item.expires_at && <Status tone="warning"><Clock size={12} aria-hidden /> {t("até")} {fmt(item.expires_at)}</Status>}
                         </span>
@@ -146,6 +147,7 @@ export default function LibraryApp({ email }: { email: string }) {
         <span>{t("AI Stream Clipper by HTS · HowTo.Software")}</span>
         <a href="/privacidade">{t("Privacidade")}</a>
         <a href="/termos">{t("Termos de uso")}</a>
+        <a href="/conta/senha">{t("Trocar senha")}</a>
         <LanguagePicker />
       </footer>
     </div>

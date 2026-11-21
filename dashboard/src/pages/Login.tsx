@@ -4,15 +4,17 @@ import { api } from "../api";
 import { Brand } from "../components/Brand";
 import { ErrorNote, LanguagePicker } from "../components/ui";
 import { t } from "../i18n";
+import { ForgotPassword } from "./Password";
 
 export default function Login({ onDone }: { onDone: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [forgot, setForgot] = useState(false);
   const cfg = useQuery({
     queryKey: ["auth-config"],
-    queryFn: () => api.get<{ oidc_enabled: boolean }>("/api/auth/config"),
+    queryFn: () => api.get<{ oidc_enabled: boolean; email_enabled?: boolean }>("/api/auth/config"),
   });
 
   async function submit(e: FormEvent) {
@@ -37,6 +39,7 @@ export default function Login({ onDone }: { onDone: () => void }) {
       <div className="login-form">
         <h1 className="display text-3xl">{t("Acesse o painel")}</h1>
         <p className="mb-7 mt-2 text-sm text-ink-muted">{t("Monitore lives, revise cortes e acompanhe publicações.")}</p>
+        {forgot ? <ForgotPassword emailEnabled={!!cfg.data?.email_enabled} onClose={() => setForgot(false)} /> : (
         <form onSubmit={submit} className="space-y-4" aria-busy={busy}>
           <div>
             <label className="label" htmlFor="email">{t("E-mail")}</label>
@@ -55,7 +58,8 @@ export default function Login({ onDone }: { onDone: () => void }) {
           {cfg.data?.oidc_enabled && (
             <p className="text-xs text-ink-muted">{t("O servidor tem Authentik (OIDC) configurado. Nesta versão, use seu e-mail e senha.")}</p>
           )}
-        </form>
+          <button type="button" className="text-sm text-take hover:underline" onClick={() => setForgot(true)}>{t("Esqueci minha senha")}</button>
+        </form>)}
       </div>
       <footer className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-ink-muted">
         <a className="hover:text-take" href="/privacidade">{t("Privacidade")}</a>

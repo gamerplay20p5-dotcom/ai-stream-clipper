@@ -21,7 +21,18 @@ export default function BatchBar({ ids, onClear }: { ids: number[]; onClear: () 
   const opts = chosen?.meta.privacy_options ?? [];
   const [res, setRes] = useState<Result | null>(null);
   const done = (r: Result) => { setRes(r); qc.invalidateQueries({ queryKey: ["clips"] }); qc.invalidateQueries({ queryKey: ["calendar"] }); };
-  const act = useMutation({ mutationFn: (action: "approve" | "reject") => api.post<Result>("/api/clips/batch", { ids, action }), onSuccess: (r) => { done(r); onClear(); } });
+  const act = useMutation({
+    mutationFn: async (action: "approve" | "reject") => {
+      const out: Result = { done: [], skipped: {} };
+      for (let i = 0; i < ids.length; i += 500) {
+        const r = await api.post<Result>("/api/clips/batch", { ids: ids.slice(i, i + 500), action });
+        out.done!.push(...(r.done ?? []));
+        Object.assign(out.skipped!, r.skipped ?? {});
+      }
+      return out;
+    },
+    onSuccess: (r) => { done(r); onClear(); },
+  });
   const sched = useMutation({
     mutationFn: () => api.post<Result>("/api/publish/batch", { clip_ids: ids, account_id: acct, privacy, rights_confirmed: rights }),
     onSuccess: done,
@@ -31,8 +42,9 @@ export default function BatchBar({ ids, onClear }: { ids: number[]; onClear: () 
     <div className="sticky bottom-3 z-10 mt-4 rounded-lg border border-take/50 bg-suite-panel p-3 shadow-lg">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-semibold">{ids.length} {t("selecionado(s)")}</span>
-        <button className="btn-take px-3 py-1.5 text-sm" disabled={act.isPending} onClick={() => act.mutate("approve")}>{t("Aprovar")}</button>
-        <button className="btn-quiet px-3 py-1.5 text-sm" disabled={act.isPending} onClick={() => act.mutate("reject")}>{t("Rejeitar")}</button>
+        <button className="btn-take px-3 py-1.5 text-sm" disabled={act.isPending} onClick={() => act.mutate("approve")}>
+          {act.isPending ? t("Aplicando…") : t("Aprovar {n}", { n: ids.length })}</button>
+        <button className="btn-quiet px-3 py-1.5 text-sm" disabled={act.isPending} onClick={() => act.mutate("reject")}>{t("Rejeitar {n}", { n: ids.length })}</button>
         <span className="mx-1 h-5 w-px bg-suite-line" />
         <select className="field w-auto py-1.5 text-sm" value={acct} aria-label={t("Conta")} onChange={(e) => {
           const id = e.target.value ? Number(e.target.value) : "";

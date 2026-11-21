@@ -54,6 +54,7 @@ function ByStreamer({ user }: { user: AdminUser }) {
   });
   const [streamerId, setStreamerId] = useState("");
   const [download, setDownload] = useState(false);
+  const [pending, setPending] = useState(true);
   const [until, setUntil] = useState("");
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["streamer-grants", user.id] });
@@ -63,6 +64,7 @@ function ByStreamer({ user }: { user: AdminUser }) {
   const give = useMutation({
     mutationFn: () => api.post<StreamerGrant & { shared_now: number }>("/api/streamer-grants", {
       email: user.email, streamer_id: Number(streamerId), can_download: download, expires_at: expiry(until),
+      include_pending: pending,
     }),
     onSuccess: () => { setStreamerId(""); refresh(); },
   });
@@ -84,26 +86,32 @@ function ByStreamer({ user }: { user: AdminUser }) {
         <label><span className="label">{t("Disponível até (opcional)")}</span>
           <input type="date" className="field" value={until} onChange={(e) => setUntil(e.target.value)} /></label>
       </div>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-1" checked={pending} onChange={(e) => setPending(e.target.checked)} />
+        <span>{t("Incluir os cortes ainda não aprovados")}
+          <span className="block text-xs text-ink-muted">{t("A pessoa vê cada corte assim que fica pronto, com o selo “Em revisão”, sem esperar a sua aprovação. Se você rejeitar, ele sai da biblioteca dela.")}</span></span>
+      </label>
       <ConfirmAction tone="quiet" disabled={!streamerId} pending={give.isPending}
         title={t("Dar acesso aos cortes de {v}?", { v: chosen?.display_name ?? "…" })}
-        description={<><p><strong className="text-ink">{user.email}</strong> {t("passa a ver todos os cortes aprovados de")}{" "}
-          <strong className="text-ink">{chosen?.display_name}</strong>{t(", agora e os próximos aprovados.")}</p>
+        description={<><p><strong className="text-ink">{user.email}</strong> {pending ? t("passa a ver todos os cortes prontos de") : t("passa a ver todos os cortes aprovados de")}{" "}
+          <strong className="text-ink">{chosen?.display_name}</strong>{pending ? t(", aprovados ou ainda em revisão, agora e os próximos.") : t(", agora e os próximos aprovados.")}</p>
           <p>{download ? t("Download liberado.") : t("Só assistir (sem download).")}{until ? t(" Até {join}.", { join: until.split("-").reverse().join("/") }) : t(" Sem prazo.")}</p></>}
         confirmLabel={t("Dar acesso")} onConfirm={() => give.mutate()}>
         <Tv size={15} aria-hidden /> {t("Dar acesso ao streamer")}
       </ConfirmAction>
-      {give.isSuccess && <Notice>{t("Acesso dado: {shared_now} {v} na biblioteca agora.", { shared_now: give.data.shared_now, v: give.data.shared_now === 1 ? t("corte aprovado entrou") : t("cortes aprovados entraram") })}</Notice>}
+      {give.isSuccess && <Notice>{t("Acesso dado: {shared_now} {v} na biblioteca agora.", { shared_now: give.data.shared_now, v: give.data.shared_now === 1 ? t("corte entrou") : t("cortes entraram") })}</Notice>}
       <ErrorNote error={give.error || revoke.error || grants.error} />
       {(grants.data ?? []).length > 0 && (
         <ul className="share-list">
           {grants.data!.map((g) => (
             <li key={g.id} className="share-row">
               <div className="min-w-0">
-                <p className="font-medium">{t("Todos os cortes aprovados de")} {g.streamer}</p>
+                <p className="font-medium">{g.include_pending ? t("Todos os cortes prontos de") : t("Todos os cortes aprovados de")} {g.streamer}</p>
                 <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-ink-muted">
                   <Status tone={g.state === "ativo" ? "success" : "neutral"}>{g.state}</Status>
                   <span>{t(g.active_shares === 1 ? "{n} corte" : "{n} cortes", { n: g.active_shares })}</span>
                   <span>· {g.can_download ? t("pode baixar") : t("só assistir")}</span>
+                  {g.include_pending && <span>· {t("inclui os em revisão")}</span>}
                   {g.expires_at && <span>{t("· até")} {shareDate(g.expires_at)}</span>}
                 </p>
               </div>

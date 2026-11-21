@@ -796,6 +796,9 @@ def store_render(db: Session, clip_id: int, version: int, video_rel: str, thumb_
     clip.render_seconds = seconds
     clip.status = "ready"
     clip.error = ""
+    from . import sharing
+
+    sharing.on_clip_status(db, clip)  # accounts with access to pending clips of this streamer receive it
     return True
 
 
