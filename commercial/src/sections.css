@@ -185,3 +185,17 @@
 /* The hero normally slides under the sticky header; after a notice it starts below it instead */
 .checkout-notice + .hero { margin-top: 0; padding-top: 0; }
 .checkout-notice .text-link { display: inline-flex; min-height: 40px; align-items: center; margin-top: 4px; color: var(--coral-text); font-weight: 650; text-decoration: underline; text-underline-offset: 4px; }
+
+/* InfinitePay email step (Brazil) */
+.checkout-dialog { width: min(460px, calc(100% - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-l); background: var(--panel); color: var(--text); box-shadow: var(--shadow-panel), var(--glow-violet); }
+.checkout-dialog::backdrop { background: rgb(9 11 16 / 80%); }
+.checkout-dialog form { display: grid; gap: var(--space-4); padding: clamp(20px, 4vw, 28px); }
+.checkout-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.checkout-dialog-head h3 { font-size: var(--step-2); }
+.checkout-dialog-price { color: var(--muted); }
+.checkout-dialog-price strong { margin-right: 4px; color: var(--text); font: 700 1.6rem/1 var(--display); letter-spacing: -.03em; }
+.checkout-dialog form > p { color: var(--text-soft); font-size: .92rem; }
+.checkout-dialog-status:empty { display: none; }
+.checkout-dialog-actions { display: flex; flex-direction: column-reverse; gap: var(--space-2); }
+.checkout-dialog-actions .button { width: 100%; }
+.checkout-dialog .secure-note { color: var(--muted); font-size: .82rem; }

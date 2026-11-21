@@ -40,18 +40,33 @@ O padrão é `commercial/data/waitlist.sqlite`. O banco guarda os dados de conta
 | `COMMERCIAL_HOST` | `127.0.0.1` | Interface de escuta do serviço. |
 | `COMMERCIAL_TRUST_PROXY` | vazio | IP ou sub-rede do proxy confiável, quando aplicável. |
 | `COMMERCIAL_ORIGIN` | vazio | Origem pública: URLs absolutas em Open Graph, links alternativos por idioma e URLs de retorno do Stripe. |
-| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | vazio | Chave e segredo do webhook do Stripe. Sem eles, o checkout fica desligado. |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | vazio | Stripe (mercado US). Sem eles, o checkout em USD fica desligado. |
+| `INFINITEPAY_HANDLE` / `INFINITEPAY_API_KEY` / `INFINITEPAY_WEBHOOK_TOKEN` | vazio | InfinitePay (mercado BR). As três são obrigatórias, e `COMMERCIAL_ORIGIN` precisa ser https. Sem elas, o checkout em BRL fica desligado. |
+| `SMTP_*` | vazio | E-mails de renovação da InfinitePay. |
 | `STRIPE_PORTAL_LOGIN_URL` | vazio | Link de login do portal do cliente do Stripe, opcional. |
 
 Para uma futura publicação, use um volume persistente fora da raiz servida e proteja o acesso ao arquivo e aos backups. Configure HTTPS no proxy. Ao ativar `COMMERCIAL_TRUST_PROXY`, restrinja o acesso direto ao serviço e configure o proxy para sobrescrever os cabeçalhos de encaminhamento recebidos do cliente. O limite de inscrições é por IP e por processo.
 
-## Pagamentos (Stripe)
+## Pagamentos
 
-O checkout por assinatura usa o Stripe e segue o mesmo desenho do projeto de referência HowTo-Software/website.blog. Ele fica desligado até `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` e `COMMERCIAL_ORIGIN` estarem configurados. Até lá, os planos levam à lista de espera.
-- **Preços:** saem de `catalog.json` e são criados no Stripe com `npm run stripe:sync`. O servidor confere o preço do Stripe contra o catálogo antes de cada checkout.
-- **Assinaturas e faturas:** o webhook `POST /api/stripe/webhook` as registra no mesmo SQLite. O comando `npm run billing:report` resume o que foi registrado.
+Dois provedores, escolhidos pelo mercado:
 
-Ativação em modo de teste, eventos tratados, segurança e a lista do que fazer antes de cobrar de verdade estão em [docs/STRIPE.md](docs/STRIPE.md). As variáveis ficam em [.env.example](.env.example).
+| Mercado | Provedor | Como funciona |
+| --- | --- | --- |
+| **USD** | Stripe, exclusivo | Assinatura recorrente: checkout de assinatura, webhook assinado e portal do cliente, no mesmo desenho do projeto de referência HowTo-Software/website.blog |
+| **BRL** | InfinitePay | A API não tem recorrência, então cada mês é um link de pagamento de uso único, com vencimento, para Pix ou cartão. A chave `inchk_` é obrigatória. Os pagamentos são confirmados por `payment_check`, cada ciclo tem uma única cobrança e um agendador envia o link do mês seguinte por e-mail antes de vencer. Estornos são registrados com `npm run infinitepay -- refund` |
+
+Cada mercado só oferece checkout quando o seu provedor está configurado. Até lá, os planos levam à lista de espera.
+
+> **O pagamento confirmado ainda não libera acesso automaticamente ao AI Stream Clipper.** A HTS libera e retira o acesso manualmente, seguindo a seção "Ações manuais de acesso" de `npm run billing:report`.
+
+| Comando | O que faz |
+| --- | --- |
+| `npm run stripe:sync` | Cria no Stripe os preços em USD a partir de `catalog.json` |
+| `npm run billing:report` | Resume assinaturas, faturas, vencimentos, ações manuais de acesso, casos para revisão e links de renovação a enviar |
+| `npm run infinitepay -- <comando>` | Registra estornos e cancelamentos, conclui revisões, reconcilia com o `payment_check` e mostra o histórico de uma assinatura |
+
+Guia completo em [docs/PAGAMENTOS.md](docs/PAGAMENTOS.md), e as variáveis em [.env.example](.env.example).
 
 ## Antes de publicar
 

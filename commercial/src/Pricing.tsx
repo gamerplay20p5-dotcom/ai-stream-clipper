@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ArrowUpRight, Check, Crown, LoaderCircle, Lock, Minus, Plus, Sparkles } from 'lucide-react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { ArrowUpRight, Check, Crown, LoaderCircle, Lock, Minus, Plus, Sparkles, X } from 'lucide-react'
 import { startCheckout, type BillingConfig, type CheckoutError } from './billing'
 import type { Copy, Language } from './content'
 import { formatPrice, planIds, plans, type Market, type PlanId } from './market'
@@ -36,13 +36,46 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
   const b = copy.billing
   const [pending, setPending] = useState<PlanId | null>(null)
   const [error, setError] = useState<CheckoutError | null>(null)
+  const [chosen, setChosen] = useState<PlanId | null>(null)
+  const dialog = useRef<HTMLDialogElement>(null)
+  const opener = useRef<HTMLButtonElement | null>(null)
+  const emailInput = useRef<HTMLInputElement>(null)
+  const enabled = billing.markets[market]
 
-  async function subscribe(plan: PlanId) {
+  async function pay(plan: PlanId, email = '') {
     setPending(plan)
     setError(null)
-    const problem = await startCheckout(plan, market, language)
-    // On success the browser is already leaving for Stripe Checkout
+    const problem = await startCheckout(plan, market, language, email)
+    // On success the browser is already leaving for the payment page
     if (problem) { setError(problem); setPending(null) }
+    return problem
+  }
+
+  function subscribe(plan: PlanId, button: HTMLButtonElement) {
+    if (market !== 'BR') return void pay(plan)
+    // InfinitePay has no recurring billing: the email receives next month's payment link
+    opener.current = button
+    setChosen(plan)
+    setError(null)
+  }
+
+  // Open the dialog once its form has rendered, so the email field can take focus
+  useEffect(() => {
+    if (!chosen || dialog.current?.open) return
+    dialog.current?.showModal()
+    emailInput.current?.focus()
+  }, [chosen])
+
+  function closeDialog() {
+    dialog.current?.close()
+    opener.current?.focus()
+  }
+
+  async function submitEmail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!chosen) return
+    const email = String(new FormData(event.currentTarget).get('email') ?? '')
+    await pay(chosen, email)
   }
   const included = <><Check className="included" size={17} aria-hidden="true" /><span className="sr-only">{t.yes}</span></>
   const excluded = <><Minus size={16} aria-hidden="true" /><span className="sr-only">{t.no}</span></>
@@ -84,9 +117,9 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
                 <ul className="plan-features" role="list">
                   {planFeatures(id, t).map(item => <li key={item}><Check size={16} aria-hidden="true" />{item}</li>)}
                 </ul>
-                {billing.enabled ? (
+                {enabled ? (
                   <div className="plan-actions">
-                    <button type="button" className={`button ${id === 'creator' ? 'primary' : 'outline'}`} disabled={pending !== null} aria-busy={pending === id} onClick={() => subscribe(id)}>
+                    <button type="button" className={`button ${id === 'creator' ? 'primary' : 'outline'}`} disabled={pending !== null} aria-busy={pending === id} onClick={event => subscribe(id, event.currentTarget)}>
                       {pending === id ? <>{b.redirecting}<LoaderCircle className="form-spinner" size={16} aria-hidden="true" /></> : <>{b.subscribe(plan.name)}<ArrowUpRight size={16} aria-hidden="true" /></>}
                     </button>
                     <a className="plan-waitlist" href="#acesso" onClick={() => onInterest(id)}>{b.orWaitlist}</a>
@@ -98,10 +131,10 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
             )
           })}
         </div>
-        <div className="checkout-feedback" role="status">{error ? <p className="form-error">{b.errors[error]}</p> : null}</div>
+        <div className="checkout-feedback" role="status">{error && !chosen ? <p className="form-error">{b.errors[error]}</p> : null}</div>
         <div className="pricing-notes">
           <p><Check size={15} aria-hidden="true" />{t.shared}</p>
-          {billing.enabled ? <p className="secure-note"><Lock size={14} aria-hidden="true" />{b.secure}</p> : null}
+          {enabled ? <p className="secure-note"><Lock size={14} aria-hidden="true" />{market === 'BR' ? b.secureBr : b.secure}</p> : null}
           <p>{t.provisional}</p>
         </div>
         <div className="comparison">
@@ -131,6 +164,31 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
           <p className="pro-note">{t.proNote(plans.pro.export4k)}</p>
         </div>
       </div>
+      <dialog ref={dialog} className="checkout-dialog" aria-labelledby="checkout-dialog-title" onClose={() => { setChosen(null); setPending(null) }}
+        onCancel={event => { event.preventDefault(); closeDialog() }}>
+        {chosen ? (
+          <form onSubmit={submitEmail}>
+            <div className="checkout-dialog-head">
+              <h3 id="checkout-dialog-title">{b.dialog.title(plans[chosen].name)}</h3>
+              <button type="button" className="notice-close" aria-label={b.dialog.cancel} onClick={closeDialog}><X size={18} aria-hidden="true" /></button>
+            </div>
+            <p className="checkout-dialog-price"><strong>{formatPrice(chosen, market).symbol} {formatPrice(chosen, market).amount}</strong>{t.perMonth}</p>
+            <p id="checkout-dialog-detail">{b.dialog.detail}</p>
+            <label className="field">
+              <span>{b.dialog.email}</span>
+              <input ref={emailInput} name="email" type="email" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} required aria-describedby="checkout-dialog-detail" />
+            </label>
+            <div role="status" className="checkout-dialog-status">{error ? <p className="form-error">{b.errors[error]}</p> : null}</div>
+            <div className="checkout-dialog-actions">
+              <button type="button" className="button outline" onClick={closeDialog}>{b.dialog.cancel}</button>
+              <button type="submit" className="button primary" disabled={pending !== null}>
+                {pending ? <>{b.redirecting}<LoaderCircle className="form-spinner" size={16} aria-hidden="true" /></> : <>{b.dialog.submit}<ArrowUpRight size={16} aria-hidden="true" /></>}
+              </button>
+            </div>
+            <p className="secure-note"><Lock size={14} aria-hidden="true" />{b.secureBr}</p>
+          </form>
+        ) : null}
+      </dialog>
     </section>
   )
 }
