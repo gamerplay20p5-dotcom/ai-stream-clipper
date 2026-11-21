@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from urllib.parse import urlparse
 
@@ -45,18 +46,22 @@ def customer_user(user: CurrentUser = Depends(authenticated_user)) -> CurrentUse
 # ---------------------------------------------------------------------------
 
 
-@internal.post("/internal/billing/events")
-async def billing_event(request: Request, db: Session = Depends(get_db)):
+async def _signed_by_commercial(request: Request) -> bytes:
+    """Body of a request signed by the commercial service (``billing_secret``, caller ``commercial``)."""
     s = get_settings()
     body = await request.body()
     chk = verify_signature(s.billing_secret if len(s.billing_secret or "") >= 32 else "", request.headers,
                            request.method, _path_qs(request), sha256_bytes(body), s.signature_max_skew_s)
     if not chk.ok or chk.worker != "commercial":
-        log.warning("billing event rejected", extra={"reason": chk.reason or "caller"})
+        log.warning("billing link request rejected", extra={"reason": chk.reason or "caller"})
         raise HTTPException(401, "invalid signature")
-    try:
-        import json
+    return body
 
+
+@internal.post("/internal/billing/events")
+async def billing_event(request: Request, db: Session = Depends(get_db)):
+    body = await _signed_by_commercial(request)
+    try:
         payload = json.loads(body or b"{}")
         outcome = entitlements.apply_snapshot(db, payload)
     except entitlements.SnapshotRejected as exc:
@@ -71,6 +76,36 @@ async def billing_event(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(422, "invalid json") from exc
     db.commit()
     return {"outcome": outcome}
+
+
+@internal.post("/internal/billing/state")
+async def billing_state(request: Request, db: Session = Depends(get_db)):
+    """Reconciliation: what this API has applied for the given subscriptions (read-only, signed).
+
+    The commercial service compares each ``last_seq`` with its own outbox to find snapshots that never arrived
+    (for example after a database restore) and paid subscriptions that are not active here."""
+    body = await _signed_by_commercial(request)
+    try:
+        refs = json.loads(body or b"{}").get("refs")
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(422, "invalid json") from exc
+    if not isinstance(refs, list) or len(refs) > 500:
+        raise HTTPException(422, "refs must be a list of at most 500 items")
+    wanted = set()
+    for item in refs:
+        if (not isinstance(item, dict) or item.get("provider") not in entitlements.PROVIDERS
+                or not isinstance(item.get("subscription_ref"), str) or not 0 < len(item["subscription_ref"]) <= 120):
+            raise HTTPException(422, "invalid ref")
+        wanted.add((item["provider"], item["subscription_ref"]))
+    items = []
+    for provider in {p for p, _ in wanted}:
+        names = [r for p, r in wanted if p == provider]
+        for row in db.scalars(select(AccountSubscription).where(AccountSubscription.provider == provider,
+                                                               AccountSubscription.subscription_ref.in_(names))):
+            items.append({"provider": row.provider, "subscription_ref": row.subscription_ref, "account_id": row.user_id,
+                          "last_seq": row.last_seq, "plan": row.plan, "access_status": row.access_status,
+                          "access_until": _iso(row.access_until)})
+    return {"items": items}
 
 
 # ---------------------------------------------------------------------------

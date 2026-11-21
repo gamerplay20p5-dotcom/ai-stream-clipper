@@ -23,6 +23,7 @@ os.environ.update({
     "ASC_INTERNAL_SECRET": "test-internal-secret-0123456789",
     "ASC_ADMIN_EMAIL": "admin@example.com",
     "ASC_ADMIN_PASSWORD": "correct-horse-battery",
+    "ASC_PUBLIC_ORIGIN": "https://clipper.example.test",
     "ASC_ALLOW_FILE_SOURCES": "true",
     "ASC_TEST_MEDIA_DIR": str(FIXTURES),
     "HF_HUB_DISABLE_SYMLINKS_WARNING": "1",

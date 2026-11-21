@@ -6,10 +6,12 @@ this module only holds deployment-level configuration that must be known at boot
 
 from __future__ import annotations
 
+import ipaddress
 import socket
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -48,6 +50,9 @@ class Settings(BaseSettings):
     # Own secret, never the workers' internal_secret. The commercial service holds the same value.
     billing_secret: str = Field(default="", repr=False)
     commercial_url: str = ""  # internal address of the commercial service, e.g. http://asc-commercial:8790
+    # Canonical public address of the dashboard, used in every e-mailed link (invite, reset, sign-up).
+    # Never derived from Host / Origin / X-Forwarded-Host. Required (https) in production.
+    public_origin: str = ""
     # TLS for the API (dashboard logins and worker traffic are never sent in clear text)
     tls_cert: Path | None = None  # server certificate (PEM) - enables HTTPS on `clipper api`
     tls_key: Path | None = None
@@ -115,6 +120,11 @@ class Settings(BaseSettings):
             return [m.strip() for m in v.split(",") if m.strip()]
         return v
 
+    @field_validator("public_origin", mode="before")
+    @classmethod
+    def _canonical_origin(cls, v):
+        return canonical_origin(v)
+
     @field_validator("worker_roles", mode="before")
     @classmethod
     def _split_roles(cls, v):  # allow "audio,render"
@@ -129,12 +139,51 @@ class Settings(BaseSettings):
     def resolved_worker_id(self) -> str:
         return self.worker_id or f"{socket.gethostname()}-{'-'.join(self.worker_roles) or 'worker'}"
 
+    def require_public_origin(self) -> None:
+        """Production: e-mailed links must point to an https origin chosen by the operator."""
+        if not self.public_origin:
+            raise RuntimeError("Missing required configuration: ASC_PUBLIC_ORIGIN (e.g. https://clipper.example.com)")
+        # http only for a dashboard reached on this machine itself (local compose): links never leave it
+        if not self.public_origin.startswith("https://") and not is_loopback(urlsplit(self.public_origin).hostname or ""):
+            raise RuntimeError("ASC_PUBLIC_ORIGIN must use https in production")
+
     def require_secrets(self, *names: str) -> None:
         missing = [n for n in names if not getattr(self, n)]
         if missing:
             raise RuntimeError(
                 "Missing required configuration: " + ", ".join(f"ASC_{n.upper()}" for n in missing)
             )
+
+
+def canonical_origin(value) -> str:
+    """``scheme://host[:port]`` or ``""``. Rejects anything that is not a bare http(s) origin."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    parts = urlsplit(raw)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("ASC_PUBLIC_ORIGIN must be an http(s) origin, e.g. https://clipper.example.com")
+    if parts.username or parts.password or parts.query or parts.fragment or parts.path not in ("", "/"):
+        raise ValueError("ASC_PUBLIC_ORIGIN must be only scheme://host[:port], without path, query or credentials")
+    host = parts.hostname.lower()
+    if not all(c.isascii() and (c.isalnum() or c in ".-:") for c in host):
+        raise ValueError("ASC_PUBLIC_ORIGIN has an invalid host")
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError("ASC_PUBLIC_ORIGIN has an invalid port") from exc
+    netloc = f"[{host}]" if ":" in host else host
+    return f"{parts.scheme}://{netloc}{f':{port}' if port else ''}"
+
+
+def is_loopback(host: str) -> bool:
+    host = (host or "").strip().lower().strip("[]")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 @lru_cache

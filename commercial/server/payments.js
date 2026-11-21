@@ -71,5 +71,5 @@ export function createPayments({ db, stripe, billing, infinitepay, infinitepayRe
     res.json({ queued: count })
   })
 
-  return { router, markets, runRenewals: infinite.runRenewals, dispatch: outbox.dispatch, outboxStats: outbox.stats, infinite, stripeBilling }
+  return { router, markets, runRenewals: infinite.runRenewals, dispatch: outbox.dispatch, outboxStats: outbox.stats, outbox, infinite, stripeBilling }
 }

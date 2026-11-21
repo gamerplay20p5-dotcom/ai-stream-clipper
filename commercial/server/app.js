@@ -109,5 +109,5 @@ export function createApp({ databasePath, dist, trustProxy, stripe = null, billi
     return res.status(500).json({ error: 'request_failed' })
   })
 
-  return { app, markets: payments.markets, runRenewals: payments.runRenewals, dispatch: payments.dispatch, payments, close: () => db.close() }
+  return { app, markets: payments.markets, runRenewals: payments.runRenewals, dispatch: payments.dispatch, outbox: payments.outbox, payments, close: () => db.close() }
 }

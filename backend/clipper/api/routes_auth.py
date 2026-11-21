@@ -57,7 +57,7 @@ def auth_config(db: Session = Depends(get_db)):
     s = get_settings()
     from .. import billing_link
 
-    email = accounts.smtp_ready(db)
+    email = accounts.smtp_ready(db) and accounts.links_ready()
     return {"oidc_enabled": bool(s.oidc_issuer and s.oidc_client_id), "oidc_issuer": s.oidc_issuer or None,
             "email_enabled": email, "password_min": accounts.MIN_LEN,
             # self sign-up needs e-mail (to prove ownership) and the billing link (to subscribe)
@@ -69,15 +69,6 @@ def _session_cookie(response: Response, user: User) -> None:
     token = create_user_token(jwt_secret(), user.email, s.jwt_ttl_minutes, user.session_version or 0, user.id)
     response.set_cookie(COOKIE, token, httponly=True, secure=s.cookie_secure, samesite="strict",
                         max_age=s.jwt_ttl_minutes * 60, path="/")
-
-
-def public_origin(request: Request) -> str:
-    """Origin for links: the browser's Origin when it is this same host, else the request base URL."""
-    origin = request.headers.get("origin", "")
-    host = request.headers.get("host", "")
-    if origin and host and origin.split("://", 1)[-1] == host:
-        return origin.rstrip("/")
-    return str(request.base_url).rstrip("/")
 
 
 class PasswordChangeIn(BaseModel):
@@ -153,11 +144,11 @@ def forgot(body: ForgotIn, request: Request, db: Session = Depends(get_db)):
     """Always the same answer (does not reveal whether the e-mail has an account)."""
     check_login_rate(client_ip(request))
     record_login_failure(client_ip(request))  # counts toward the limit: no e-mail flooding from one IP
-    enabled = accounts.smtp_ready(db)
+    enabled = accounts.smtp_ready(db) and accounts.links_ready()
     user = db.scalar(select(User).where(User.email == body.email.strip().lower(), User.active.is_(True)))
     if enabled and user is not None:
         raw = accounts.issue_link(db, user, "reset", "esqueci a senha")
-        subject, text = accounts.link_mail(f"{public_origin(request)}/definir-senha?t={raw}", "reset")
+        subject, text = accounts.link_mail(accounts.password_link_url(raw), "reset")
         audit(db, request, None, "auth.forgot", f"user:{user.id}")
         db.commit()
         try:
@@ -182,7 +173,7 @@ def signup(body: SignupIn, request: Request, db: Session = Depends(get_db)):
 
     check_login_rate(client_ip(request))
     record_login_failure(client_ip(request))  # counts toward the limit: no e-mail flooding from one IP
-    if not (accounts.smtp_ready(db) and billing_link.configured()):
+    if not (accounts.smtp_ready(db) and accounts.links_ready() and billing_link.configured()):
         raise HTTPException(503, "cadastro indisponível no momento")
     email = body.email.strip().lower()
     if not _EMAIL.fullmatch(email) or len(email) > 254:
@@ -198,7 +189,7 @@ def signup(body: SignupIn, request: Request, db: Session = Depends(get_db)):
         purpose = "reset"  # existing customer: a password reset link instead (same response)
     if purpose:
         raw = accounts.issue_link(db, user, purpose, "cadastro")
-        subject, text = accounts.link_mail(f"{public_origin(request)}/definir-senha?t={raw}", purpose)
+        subject, text = accounts.link_mail(accounts.password_link_url(raw), purpose)
         audit(db, request, None, f"auth.signup_{purpose}", f"user:{user.id}")
         db.commit()
         try:

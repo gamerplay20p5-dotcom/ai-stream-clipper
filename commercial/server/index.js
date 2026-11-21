@@ -5,7 +5,8 @@ import { createApp } from './app.js'
 import { billingSettings } from './billing.js'
 import { infinitePayClient, infinitePaySettings, missingInfinitePaySettings } from './infinitepay.js'
 import { createMailer, mailSettings } from './mailer.js'
-import { httpSender, outboxSettings } from './outbox.js'
+import { httpSender, httpStateReader, outboxSettings } from './outbox.js'
+import { createOutboxMonitor } from './outbox-monitor.js'
 
 process.umask(0o077)
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -15,7 +16,7 @@ const stripe = billing.secretKey ? new Stripe(billing.secretKey, { maxNetworkRet
 const infinitepay = infinitePaySettings()
 // Signed link to the main backend: checkout requests in, entitlement snapshots out
 const link = outboxSettings()
-const { app, markets, runRenewals, dispatch, close } = createApp({
+const { app, markets, runRenewals, dispatch, outbox, close } = createApp({
   databasePath: resolve(root, process.env.COMMERCIAL_DB ?? 'data/waitlist.sqlite'),
   dist: resolve(root, 'dist'),
   trustProxy: process.env.COMMERCIAL_TRUST_PROXY,
@@ -35,6 +36,10 @@ renew()
 // Entitlement snapshots to the main backend: retried with backoff until delivered (outbox)
 const deliveries = setInterval(() => dispatch().catch(error => console.error('Entitlement dispatch failed', error.code ?? error.name)), 15 * 1000)
 deliveries.unref()
+// Alerts (paid but not synced, rejected, blocked, stalled) and reconciliation with the main backend
+const monitor = createOutboxMonitor({ outbox, readState: link.secret && link.mainUrl ? httpStateReader(link) : null })
+const watch = setInterval(() => monitor.tick().catch(error => console.error('Outbox monitor failed', error.code ?? error.name)), 60 * 1000)
+watch.unref()
 const port = Number(process.env.COMMERCIAL_PORT ?? 8790)
 const host = process.env.COMMERCIAL_HOST ?? '127.0.0.1'
 const server = app.listen(port, host, () => {
@@ -47,6 +52,7 @@ const server = app.listen(port, host, () => {
 function shutdown() {
   clearInterval(renewals)
   clearInterval(deliveries)
+  clearInterval(watch)
   server.close(() => close())
 }
 

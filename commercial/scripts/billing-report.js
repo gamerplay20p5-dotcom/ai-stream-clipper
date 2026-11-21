@@ -54,7 +54,7 @@ if (tables.has('ip_subscriptions')) {
 
 if (tables.has('entitlement_outbox')) {
   // Snapshots not yet accepted by the main API: access there may be behind until they are delivered
-  console.log('\nEntitlement outbox (to the main API)')
+  console.log('\nEntitlement outbox (to the main API) - details, alerts and audited resend: npm run outbox -- report')
   console.table(rows(`SELECT SUM(delivered_at IS NULL AND rejected_at IS NULL) AS pending, SUM(rejected_at IS NOT NULL) AS rejected,
     datetime(MIN(CASE WHEN delivered_at IS NULL AND rejected_at IS NULL THEN created_at END), 'unixepoch') AS oldest_pending FROM entitlement_outbox`))
   console.table(rows(`SELECT seq, provider, subscription_ref, attempts, last_error, datetime(created_at, 'unixepoch') AS created

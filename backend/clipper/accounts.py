@@ -94,7 +94,30 @@ def smtp_public(db: Session) -> dict:
 
 def smtp_ready(db: Session) -> bool:
     c = smtp_config(db)
-    return bool(c.get("host") and c.get("from_addr"))
+    return bool(c.get("host") and c.get("from_addr")) and not smtp_transport_problem(c)
+
+
+class InsecureSmtp(ValueError):
+    """SMTP settings that would expose credentials or links in clear text."""
+
+
+def smtp_transport_problem(c: dict) -> str:
+    """Why this SMTP configuration must not be used, or "" when it is acceptable.
+
+    Without TLS, the login (username/password) and the single-use links in the message travel in clear text.
+    ``none`` is accepted only for an unauthenticated relay on this machine (localhost), and never with a login."""
+    from .config import get_settings, is_loopback
+
+    security = c.get("security", "starttls")
+    if security not in ("starttls", "ssl", "none"):
+        return "modo de segurança SMTP desconhecido"
+    if security != "none":
+        return ""
+    if c.get("username") or c.get("password_enc"):
+        return "o SMTP sem TLS não pode usar usuário e senha: escolha STARTTLS ou SSL"
+    if get_settings().is_production and not is_loopback(c.get("host", "")):
+        return "em produção, o SMTP sem TLS só é aceito para um relay local (localhost)"
+    return ""
 
 
 def save_smtp(db: Session, *, host: str, port: int, username: str, password: str | None, from_addr: str,
@@ -104,6 +127,9 @@ def save_smtp(db: Session, *, host: str, port: int, username: str, password: str
               "security": security})
     if password is not None:  # None = keep the stored one; "" = remove it
         c["password_enc"] = crypto.encrypt(password) if password else ""
+    problem = smtp_transport_problem(c)
+    if problem:
+        raise InsecureSmtp(problem)
     row = db.get(AppSetting, SMTP_KEY)
     if row is None:
         db.add(AppSetting(key=SMTP_KEY, value=c))
@@ -115,6 +141,9 @@ def send_mail(db: Session, to: str, subject: str, body: str) -> None:
     c = smtp_config(db)
     if not (c.get("host") and c.get("from_addr")):
         raise RuntimeError("o envio de e-mail não está configurado")
+    problem = smtp_transport_problem(c)
+    if problem:  # stored before this check existed: refuse instead of sending credentials in clear text
+        raise InsecureSmtp(problem)
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = c["from_addr"], to, subject
     msg.set_content(body)
@@ -136,6 +165,27 @@ def send_mail(db: Session, to: str, subject: str, body: str) -> None:
             server.quit()
         except Exception:
             pass
+
+
+class LinkOriginMissing(RuntimeError):
+    """ASC_PUBLIC_ORIGIN is not configured: no link can be built."""
+
+
+def links_ready() -> bool:
+    from .config import get_settings
+
+    return bool(get_settings().public_origin)
+
+
+def password_link_url(token: str) -> str:
+    """Link sent to the person. The origin is the operator's ASC_PUBLIC_ORIGIN, never a request header
+    (Host / Origin / X-Forwarded-Host can be forged to steal the token through a poisoned link)."""
+    from .config import get_settings
+
+    origin = get_settings().public_origin
+    if not origin:
+        raise LinkOriginMissing("ASC_PUBLIC_ORIGIN")
+    return f"{origin}/definir-senha?t={token}"
 
 
 def link_mail(url: str, purpose: str) -> tuple[str, str]:

@@ -65,6 +65,8 @@ services:
       ASC_ADMIN_EMAIL: ${ASC_ADMIN_EMAIL:-}
       ASC_ADMIN_PASSWORD: ${ASC_ADMIN_PASSWORD:-}
       ASC_COOKIE_SECURE: "true"
+      # Canonical https address of the dashboard for e-mailed links (never taken from request headers)
+      ASC_PUBLIC_ORIGIN: ${ASC_PUBLIC_ORIGIN:?set ASC_PUBLIC_ORIGIN to the https address of the dashboard}
       ASC_ALLOW_FILE_SOURCES: ${ASC_ALLOW_FILE_SOURCES:-false}
       ASC_TEST_MEDIA_DIR: /nonexistent  # test videos live on 206; the API validates names only
       ASC_TLS_CERT: /tls/server.crt

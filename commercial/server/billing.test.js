@@ -209,11 +209,13 @@ test('outbox: delivered in order, retried after failures and restarts, permanent
   const ctx = await start(t)
   await deliver(ctx.base, event('evt_1', 'customer.subscription.created', subscription('sub_1'), 1_700_000_100))
   await deliver(ctx.base, event('evt_2', 'customer.subscription.updated', subscription('sub_1', { status: 'past_due' }), 1_700_000_200))
-  // Main backend down: nothing lost
+  // Main backend down: nothing lost, and a single probe per cycle instead of one request per queued event
   ctx.main.fail = true
-  assert.deepEqual(await ctx.dispatch(), { delivered: 0, failed: 2 })
+  assert.deepEqual(await ctx.dispatch(), { delivered: 0, failed: 1 })
+  // Next cycle: the first is in backoff, the second is probed and fails too
+  assert.deepEqual(await ctx.dispatch(), { delivered: 0, failed: 1 })
   ctx.main.fail = false
-  // Still in backoff: not retried immediately
+  // Both in backoff: not retried immediately
   assert.equal((await ctx.dispatch()).delivered, 0)
 
   // A restart (new outbox on the same database) with the clock past the backoff delivers in order

@@ -65,6 +65,7 @@ Cada mercado só oferece checkout quando o seu provedor está configurado. Até 
 | `npm run stripe:sync` | Cria no Stripe os preços em USD a partir de `catalog.json` |
 | `npm run billing:report` | Resume assinaturas, faturas, vencimentos, ações manuais de acesso, casos para revisão e links de renovação a enviar |
 | `npm run infinitepay -- <comando>` | Registra estornos e cancelamentos, conclui revisões, reconcilia com o `payment_check` e mostra o histórico de uma assinatura |
+| `npm run outbox -- <comando>` | Fila de fotografias para a API principal: relatório (pendentes, bloqueados, rejeitados, pagos sem sincronizar, idade e último erro), reenvio auditado, reconciliação e entrega manual. Veja `docs/ASSINATURAS.md` |
 
 Guia completo em [docs/PAGAMENTOS.md](docs/PAGAMENTOS.md), e as variáveis em [.env.example](.env.example).
 

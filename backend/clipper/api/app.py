@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
     s = get_settings()
     if s.is_production:
         s.require_secrets("jwt_secret", "internal_secret")
+        s.require_public_origin()
     init_engine(s.database_url)
     await asyncio.to_thread(upgrade_db, s.database_url)
     bootstrap_admin()

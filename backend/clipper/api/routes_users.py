@@ -20,7 +20,6 @@ from ..db import get_db
 from ..models import Clip, ClipShare, Streamer, StreamerGrant, User
 from ..security import hash_password
 from .deps import CurrentUser, audit, require_admin
-from .routes_auth import public_origin
 
 router = APIRouter(tags=["users"])
 EMAIL_RE = r"^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,}$"
@@ -75,6 +74,9 @@ class UserIn(BaseModel):
     delivery: Literal["password", "link", "email"] = "password"
 
 
+LINKS_OFF = "links desativados: configure ASC_PUBLIC_ORIGIN com o endereço público do painel (https)"
+
+
 class UserPatch(BaseModel):
     active: bool | None = None
     role: Literal["viewer", "admin"] | None = None
@@ -93,6 +95,8 @@ def create_user(body: UserIn, request: Request, db: Session = Depends(get_db),
         raise HTTPException(409, "já existe uma conta com este e-mail")
     if body.delivery == "email" and not accounts.smtp_ready(db):
         raise HTTPException(409, "o envio de e-mail não está configurado: use o link ou a senha inicial")
+    if body.delivery != "password" and not accounts.links_ready():
+        raise HTTPException(409, LINKS_OFF)
     pw = _initial_password()
     u = User(email=email, password_hash=hash_password(pw), role=body.role, active=True, session_version=0)
     db.add(u)
@@ -104,7 +108,7 @@ def create_user(body: UserIn, request: Request, db: Session = Depends(get_db),
                 "note": "Entregue esta senha pessoalmente. Ela não é guardada nem enviada por e-mail."}
     u.password_hash = ""  # nobody knows a password until the person creates one with the link
     raw = accounts.issue_link(db, u, "invite", admin.email)
-    url = f"{public_origin(request)}/definir-senha?t={raw}"
+    url = accounts.password_link_url(raw)
     db.commit()
     sent = _maybe_send(db, u.email, url, "invite", body.delivery == "email")
     return {**_user(db, u), "setup_url": url, "emailed": sent}
@@ -136,9 +140,11 @@ def password_link(uid: int, body: LinkIn, request: Request, db: Session = Depend
         raise HTTPException(409, "a conta está desativada: reative antes de gerar o link")
     if body.send_email and not accounts.smtp_ready(db):
         raise HTTPException(409, "o envio de e-mail não está configurado")
+    if not accounts.links_ready():
+        raise HTTPException(409, LINKS_OFF)
     purpose = "invite" if not u.password_hash else "reset"
     raw = accounts.issue_link(db, u, purpose, admin.email)
-    url = f"{public_origin(request)}/definir-senha?t={raw}"
+    url = accounts.password_link_url(raw)
     audit(db, request, admin, "users.password_link", f"user:{uid}", {"purpose": purpose, "email": body.send_email})
     db.commit()
     sent = _maybe_send(db, u.email, url, purpose, body.send_email)
@@ -162,8 +168,12 @@ def get_smtp(db: Session = Depends(get_db), _: CurrentUser = Depends(require_adm
 
 @router.put("/api/admin/smtp")
 def put_smtp(body: SmtpIn, request: Request, db: Session = Depends(get_db), admin: CurrentUser = Depends(require_admin)):
-    accounts.save_smtp(db, host=body.host, port=body.port, username=body.username, password=body.password,
-                       from_addr=body.from_addr, security=body.security)
+    try:
+        accounts.save_smtp(db, host=body.host, port=body.port, username=body.username, password=body.password,
+                           from_addr=body.from_addr, security=body.security)
+    except accounts.InsecureSmtp as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc)) from exc
     audit(db, request, admin, "smtp.update", "smtp", {"host": body.host, "password_changed": body.password is not None})
     db.commit()
     return accounts.smtp_public(db)

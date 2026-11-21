@@ -104,6 +104,35 @@ Só para canais de clientes (`owner_id` preenchido). Os canais da HTS continuam 
   - um canal já cadastrado responde 409, sem revelar quem é o dono;
   - uma fotografia não consegue mover uma assinatura para outra conta.
 - **Papéis:** o `customer` não acessa nenhuma rota da equipe (a regra continua negar por padrão) e o `viewer` não acessa a área do assinante.
+- **Links por e-mail (convite, redefinição e cadastro):** a origem vem só de `ASC_PUBLIC_ORIGIN`, configurada pelo operador. Os cabeçalhos `Host`, `Origin`, `X-Forwarded-Host` e `Forwarded` são ignorados, então um link envenenado não consegue levar o token para outro domínio. Em produção a API não sobe sem a variável, que precisa ser `https` (exceção: `localhost`/`127.0.0.1` no compose local). Sem ela, nenhum link é gerado e o cadastro e o "esqueci a senha" ficam desligados. Os tokens não vão para os logs.
+- **SMTP:** usuário e senha só são enviados com STARTTLS ou SSL. O modo sem TLS é recusado ao salvar e ao enviar quando há login, e em produção só é aceito para um relay local sem autenticação. Uma configuração antiga insegura conta como "e-mail não configurado".
+
+## Outbox: entrega, falhas e recuperação
+
+Cada mudança financeira grava uma fotografia completa da assinatura na `entitlement_outbox`, na mesma transação. O despachante entrega por ordem de `seq` a cada 15 s.
+
+| Resposta da API | Classe | O que acontece |
+| --- | --- | --- |
+| 2xx | entregue | Fotografias mais antigas da mesma assinatura que ainda não chegaram são marcadas como substituídas (`superseded_by`), porque a mais nova tem o estado completo |
+| Rede, timeout, 5xx, 408, 429 | transitória | Nova tentativa para sempre, com espera exponencial até 1 hora. Com a API fora do ar, é feita **uma** tentativa por ciclo, não uma por evento |
+| 401, 403, 404, 409 | bloqueada | Configuração (segredo, relógio, rota ausente) ou conta ainda não pronta. Nova tentativa para sempre, com espera até 6 horas, e alerta `blocked` |
+| 400, 413, 415, 422 e outros 4xx | permanente | Fica `rejected`, **sem nova tentativa automática**, visível no relatório e nos alertas até um operador reenviar ou chegar uma fotografia mais nova da mesma assinatura |
+
+Proteções:
+- **Concorrência e reinício:** cada linha é reservada por 60 s (`lease_until`) antes do envio. Dois despachantes (servidor e CLI, ou um reinício no meio de um envio) não enviam a mesma linha ao mesmo tempo. Se o processo cair depois de a API aplicar e antes de marcar a entrega, o reenvio é ignorado pela API (`event_id`).
+- **Alertas** (a cada minuto, repetidos no máximo a cada 15 min, só códigos e contagens): `paid_unsynced` (assinatura paga, em `active` ou `grace`, cuja última fotografia não chegou em 2 min), `rejected`, `blocked` e `stalled` (fila parada há 15 min). O log avisa também quando o alerta some.
+- **Reconciliação** a cada 30 min por `POST /internal/billing/state` (assinado e só leitura): se a API estiver atrás de uma fotografia já entregue (por exemplo, depois de restaurar um backup), a última entregue volta para a fila; se estiver à frente ou discordar do acesso, aparece como problema no log e no CLI.
+- Bancos criados pela primeira versão da outbox são atualizados no lugar. Eventos que ela rejeitou depois de 30 falhas de rede aparecem como `rejected`, prontos para reenvio.
+
+Comandos do operador (cada reenvio fica em `entitlement_outbox_audit` com nome, motivo e estado anterior; o `event_id` e o `seq` não mudam, então o reenvio não duplica efeitos):
+
+```bash
+npm run outbox -- report                                   # pendentes, bloqueados, rejeitados, pagos sem sincronizar, idade, último erro, auditoria
+npm run outbox -- resend 42 --by ana --reason "API corrigida"
+npm run outbox -- resend-rejected --by ana --reason "segredo trocado"
+npm run outbox -- reconcile                                # compara com a API agora
+npm run outbox -- dispatch                                 # uma passada de entrega agora
+```
 
 ## Decisões pendentes e limitações
 
@@ -119,6 +148,7 @@ Só para canais de clientes (`owner_id` preenchido). Os canais da HTS continuam 
 | --- | --- | --- |
 | API | `ASC_BILLING_SECRET` | Segredo do vínculo com o serviço comercial, com 32 caracteres ou mais (mesmo valor nos dois lados) |
 | API | `ASC_COMMERCIAL_URL` | Endereço interno do serviço comercial, por exemplo `http://asc-commercial:8790` |
+| API | `ASC_PUBLIC_ORIGIN` | Endereço `https` do painel usado nos links por e-mail. Obrigatória em produção (o compose da 210 não sobe sem ela) |
 | Comercial | `ASC_BILLING_SECRET`, `ASC_MAIN_API_URL`, `ASC_APP_URL` | Vínculo com a API e endereço do painel. Sem eles, nenhum mercado vende |
 | Comercial | `STRIPE_*`, `INFINITEPAY_*`, `SMTP_*` | Provedores. Veja `commercial/docs/PAGAMENTOS.md` |
 
@@ -141,7 +171,7 @@ Migração **0017**. Ela só **adiciona** estruturas (`streamers.owner_id`, `acc
    2. Abrir duas lives num plano Basic: a segunda não deve começar.
    3. Encostar a franquia de horas em homologação: a captura deve parar e os segmentos seguintes não devem ser analisados.
    4. Encher o armazenamento: o render não deve começar.
-6. **Falha de sincronização:** derrubar a API, gerar eventos no serviço comercial e subir de novo. As fotografias pendentes devem chegar (`npm run billing:report` mostra a fila), e um evento repetido não pode ter efeito.
+6. **Falha de sincronização:** derrubar a API, gerar eventos no serviço comercial e subir de novo. As fotografias pendentes devem chegar (`npm run outbox -- report` mostra a fila e os alertas), e um evento repetido não pode ter efeito. Forçar um 422 deve deixar o evento `rejected` sem novas tentativas até `npm run outbox -- resend`.
 
 ## English summary
 
@@ -152,6 +182,8 @@ The commercial service owns the money (Stripe for USD, InfinitePay for BRL, webh
 3. **Delivery:** snapshots are delivered over HMAC with retries. The API applies them idempotently (by event id), in order (by sequence) and only to verified customer accounts.
 4. **Enforcement:** plan limits come only from `catalog.json`. The pipeline enforces them for customer channels: session start, capture polling, per-segment hour metering (counted once), simultaneous streams, storage before rendering, and premium features (second pass, alternate edits, priority). HTS channels are unchanged.
 5. **When access ends:** captures stop, channels pause and new work is refused, while existing clips stay available.
+6. **Outbox failures:** transient errors retry forever (backoff up to 1 h, one probe per cycle while the API is down); configuration errors (401/403/404/409) retry up to every 6 h; invalid snapshots (400/413/415/422) stay `rejected` and visible until an audited `npm run outbox -- resend` or a newer snapshot supersedes them. Leases make concurrent dispatchers and restarts safe, alerts flag paid subscriptions that are not synced, and a signed reconciliation re-queues what the API lost.
+7. **E-mailed links** use only the operator's `ASC_PUBLIC_ORIGIN` (https in production), never request headers. SMTP refuses to send credentials without TLS.
 
 **Pending:**
 - Creator simultaneous streams (2 in the catalog vs 1 in the study).

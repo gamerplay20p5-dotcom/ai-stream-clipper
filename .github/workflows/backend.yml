@@ -17,6 +17,12 @@ concurrency:
   group: backend-${{ github.ref }}
   cancel-in-progress: true
 
+# pytest reads its settings (asyncio_mode, markers, testpaths) from backend/pyproject.toml,
+# so every command runs from backend/ exactly as the suite is run locally.
+defaults:
+  run:
+    working-directory: backend
+
 jobs:
   tests:
     runs-on: ubuntu-24.04
@@ -32,13 +38,13 @@ jobs:
       - name: System packages (ffmpeg and caption fonts, as in the image)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-core
       - name: Install
-        run: python -m pip install --upgrade pip && pip install -e "./backend[dev,audio,vision]"
+        run: python -m pip install --upgrade pip && pip install -e ".[dev,audio,vision]"
       - name: Fast suite (includes billing, entitlements and quota tests)
         run: python -m pytest -q -m "not e2e and not models" -p no:cacheprovider
       - name: Billing and entitlement tests (explicit)
-        run: python -m pytest -q tests/test_billing_entitlements.py tests/test_accounts.py tests/test_multiuser.py -p no:cacheprovider
+        run: python -m pytest -q ../tests/test_billing_entitlements.py ../tests/test_outbox_link.py ../tests/test_accounts.py ../tests/test_multiuser.py ../tests/test_public_origin.py -p no:cacheprovider
       - name: Migration chain upgrades and downgrades
-        run: python -m pytest -q tests/test_migration_0009.py tests/test_streamer_grants.py -p no:cacheprovider
+        run: python -m pytest -q ../tests/test_migration_0009.py ../tests/test_streamer_grants.py -p no:cacheprovider
 
   e2e:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -52,7 +58,7 @@ jobs:
           cache: pip
           cache-dependency-path: backend/pyproject.toml
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-core
-      - run: python -m pip install --upgrade pip && pip install -e "./backend[dev,audio,vision]"
+      - run: python -m pip install --upgrade pip && pip install -e ".[dev,audio,vision]"
       - name: End-to-end media pipeline
         run: python -m pytest -q -m e2e -p no:cacheprovider
 
@@ -67,5 +73,5 @@ jobs:
       - name: Dependency vulnerabilities (pip-audit)
         run: |
           python -m pip install --upgrade pip pip-audit
-          pip install "./backend[audio,vision]"
+          pip install ".[audio,vision]"
           pip-audit --skip-editable
