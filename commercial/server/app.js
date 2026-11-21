@@ -4,10 +4,11 @@ import { DatabaseSync } from 'node:sqlite'
 import express from 'express'
 import { rateLimit } from 'express-rate-limit'
 import catalog from '../catalog.json' with { type: 'json' }
-import { billingSettings, createBilling } from './billing.js'
+import { billingSettings } from './billing.js'
+import { infinitePaySettings } from './infinitepay.js'
+import { createPayments } from './payments.js'
 
-// Use the native email field's character set and require a dotted domain.
-const emailPattern = /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i
+import { emailPattern } from './validation.js'
 
 function parseInterest(body) {
   if (!body || typeof body !== 'object') return null
@@ -25,7 +26,7 @@ function parseInterest(body) {
   return { email, plan, country, otherCountry, platform, language, market }
 }
 
-export function createApp({ databasePath, dist, trustProxy, stripe = null, billing = billingSettings({}), log = console }) {
+export function createApp({ databasePath, dist, trustProxy, stripe = null, billing = billingSettings({}), infinitepay = infinitePaySettings({}), infinitepayRequest = null, mailer = null, clock, log = console }) {
   mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 })
   const db = new DatabaseSync(databasePath, { timeout: 1_000 })
   db.exec(`
@@ -60,7 +61,7 @@ export function createApp({ databasePath, dist, trustProxy, stripe = null, billi
     next()
   })
 
-  const payments = createBilling({ db, stripe, settings: billing, log })
+  const payments = createPayments({ db, stripe, billing, infinitepay, infinitepayRequest, mailer, clock, log })
   app.use(payments.router)
 
   app.post('/api/waitlist',
@@ -108,5 +109,5 @@ export function createApp({ databasePath, dist, trustProxy, stripe = null, billi
     return res.status(500).json({ error: 'request_failed' })
   })
 
-  return { app, billingEnabled: payments.enabled, close: () => db.close() }
+  return { app, markets: payments.markets, runRenewals: payments.runRenewals, close: () => db.close() }
 }

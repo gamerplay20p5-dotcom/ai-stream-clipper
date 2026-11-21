@@ -1,4 +1,4 @@
-// Creates or updates the Stripe products and monthly prices for every plan and market in catalog.json.
+// Creates or updates the Stripe products and monthly USD prices for every plan in catalog.json.
 // Idempotent: prices are found by lookup key; a changed amount creates a new price that takes over the
 // lookup key and archives the old one (existing subscribers keep their current price until migrated).
 //
@@ -6,7 +6,7 @@
 //   STRIPE_SECRET_KEY=sk_live_... node scripts/stripe-sync.js --live     # production, explicit opt-in
 import Stripe from 'stripe'
 import catalog from '../catalog.json' with { type: 'json' }
-import { lookupKey } from '../server/billing.js'
+import { lookupKey, STRIPE_MARKETS } from '../server/billing.js'
 
 const key = process.env.STRIPE_SECRET_KEY ?? ''
 if (!/^(sk|rk)_(test|live)_/.test(key)) {
@@ -37,7 +37,8 @@ for (const [plan, details] of Object.entries(catalog.plans)) {
     console.log(`update product ${name}`)
     if (!dryRun) product = await stripe.products.update(product.id, { name, active: true })
   }
-  for (const market of Object.keys(catalog.markets)) {
+  // Only USD prices: Brazil is billed through InfinitePay
+  for (const market of STRIPE_MARKETS) {
     const lookup = lookupKey(plan, market)
     const currency = catalog.markets[market].currency.toLowerCase()
     const amount = details.monthlyMinor[market]

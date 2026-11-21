@@ -73,6 +73,7 @@ function deliver(base, event, secret = WEBHOOK_SECRET) {
 const event = (id, type, object, created = 1_700_000_000) => ({ id, object: 'event', type, created, data: { object } })
 
 test('lookup keys round-trip only for catalog plans and markets', () => {
+  assert.equal(lookupKey('pro', 'US'), 'asc_pro_usd_monthly')
   assert.equal(lookupKey('creator', 'BR'), 'asc_creator_brl_monthly')
   assert.deepEqual(parseLookupKey('asc_pro_usd_monthly'), { plan: 'pro', market: 'US' })
   assert.equal(parseLookupKey('asc_enterprise_usd_monthly'), null)
@@ -82,27 +83,30 @@ test('lookup keys round-trip only for catalog plans and markets', () => {
 
 test('checkout stays off and the waitlist keeps working without Stripe configuration', async t => {
   const { base } = await start(t, { stripe: null, billing: { ...settings, secretKey: '' } })
-  assert.deepEqual(await (await fetch(`${base}/api/billing/config`)).json(), { enabled: false, portalUrl: '' })
+  assert.deepEqual(await (await fetch(`${base}/api/billing/config`)).json(), { markets: { BR: false, US: false }, portalUrl: '' })
   assert.equal((await checkout(base, { plan: 'pro', market: 'US', language: 'en' })).status, 503)
   assert.equal((await deliver(base, event('evt_off', 'invoice.paid', {}))).status, 503)
 })
 
 test('checkout prices come from Stripe lookup keys checked against the catalog, never from the browser', async t => {
   const { base, stripe } = await start(t)
-  assert.deepEqual(await (await fetch(`${base}/api/billing/config`)).json(), { enabled: true, portalUrl: '' })
+  // Stripe sells only in USD; Brazil stays off here because InfinitePay is not configured in this test
+  assert.deepEqual(await (await fetch(`${base}/api/billing/config`)).json(), { markets: { BR: false, US: true }, portalUrl: '' })
 
-  const response = await checkout(base, { plan: 'creator', market: 'BR', language: 'pt-BR', price: 'price_cheap', amount: 1 }, { Host: 'attacker.example' })
+  const response = await checkout(base, { plan: 'pro', market: 'US', language: 'en', price: 'price_cheap', amount: 1 }, { Host: 'attacker.example' })
   assert.equal(response.status, 201)
   assert.deepEqual(await response.json(), { url: 'https://checkout.stripe.com/c/pay/cs_test_created' })
   const params = stripe.calls.sessions[0]
   assert.equal(params.mode, 'subscription')
-  assert.deepEqual(params.line_items, [{ price: 'price_creator_brl', quantity: 1 }])
-  assert.equal(params.locale, 'pt-BR')
-  assert.deepEqual(params.metadata, { plan: 'creator', market: 'BR', language: 'pt-BR' })
+  assert.deepEqual(params.line_items, [{ price: 'price_pro_usd', quantity: 1 }])
+  assert.equal(params.locale, 'en')
+  assert.deepEqual(params.metadata, { plan: 'pro', market: 'US', language: 'en' })
   assert.deepEqual(params.subscription_data.metadata, params.metadata)
   // Return URLs use the configured origin, not the Host header
-  assert.equal(params.success_url, 'https://clipper.example/?lang=pt-BR&market=BR&checkout=success&session_id={CHECKOUT_SESSION_ID}')
-  assert.equal(params.cancel_url, 'https://clipper.example/?lang=pt-BR&market=BR&checkout=cancelled#planos')
+  assert.equal(params.success_url, 'https://clipper.example/?lang=en&market=US&checkout=success&session_id={CHECKOUT_SESSION_ID}')
+  assert.equal(params.cancel_url, 'https://clipper.example/?lang=en&market=US&checkout=cancelled#planos')
+  // A BRL purchase never reaches Stripe, even with Stripe configured
+  assert.equal((await checkout(base, { plan: 'creator', market: 'BR', language: 'pt-BR' })).status, 503)
 
   for (const body of [{ plan: 'enterprise', market: 'US', language: 'en' }, { plan: 'pro', market: 'toString', language: 'en' }, { plan: 'pro', market: 'US', language: 'fr' }, {}]) {
     assert.equal((await checkout(base, body)).status, 422)

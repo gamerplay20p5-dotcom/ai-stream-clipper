@@ -1,4 +1,4 @@
-// Stripe billing for the commercial site, following the pattern of HowTo-Software/website.blog:
+// Stripe billing for the US market (USD only), following the pattern of HowTo-Software/website.blog:
 // Checkout Sessions in subscription mode, a signed webhook as the source of truth, and the Stripe
 // customer portal for self-service. The browser only ever sends a plan id and a market; prices are
 // resolved on the server from Stripe lookup keys and checked against catalog.json.
@@ -8,6 +8,8 @@ import catalog from '../catalog.json' with { type: 'json' }
 
 const SESSION_ID = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/
 const PRICE_CACHE_MS = 10 * 60 * 1000
+// Stripe sells only in dollars; Brazilian customers pay through InfinitePay (server/infinitepay.js)
+export const STRIPE_MARKETS = ['US']
 // Stripe subscription states that grant access to the product
 export const ACTIVE_STATUSES = new Set(['active', 'trialing'])
 
@@ -197,41 +199,6 @@ export function createBilling({ db, stripe, settings, log = console }) {
   const noStore = (_req, res, next) => { res.set('Cache-Control', 'no-store'); next() }
   const limited = (limit) => rateLimit({ windowMs: 10 * 60 * 1000, limit, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'too_many_requests' } })
 
-  router.get('/api/billing/config', noStore, (_req, res) => {
-    res.json({ enabled, portalUrl: enabled ? settings.portalUrl : '' })
-  })
-
-  router.post('/api/checkout', noStore, limited(20), express.json({ limit: '2kb', inflate: false }), async (req, res) => {
-    if (!enabled) return res.status(503).json({ error: 'billing_disabled' })
-    if (!req.is('application/json')) return res.status(415).json({ error: 'unsupported_content_type' })
-    const { plan, market, language } = req.body ?? {}
-    if (typeof plan !== 'string' || !Object.hasOwn(catalog.plans, plan)
-      || typeof market !== 'string' || !Object.hasOwn(catalog.markets, market)
-      || !catalog.languages.includes(language)) return res.status(422).json({ error: 'invalid_checkout' })
-    try {
-      const price = await priceFor(plan, market)
-      const query = new URLSearchParams({ lang: language, market })
-      const metadata = { plan, market, language }
-      const session = await stripe.checkout.sessions.create({
-        mode: 'subscription',
-        line_items: [{ price, quantity: 1 }],
-        // Stripe substitutes the real id; the braces must stay unencoded
-        success_url: `${settings.origin}/?${query}&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${settings.origin}/?${query}&checkout=cancelled#planos`,
-        locale: language === 'en' ? 'en' : 'pt-BR',
-        allow_promotion_codes: true,
-        billing_address_collection: 'auto',
-        metadata,
-        subscription_data: { metadata },
-        ...(settings.automaticTax ? { automatic_tax: { enabled: true } } : {}),
-      })
-      return res.status(201).json({ url: session.url })
-    } catch (error) {
-      log.error('Checkout session failed', error.code ?? error.type ?? error.name)
-      return res.status(503).json({ error: 'checkout_unavailable' })
-    }
-  })
-
   router.get('/api/checkout/session', noStore, limited(60), async (req, res) => {
     if (!enabled) return res.status(503).json({ error: 'billing_disabled' })
     const id = typeof req.query.id === 'string' ? req.query.id : ''
@@ -269,5 +236,27 @@ export function createBilling({ db, stripe, settings, log = console }) {
     }
   })
 
-  return { router, enabled }
+  /** Checkout Session for a validated plan in a Stripe market. Returns the URL to redirect to. */
+  async function createCheckout({ plan, market, language }) {
+    if (!STRIPE_MARKETS.includes(market)) throw Object.assign(new Error('Stripe only sells in USD'), { code: 'unsupported_market' })
+    const price = await priceFor(plan, market)
+    const query = new URLSearchParams({ lang: language, market })
+    const metadata = { plan, market, language }
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      line_items: [{ price, quantity: 1 }],
+      // Stripe substitutes the real id; the braces must stay unencoded
+      success_url: `${settings.origin}/?${query}&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${settings.origin}/?${query}&checkout=cancelled#planos`,
+      locale: language === 'en' ? 'en' : 'pt-BR',
+      allow_promotion_codes: true,
+      billing_address_collection: 'auto',
+      metadata,
+      subscription_data: { metadata },
+      ...(settings.automaticTax ? { automatic_tax: { enabled: true } } : {}),
+    })
+    return session.url
+  }
+
+  return { router, enabled, createCheckout, portalUrl: enabled ? settings.portalUrl : '' }
 }
