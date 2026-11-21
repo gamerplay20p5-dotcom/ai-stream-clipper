@@ -38,12 +38,18 @@ LIMITS = {
 
 
 def _safe_admin_url() -> str:
-    url = os.environ.get("ASC_TEST_PG_URL", "")
-    if not url:
+    """Admin URL of the throwaway server (tests/pg_support.py). Without one: skipped, or FAILED under
+    ASC_REQUIRE_PG=1 (homologation never reports PostgreSQL tests as skipped)."""
+    import pg_support
+
+    try:
+        url = pg_support.admin_url()
+    except pg_support.Refused as exc:
+        pytest.fail(str(exc))
+    if url is None:
+        if pg_support.required():
+            pytest.fail("ASC_REQUIRE_PG=1 but ASC_TEST_PG_URL is not set: start the throwaway PostgreSQL")
         pytest.skip("ASC_TEST_PG_URL not set: PostgreSQL homologation tests need a disposable test server")
-    host = (urlsplit(url.replace("postgresql+psycopg", "postgresql")).hostname or "").lower()
-    if host not in ALLOWED_HOSTS or "212" in host:
-        pytest.fail(f"refusing to run against {host!r}: only a local/CI test PostgreSQL is allowed")
     return url
 
 
