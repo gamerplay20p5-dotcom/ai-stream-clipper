@@ -159,7 +159,7 @@ function Channels({ state }: { state: AccountState }) {
                 </select>
               </label>
             </div>
-            <ConfirmAction title={t("Parar de acompanhar este canal?")} description={t("O acompanhamento para. Os Shorts que você já recebeu continuam na sua biblioteca.")}
+            <ConfirmAction title={t("Parar de acompanhar este canal?")} description={t("O acompanhamento para e as publicações automáticas deste canal que ainda não começaram são canceladas. Os Shorts que você já recebeu continuam na sua biblioteca.")}
               confirmLabel={t("Remover")} pending={remove.isPending} onConfirm={() => remove.mutate(ch.id)} label={t("Remover {name}", { name: ch.display_name || ch.channel })}>
               <Trash2 size={15} aria-hidden />
             </ConfirmAction>

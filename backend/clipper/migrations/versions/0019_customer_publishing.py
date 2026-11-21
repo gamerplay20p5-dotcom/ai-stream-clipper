@@ -62,6 +62,7 @@ def upgrade() -> None:
             sa.Column('day', sa.String(10), nullable=False),
             sa.Column('state', sa.String(10), nullable=False, server_default='reserved'),
             sa.Column('reason', sa.String(200), nullable=False, server_default=''),
+            sa.Column('reserved_at', sa.DateTime(), nullable=False),
             sa.Column('created_at', sa.DateTime(), nullable=False),
             sa.Column('updated_at', sa.DateTime(), nullable=False),
             sa.UniqueConstraint('publication_id', name='uq_publish_unit_publication'),

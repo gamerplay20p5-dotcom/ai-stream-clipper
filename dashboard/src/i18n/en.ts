@@ -1762,7 +1762,7 @@ const en: Record<string, string> = {
   "Fora do seu plano nesta live: {reason}": "Outside your plan for this stream: {reason}",
   "Preferência de cortes": "Clip preference",
   "Parar de acompanhar este canal?": "Stop following this channel?",
-  "O acompanhamento para. Os Shorts que você já recebeu continuam na sua biblioteca.": "Following stops. The Shorts you already received stay in your library.",
+  "O acompanhamento para e as publicações automáticas deste canal que ainda não começaram são canceladas. Os Shorts que você já recebeu continuam na sua biblioteca.": "Following stops and this channel's automatic posts that have not started are cancelled. The Shorts you already received stay in your library.",
   "No Basic, os cortes seguem a seleção equilibrada. Creator e Pro escolhem a preferência por canal.": "On Basic, clips follow the balanced selection. Creator and Pro choose a preference per channel.",
   "Remover {name}": "Remove {name}",
   "Adicionar": "Add",

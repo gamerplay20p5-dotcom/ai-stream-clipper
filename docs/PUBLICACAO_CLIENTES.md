@@ -105,10 +105,23 @@ A HTS libera uma rede para clientes em **Clientes → Capacidade → Redes liber
 | Envio começou, publicado, processando ou incerto | **Consumida** (nunca devolvida: pode estar no ar) |
 | Falha permanente antes de publicar, cancelamento, destino desconectado, expiração na fila | **Liberada** |
 | Nova tentativa agendada | Mantida (a mesma unidade) |
-| Reserva sem envio por 6 h (worker morreu antes de enviar) | Liberada automaticamente |
+| Reserva sem envio por 6 h (worker morreu antes de enviar) | Liberada automaticamente. As 6 h contam do instante **desta** reserva (`reserved_at`): uma unidade liberada e reutilizada ganha um instante novo. A decisão é tomada sob a trava da conta, relendo a unidade, então uma reserva feita no meio do caminho nunca é liberada. Se o envio começou ou está incerto (houve tentativa, sessão ou id remoto), a limpeza nunca libera |
 | Publicação confirmada | Nunca reenviada (o worker ignora `published`) |
 
 - **Sem vaga no dia:** a publicação volta para "na fila", sem erro.
+- **Prazo de distribuição (7 dias):**
+  - vale para publicações aguardando aprovação, na fila e **agendadas**;
+  - o planejador nunca agenda depois do prazo;
+  - o que não sair até lá vira "expirou na fila" (unidade liberada), também na hora do envio e para clientes pausados;
+  - um envio já iniciado conclui o seu curso;
+  - **o Short continua na biblioteca.**
+- **Conta desativada** pela HTS (`users.active = false`): nenhum envio novo e nada entra na fila, mesmo com assinatura e automação ligadas. Reativada, as publicações seguem.
+- **Canal removido** dos acompanhados:
+  - as publicações dele que não começaram são **canceladas** (unidade liberada) e as regras do canal são **desativadas**;
+  - envios já iniciados terminam;
+  - os Shorts entregues continuam na biblioteca;
+  - **nada novo é criado para ele**: a varredura só considera canais ainda acompanhados e o envio confere de novo;
+  - ao voltar a acompanhar, o cliente reativa a regra, e só Shorts do novo acompanhamento entram (os do acompanhamento anterior nunca são publicados automaticamente).
 - **Pausa:** o cliente pausa e retoma quando quiser. Pausado, nada novo entra na fila e nada é enviado.
 
 ## Assinatura, revisão e mudanças de plano
@@ -162,14 +175,15 @@ Permite:
 
 | Suíte | Onde rodou | Resultado |
 | --- | --- | --- |
-| Backend completo (SQLite) com e2e | **Local** | **506 aprovados**, 6 ignorados (PostgreSQL e 1 que já existia) |
+| Backend completo (SQLite) com e2e | **Local** | **518 aprovados**, 8 ignorados (PostgreSQL e 1 que já existia) |
 | `test_customer_publishing.py` (20 cenários) | Local | 20/20 |
+| `test_customer_publishing_fixes.py` (revisão: conta desativada, reservas, retenção, canal removido, com corridas) | Local | 12/12 |
 | `test_facebook_reels.py` (Graph API simulada) | Local | 6/6 |
 | Serviço comercial | Local | 37/37 |
 | Playwright da landing (Chromium, Firefox e WebKit, com axe) | Local | 34 aprovados, 8 ignorados |
 | Dashboard: typecheck, i18n (0 faltando) e build | Local | Ok |
 | Capturas da página do cliente (390 e 1440, Creator e Basic) | Local | `docs/qa/publicacao/` |
-| `test_postgres_customer_publishing.py` (10 workers disputando as vagas) | **Pendente** | Não executado: sem PostgreSQL nesta máquina |
+| `test_postgres_customer_publishing.py` (10 workers disputando as vagas; worker × limpeza) | **Pendente** | Não executado: sem PostgreSQL nesta máquina |
 | `test_postgres_shared_lives.py` (#24) | **Pendente** | Não executado |
 | GitHub Actions | **Não rodou** | `startup_failure` por bloqueio da conta (ver `docs/INTEGRACAO_PRS.md`) |
 
@@ -225,12 +239,14 @@ Cenários cobertos com APIs externas simuladas (nenhuma conta, token ou post rea
 - HTS can block a customer or a channel, and everything is audited.
 
 **Daily allowance:**
-- one unit per publication, reserved under the account lock with a recount;
+- one unit per publication, reserved under the account lock with a recount; every (re)reservation records its own `reserved_at`;
 - never counted twice;
 - consumed once something may be online, released when nothing was published;
-- abandoned reservations are freed after 6 h;
+- abandoned reservations are freed 6 h after THAT reservation, decided under the lock (a fresh one is never freed), and never when an upload started or is uncertain;
 - the day is the customer's validated IANA timezone and is DST-safe;
-- over-limit Shorts wait in the queue and expire after 7 days.
+- over-limit Shorts wait in the queue; the 7-day deadline applies to proposed, waiting AND scheduled publications, nothing is scheduled past it, and the Short stays in the library;
+- a deactivated account (`users.active = false`) starts no upload;
+- removing a channel cancels its not-started publications, switches its rules off and keeps delivered Shorts; nothing new is created for it, and Shorts from a previous follow are never auto-published after following again.
 
 **HTS panel (`/clientes`):**
 - customers, plans, usage, destinations without secrets, publications and failures, followers per channel, `hts_monitoring`, capacity and platform enablement;
@@ -239,6 +255,6 @@ Cenários cobertos com APIs externas simuladas (nenhuma conta, token ou post rea
 **Migration 0019** is additive.
 
 **Tests:**
-- **Local:** 506 backend, 20 customer publishing, 6 Facebook (simulated Graph API), 37 commercial, 34 Playwright; dashboard typecheck, i18n and build pass.
+- **Local:** 518 backend, including 20 customer publishing and 12 review regressions (races included), 6 Facebook (simulated Graph API), 37 commercial, 34 Playwright; dashboard typecheck, i18n and build pass.
 - **PostgreSQL tests: pending (not executed).**
 - **GitHub Actions:** did not run (account-level block).

@@ -897,6 +897,9 @@ class PublishUnit(Base):
     day: Mapped[str] = mapped_column(String(10))
     state: Mapped[str] = mapped_column(String(10), default="reserved")  # reserved | consumed | released
     reason: Mapped[str] = mapped_column(String(200), default="")
+    # moment of the CURRENT reservation (a released unit reused gets a new one); the abandoned-reservation cleaner
+    # measures from it, never from created_at
+    reserved_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

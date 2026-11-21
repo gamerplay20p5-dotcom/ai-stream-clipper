@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 from . import entitlements
 from .db import utcnow
 from .models import (AccountSubscription, AppSetting, ChannelMonitor, Clip, ClipShare, CustomerPublishSettings,
-                     Publication, PublishAccount, PublishRule, PublishUnit, Streamer)
+                     Publication, PublishAccount, PublishRule, PublishUnit, Streamer, User)
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +103,10 @@ def plan_limits(ent: entitlements.Entitlement | None) -> dict:
 # ------------------------------------------------------------------ gate (may this customer publish now?)
 def gate(db: Session, user_id: int) -> tuple[str, str]:
     """('ok', '') | ('hold', reason): wait, nothing is lost | ('off', reason): nothing new starts."""
+    user = db.get(User, user_id)
+    if user is None or not user.active:
+        # deactivated by the HTS (security, abuse) or deleted: never a new upload, whatever the plan or switch
+        return "off", "conta desativada"
     s = settings_for(db, user_id)
     if s is not None and s.blocked_reason:
         return "off", f"publicação bloqueada pela HTS: {s.blocked_reason}"
@@ -175,6 +179,27 @@ def disconnect(db: Session, user_id: int, acct: PublishAccount) -> int:
 
 
 # ------------------------------------------------------------------ eligibility
+def following(db: Session, user_id: int, streamer_id: int) -> bool:
+    return db.scalar(select(ChannelMonitor.id).where(ChannelMonitor.user_id == user_id, ChannelMonitor.streamer_id == streamer_id,
+                                                     ChannelMonitor.removed_at.is_(None))) is not None
+
+
+def on_channel_removed(db: Session, user_id: int, streamer_id: int) -> int:
+    """The customer stopped following a channel: its publications that did not start are cancelled (units
+    released) and its rules are switched off. Uploads already started finish; Shorts in the library stay."""
+    n = 0
+    clips = select(Clip.id).where(Clip.streamer_id == streamer_id)
+    for pub in db.scalars(select(Publication).where(Publication.owner_id == user_id, Publication.clip_id.in_(clips),
+                                                    Publication.status.in_(("proposed", "waiting", "scheduled")))):
+        if not upload_started(pub):
+            cancel(db, pub, "canal removido dos seus canais acompanhados")
+            n += 1
+    for rule in db.scalars(select(PublishRule).where(PublishRule.owner_id == user_id, PublishRule.streamer_id == streamer_id)):
+        rule.enabled = False
+    db.flush()
+    return n
+
+
 def library_share(db: Session, user_id: int, clip_id: int) -> ClipShare | None:
     from .sharing import active_share
 
@@ -200,8 +225,11 @@ def problems(db: Session, pub_or_none, *, user_id: int, clip: Clip | None, acct:
         p.append("esta rede não está disponível para publicação automática")
     if acct.platform in NEVER_AUTOMATIC:
         p.append(NEVER_AUTOMATIC[acct.platform])
-    if library_share(db, user_id, clip.id) is None:
+    share = library_share(db, user_id, clip.id)
+    if share is None:
         p.append("o Short não está (mais) na sua biblioteca")
+    elif not following(db, user_id, clip.streamer_id):
+        p.append("você deixou de acompanhar este canal: a publicação automática dele parou")
     if clip.status not in ("ready", "approved") or clip.is_test:
         p.append("o Short não está disponível")
     if rule is None or rule.owner_id != user_id or not rule.enabled:
@@ -245,11 +273,12 @@ def reserve(db: Session, pub: Publication) -> str:
         return f"limite diário de {limits['daily']} publicações atingido"
     try:
         with db.begin_nested():
+            now = utcnow()
             if unit is None:
-                unit = PublishUnit(user_id=uid, publication_id=pub.id, day=day, state="reserved")
+                unit = PublishUnit(user_id=uid, publication_id=pub.id, day=day, state="reserved", reserved_at=now)
                 db.add(unit)
-            else:
-                unit.day, unit.state, unit.reason = day, "reserved", ""
+            else:  # a released unit reused: a NEW reservation, with its own moment (the cleaner measures from it)
+                unit.day, unit.state, unit.reason, unit.reserved_at = day, "reserved", "", now
             db.flush()
     except IntegrityError:
         return "" if db.scalar(select(PublishUnit.id).where(PublishUnit.publication_id == pub.id,
@@ -284,17 +313,39 @@ def settle(db: Session, pub: Publication) -> None:
         unit.state = "consumed"  # an unclear failure may have published: never given back
 
 
-def release_abandoned(db: Session) -> int:
-    """Reservations whose upload never started (worker died before sending) give their slot back."""
+def upload_started(pub: Publication | None) -> bool:
+    """Something may already have reached the platform: an attempt was made, a session or a remote id exists."""
+    if pub is None:
+        return False
+    return bool(pub.status in ("uploading", "processing", "published", "uncertain") or pub.attempts
+                or pub.upload_state or pub.remote_id)
+
+
+def release_abandoned(db: Session, now: datetime | None = None) -> int:
+    """Reservations whose upload never started (the worker died between reserving and sending) give their slot
+    back after ``ABANDONED_AFTER``, measured from THAT reservation (``reserved_at``). Decided under the account lock,
+    re-reading the unit, so a reservation made meanwhile by a worker is never released. An upload started or
+    uncertain is never released here (``settle`` decides it from the publication's outcome)."""
+    now = now or utcnow()
+    cutoff = now - ABANDONED_AFTER
+    candidates = db.execute(select(PublishUnit.id, PublishUnit.user_id).where(
+        PublishUnit.state == "reserved", PublishUnit.reserved_at < cutoff)).all()
     n = 0
-    for unit in db.scalars(select(PublishUnit).where(PublishUnit.state == "reserved",
-                                                     PublishUnit.created_at < utcnow() - ABANDONED_AFTER)):
+    for unit_id, uid in candidates:
+        entitlements.lock_accounts(db, [uid])
+        unit = db.get(PublishUnit, unit_id)
+        db.refresh(unit)  # the lock is held now: read the latest committed reservation
+        if unit.state != "reserved" or unit.reserved_at >= cutoff:
+            continue  # reserved again meanwhile
         pub = db.get(Publication, unit.publication_id)
-        if pub is None or pub.status in ("scheduled", "waiting", "cancelled", "expired", "proposed"):
-            unit.state, unit.reason = "released", "reserva abandonada"
-            n += 1
-        elif pub is not None:
-            settle(db, pub)
+        if pub is not None:
+            db.refresh(pub)
+        if upload_started(pub):
+            settle(db, pub)  # consumed if it may be online; kept while a retry of a real attempt is pending
+            continue
+        unit.state, unit.reason = "released", "reserva abandonada"
+        n += 1
+    db.flush()
     return n
 
 
@@ -312,21 +363,46 @@ def _slots(rule: PublishRule) -> list[str]:
     return sorted(s for s in (rule.slots or []) if SLOT_RE.match(s)) or ["12:00", "18:00", "21:00"]
 
 
+def deadline(pub: Publication) -> datetime:
+    """Last moment this Short may still be posted automatically (the same 7 days for proposed, waiting and scheduled)."""
+    return pub.created_at + timedelta(days=RETENTION_DAYS)
+
+
+def expire_overdue(db: Session, user_id: int | None = None, now: datetime | None = None) -> int:
+    """Publications not started by their deadline leave the distribution queue (``expired``; unit released).
+    The Short itself stays in the customer's library. An upload already started is never expired here."""
+    now = now or utcnow()
+    q = select(Publication).where(Publication.owner_id.is_not(None), Publication.status.in_(("proposed", "waiting", "scheduled")),
+                                  Publication.created_at < now - timedelta(days=RETENTION_DAYS))
+    if user_id is not None:
+        q = q.where(Publication.owner_id == user_id)
+    n = 0
+    for pub in db.scalars(q):
+        if upload_started(pub):
+            continue  # a retry of a real attempt finishes its course
+        from .publish.service import log_event
+
+        pub.status, pub.scheduled_at = "expired", None
+        pub.last_error = f"não foi publicado dentro do prazo de {RETENTION_DAYS} dias da distribuição"
+        log_event(pub, "expired", pub.last_error)
+        settle(db, pub)
+        n += 1
+    db.flush()
+    return n
+
+
 def plan_waiting(db: Session, user_id: int, now: datetime | None = None) -> int:
     """Give the waiting Shorts (best first) the next free preferred slots, without planning more per day than the
-    plan's daily total (already used + already scheduled that day). Past the retention they expire."""
+    plan's daily total (already used + already scheduled that day), and never after their deadline: a Short that
+    cannot fit before it stays waiting and expires."""
     db.flush()  # sessions use autoflush=False: approvals/cancellations made just before must be visible
     now = now or utcnow()
+    expire_overdue(db, user_id, now)
     s = settings_for(db, user_id)
     tz = s.timezone if s else "America/Sao_Paulo"
     zone = ZoneInfo(tz)
     daily = plan_limits(entitlements.current(db, user_id))["daily"]
     waiting = list(db.scalars(select(Publication).where(Publication.owner_id == user_id, Publication.status == "waiting")))
-    for pub in waiting:
-        if pub.created_at < now - timedelta(days=RETENTION_DAYS):
-            pub.status, pub.last_error = "expired", "sem horário livre dentro do prazo de distribuição"
-            settle(db, pub)
-    waiting = [p for p in waiting if p.status == "waiting"]
     if not waiting or daily <= 0:
         return 0
     clips = {c.id: c for c in db.scalars(select(Clip).where(Clip.id.in_([p.clip_id for p in waiting if p.clip_id])))}
@@ -355,6 +431,8 @@ def plan_waiting(db: Session, user_id: int, now: datetime | None = None) -> int:
                 when = datetime(d.year, d.month, d.day, hh, mm, tzinfo=zone).astimezone(dt_timezone.utc).replace(tzinfo=None)
                 if when <= now + timedelta(minutes=2) or (pub.account_id, when) in taken:
                     continue
+                if when > deadline(pub):
+                    break  # never scheduled past the retention deadline
                 pub.status, pub.scheduled_at, pub.last_error = "scheduled", when, ""
                 per_day[key] = per_day.get(key, 0) + 1
                 taken.add((pub.account_id, when))
@@ -404,7 +482,9 @@ def scan_customer(db: Session, user_id: int, now: datetime | None = None) -> int
         acct = db.get(PublishAccount, rule.account_id)
         if acct is None or acct.owner_id != user_id or acct.status != "connected" or acct.paused_reason:
             continue
-        monitors = select(ChannelMonitor.id).where(ChannelMonitor.user_id == user_id, ChannelMonitor.streamer_id == rule.streamer_id)
+        # only a channel the customer STILL follows: a removed monitor never produces new publications
+        monitors = select(ChannelMonitor.id).where(ChannelMonitor.user_id == user_id, ChannelMonitor.streamer_id == rule.streamer_id,
+                                                   ChannelMonitor.removed_at.is_(None))
         rows = db.execute(select(ClipShare, Clip).join(Clip, Clip.id == ClipShare.clip_id).where(
             ClipShare.user_id == user_id, ClipShare.revoked_at.is_(None), ClipShare.monitor_id.in_(monitors),
             ClipShare.created_at >= since, Clip.score >= rule.min_score).order_by(Clip.score.desc())).all()
@@ -419,6 +499,7 @@ def tick(db: Session) -> dict:
     """Publisher worker tick for customers (runs next to the HTS scan)."""
     made = planned = 0
     release_abandoned(db)
+    expire_overdue(db)  # every customer, also the paused ones
     for (uid,) in db.execute(select(CustomerPublishSettings.user_id).where(CustomerPublishSettings.enabled.is_(True))):
         made += scan_customer(db, uid)
     return {"created": made, "planned": planned}
@@ -433,6 +514,8 @@ def before_upload(db: Session, pub: Publication) -> tuple[str, str]:
     clip = db.get(Clip, pub.clip_id) if pub.clip_id else None
     acct = db.get(PublishAccount, pub.account_id)
     rule = db.get(PublishRule, pub.rule_id) if pub.rule_id else None
+    if utcnow() > deadline(pub) and not upload_started(pub):
+        return "expire", f"não foi publicado dentro do prazo de {RETENTION_DAYS} dias da distribuição"
     found = problems(db, pub, user_id=pub.owner_id, clip=clip, acct=acct, rule=rule)
     if found:
         return "refuse", "; ".join(found)

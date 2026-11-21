@@ -346,11 +346,15 @@ def delete_channel(mid: int, request: Request, db: Session = Depends(get_db), us
     clips already in this customer's library stay there."""
     m = _own_monitor(db, mid, user)
     m.removed_at = utcnow()
+    from .. import customer_publish
+
+    # automatic publications of this channel stop: not-started ones are cancelled, its rules switched off
+    cancelled = customer_publish.on_channel_removed(db, user.id, m.streamer_id)
     for att in db.scalars(select(MonitorSession).where(MonitorSession.monitor_id == m.id, MonitorSession.state == "watching")):
         sess = db.get(StreamSession, att.session_id)
         att.state, att.until_t, att.stop_reason, att.stopped_at = "stopped", sess.covered_until if sess else 0.0, \
             "canal removido pelo assinante", utcnow()
-    audit(db, request, user, "account.channel_delete", f"monitor:{m.id}")
+    audit(db, request, user, "account.channel_delete", f"monitor:{m.id}", {"publications_cancelled": cancelled})
     db.commit()
     return {"ok": True}
 

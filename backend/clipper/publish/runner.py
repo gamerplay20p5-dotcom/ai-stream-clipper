@@ -146,6 +146,12 @@ def run_publish(job_id: int, pub_id: int) -> None:
             from .. import customer_publish
 
             verdict, why = customer_publish.before_upload(db, pub)
+            if verdict == "expire":  # past the distribution deadline: leaves the queue, the Short stays in the library
+                pub.status, pub.scheduled_at, pub.last_error = "expired", None, why[:2000]
+                service.log_event(pub, "expired", why)
+                customer_publish.settle(db, pub)
+                queue.complete(db, job_id, wid, {"expired": True})
+                return
             if verdict == "defer":
                 customer_publish.defer(db, pub, why)
                 queue.complete(db, job_id, wid, {"deferred": why[:200]})
