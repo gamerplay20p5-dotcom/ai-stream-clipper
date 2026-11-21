@@ -38,6 +38,20 @@ def _get(db: Session, cid: int) -> Clip:
     return c
 
 
+@router.get("/ids")
+def clip_ids(status: str | None = None, streamer_id: int | None = None, gate: str | None = None,
+             db: Session = Depends(get_db), _: CurrentUser = Depends(current_user)):
+    """Every clip id of a filter (for "select all"), up to 2000."""
+    q = select(Clip.id)
+    if gate:
+        q = q.where(Clip.gate == gate)
+    if status:
+        q = q.where(Clip.status.in_([s for s in status.split(",") if s]))
+    if streamer_id:
+        q = q.where(Clip.streamer_id == streamer_id)
+    return {"ids": list(db.scalars(q.order_by(Clip.id.desc()).limit(2000)))}
+
+
 @router.get("")
 def list_clips(status: str | None = None, streamer_id: int | None = None, sort: str = "recent",
                limit: int = 60, offset: int = 0, gate: str | None = None, db: Session = Depends(get_db),
@@ -271,7 +285,7 @@ def reset_captions(cid: int, request: Request, db: Session = Depends(get_db),
 
 # --- Phase 5 stage F: batch approval ----------------------------------------------------------
 class BatchIn(BaseModel):
-    ids: list[int] = Field(min_length=1, max_length=100)
+    ids: list[int] = Field(min_length=1, max_length=500)
     action: Literal["approve", "reject"]
 
 

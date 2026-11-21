@@ -173,7 +173,7 @@ def test_migration_0013_upgrade_downgrade_keeps_history(tmp_path):
     upgrade_db(url)
     eng = sa.create_engine(url)
     with eng.begin() as c:
-        assert c.execute(sa.text("select version_num from alembic_version")).scalar() in ("0013", "0014")  # head moves on with later migrations
+        assert c.execute(sa.text("select version_num from alembic_version")).scalar() in ("0013", "0014", "0015", "0016")  # head moves on with later migrations
         c.execute(sa.text("insert into users (email, password_hash, role, active, session_version, created_at) "
                           "values ('h@x', 'x', 'viewer', 1, 0, '2026-11-20')"))
         c.execute(sa.text("insert into streamers (platform, channel, url, display_name, enabled, preferences, status, "
@@ -187,3 +187,53 @@ def test_migration_0013_upgrade_downgrade_keeps_history(tmp_path):
     upgrade_db(url)
     with eng.connect() as c:
         assert c.execute(sa.text("select count(*) from streamer_grants")).scalar() == 1  # history back
+
+
+def test_access_can_include_clips_still_waiting_for_review(app, admin, store):
+    from clipper import pipeline
+    from clipper.db import session_scope as _ss
+
+    _account("sgp@cliente.com")
+    st = _streamer("Pendentes SGP")
+    approved, pending = _clip_of(store, st, "a"), _clip_of(store, st, "b", status="ready")
+    g = _grant(admin, "sgp@cliente.com", st, include_pending=True)
+    assert g["shared_now"] == 2 and g["include_pending"] is True
+    guest = _login(app, "sgp@cliente.com")
+    lib = _library(guest)
+    assert lib[approved]["approved"] is True and lib[pending]["approved"] is False  # labelled in the library
+    # a clip rendered later arrives at once (no approval needed for this access)
+    later = _clip_of(store, st, "c", status="rendering")
+    with _ss() as db:
+        c = db.get(Clip, later)
+        assert pipeline.store_render(db, later, c.version, c.video_path, c.thumb_path, 2048, "c" * 64, 1.0, "gameplay")
+    assert later in _library(guest)
+    # rejecting it removes it from the library
+    assert admin.post(f"/api/clips/{pending}/reject", headers=CSRF).status_code == 200
+    assert pending not in _library(guest)
+    # back to "approved only": pending clips leave, approved ones stay
+    _grant(admin, "sgp@cliente.com", st, include_pending=False)
+    lib = _library(guest)
+    assert approved in lib and later not in lib
+
+
+def test_approved_only_access_ignores_clips_waiting_for_review(app, admin, store):
+    _account("sgq@cliente.com")
+    st = _streamer("Só aprovados SGQ")
+    _grant(admin, "sgq@cliente.com", st)
+    ready = _clip_of(store, st, "r", status="rendering")
+    from clipper import pipeline
+    from clipper.db import session_scope as _ss
+
+    with _ss() as db:
+        c = db.get(Clip, ready)
+        pipeline.store_render(db, ready, c.version, c.video_path, c.thumb_path, 2048, "d" * 64, 1.0, "gameplay")
+    assert ready not in _library(_login(app, "sgq@cliente.com"))
+
+
+def test_select_every_clip_of_a_filter_and_batch_more_than_100(admin, store):
+    st = _streamer("Lote SGL")
+    ids = [_clip_of(store, st, f"l{i}", status="ready") for i in range(120)]
+    got = admin.get(f"/api/clips/ids?status=ready&streamer_id={st}").json()["ids"]
+    assert sorted(got) == sorted(ids)
+    r = admin.post("/api/clips/batch", json={"ids": ids, "action": "approve"}, headers=CSRF).json()
+    assert len(r["done"]) == 120

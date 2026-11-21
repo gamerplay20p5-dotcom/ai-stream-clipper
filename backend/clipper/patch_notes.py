@@ -6,6 +6,23 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.7.7", "date": "2026-11-20", "title": "Senhas, acesso a cortes em revisão, seleção em massa e o banco da 212", "items": [
+        "Acesso por streamer pode incluir os cortes ainda não aprovados: a pessoa vê cada corte assim que fica pronto, com o selo “Em revisão”; rejeitado, sai da biblioteca.",
+        "Central de cortes: “Selecionar todos” no topo da fila, “selecionar todos os N deste filtro”, Shift+clique para marcar um intervalo e “Aprovar N” em lotes grandes.",
+        "Cada pessoa troca a própria senha em Minha conta (convidados, no rodapé da biblioteca).",
+        "Contas novas podem receber um link para a pessoa criar a própria senha (vale 72 horas, uma vez só); a equipe também gera links de redefinição.",
+        "“Esqueci minha senha” na entrada, por e-mail, quando o envio de e-mail estiver configurado em Pessoas e acesso.",
+        "Senhas guardadas só como hash Argon2id; links guardados só como SHA-256; a senha do e-mail fica criptografada (AES-256-GCM).",
+        "A máquina 212 aparece em Servidores com a saúde do banco: tamanho, conexões, cache, tempo de resposta e maiores tabelas.",
+    ], "title_en": "Passwords, access to clips in review, bulk selection and the 212 database", "items_en": [
+        "Access by streamer can include clips not approved yet: the person sees each clip as soon as it's ready, labelled “In review”; if rejected, it leaves the library.",
+        "Clip center: “Select all” at the top of the queue, “select all N in this filter”, Shift+click to select a range and “Approve N” in large batches.",
+        "Everyone changes their own password in My account (guests, in the library footer).",
+        "New accounts can get a link for the person to create their own password (valid 72 hours, once); staff can also issue reset links.",
+        "“Forgot my password” on the sign-in page, by e-mail, once e-mail sending is set up in People and access.",
+        "Passwords stored only as Argon2id hashes; links only as SHA-256; the e-mail password is encrypted (AES-256-GCM).",
+        "Machine 212 appears in Servers with the database health: size, connections, cache, response time and largest tables.",
+    ]},
     {"version": "0.7.6", "date": "2026-11-20", "title": "Agenda: arrastar e reorganizar automaticamente", "items": [
         "Arraste um envio para outro dia da agenda para mudar a data; o horário é mantido.",
         "Envios que falharam antes de ir ao ar podem ser arrastados de volta para a agenda (os que talvez já estejam no perfil continuam bloqueados até você conferir).",

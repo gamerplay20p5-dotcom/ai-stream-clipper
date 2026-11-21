@@ -16,6 +16,7 @@ import LibraryApp from "./pages/Library";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
 import PatchNotes from "./pages/PatchNotes";
+import { ChangePassword, SetPassword } from "./pages/Password";
 import People from "./pages/People";
 import References from "./pages/References";
 import Settings from "./pages/Settings";
@@ -52,6 +53,8 @@ function App() {
   if (user && !(user.staff ?? user.role === "admin")) {
     return (
       <Routes>
+        <Route path="/definir-senha" element={<SetPassword />} />
+        <Route path="/conta/senha" element={<main className="mx-auto max-w-md p-6"><ChangePassword back="/biblioteca" /></main>} />
         <Route path="/biblioteca" element={<LibraryApp email={user.email} />} />
         <Route path="*" element={<Navigate to="/biblioteca" replace />} />
       </Routes>
@@ -60,6 +63,7 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login onDone={() => me.refetch()} />} />
+      <Route path="/definir-senha" element={<SetPassword />} />
       {user ? (
         <Route element={<Layout email={user.email} />}>
           <Route index element={<Overview />} />
@@ -75,6 +79,7 @@ function App() {
           <Route path="referencias" element={<References />} />
           <Route path="publicacao" element={<Publishing />} />
           <Route path="pessoas" element={<People />} />
+          <Route path="conta/senha" element={<ChangePassword back="/" />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       ) : (

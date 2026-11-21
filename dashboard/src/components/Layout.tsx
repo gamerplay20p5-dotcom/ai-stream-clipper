@@ -144,6 +144,7 @@ export default function Layout({ email }: { email: string }) {
                   <div className="break-all text-sm font-medium">{email}</div>
                   <p className="mt-1 text-xs text-ink-muted">{t("Administrador da equipe · HTS")}</p>
                 </div>
+                <Link className="btn-quiet mt-3 w-full" to="/conta/senha">{t("Trocar senha")}</Link>
                 <LanguagePicker className="mt-3" />
                 <button type="button" onClick={logout} disabled={isLoggingOut} className="btn-quiet mt-3 w-full">
                   <LogOut size={15} aria-hidden />{isLoggingOut ? t("Saindo…") : t("Sair")}

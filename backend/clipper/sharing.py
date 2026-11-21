@@ -137,9 +137,13 @@ def active_grants(db: Session, *, user_id: int | None = None, streamer_id: int |
     return list(db.scalars(q.order_by(StreamerGrant.id)))
 
 
+def grant_statuses(g: StreamerGrant) -> tuple[str, ...]:
+    return ("ready", "approved") if g.include_pending else ("approved",)
+
+
 def _share_from_grant(db: Session, g: StreamerGrant, clip: Clip) -> ClipShare | None:
-    """One approved, rendered clip -> a share for the grant's account (never duplicates an active share)."""
-    if clip.status != "approved" or not clip.video_path or clip.streamer_id != g.streamer_id:
+    """One rendered clip the grant covers -> a share for the grant's account (never duplicates an active share)."""
+    if clip.status not in grant_statuses(g) or not clip.video_path or clip.streamer_id != g.streamer_id:
         return None
     if db.scalar(select(ClipShare.id).where(ClipShare.clip_id == clip.id, ClipShare.user_id == g.user_id,
                                             ClipShare.revoked_at.is_(None))):
@@ -153,10 +157,10 @@ def _share_from_grant(db: Session, g: StreamerGrant, clip: Clip) -> ClipShare | 
 
 
 def sync_grant(db: Session, g: StreamerGrant) -> int:
-    """Share every approved clip of the grant's streamer that the account does not have yet."""
+    """Share every clip the grant covers (approved, and also pending review if chosen) not shared yet."""
     n = 0
-    for clip in db.scalars(select(Clip).where(Clip.streamer_id == g.streamer_id, Clip.status == "approved",
-                                              Clip.video_path != "")):
+    for clip in db.scalars(select(Clip).where(Clip.streamer_id == g.streamer_id, Clip.status.in_(grant_statuses(g)),
+                                              Clip.is_test.is_(False), Clip.video_path != "")):
         if _share_from_grant(db, g, clip) is not None:
             n += 1
     return n
@@ -170,8 +174,12 @@ def sync_all_grants(db: Session) -> int:
 def on_clip_status(db: Session, clip: Clip) -> None:
     """Called after a clip is approved or rejected: grants follow the human decision.
     Approved -> shared with every account that has access to the streamer.
-    No longer approved -> shares created BY A GRANT are revoked (explicit shares are never touched)."""
-    if clip.status == "approved":
+    Ready for review -> shared with accounts whose access includes pending clips (nothing is revoked:
+    a re-render of an approved clip also passes through "ready").
+    Rejected or failed -> shares created BY A GRANT are revoked (explicit shares are never touched)."""
+    if clip.is_test:
+        return
+    if clip.status in ("approved", "ready"):
         for g in active_grants(db, streamer_id=clip.streamer_id):
             _share_from_grant(db, g, clip)
         return
@@ -182,7 +190,7 @@ def on_clip_status(db: Session, clip: Clip) -> None:
 
 
 def grant_streamer(db: Session, *, admin_id: int, email: str, streamer_id: int, can_download: bool = False,
-                   expires_at: datetime | None = None) -> tuple[StreamerGrant, int]:
+                   expires_at: datetime | None = None, include_pending: bool = False) -> tuple[StreamerGrant, int]:
     user = _user_for(db, email)
     if user.role == "admin":
         raise ShareError("contas da equipe já veem todos os cortes")
@@ -195,10 +203,14 @@ def grant_streamer(db: Session, *, admin_id: int, email: str, streamer_id: int, 
     if g is None:
         g = StreamerGrant(user_id=user.id, streamer_id=streamer_id, created_by=admin_id)
         db.add(g)
-    g.can_download, g.expires_at = can_download, expires_at
+    g.can_download, g.expires_at, g.include_pending = can_download, expires_at, include_pending
     db.flush()
+    now = utcnow()
     for s in db.scalars(select(ClipShare).where(ClipShare.grant_id == g.id, ClipShare.revoked_at.is_(None))):
         s.can_download, s.expires_at = can_download, expires_at  # changing the grant updates its shares
+        c = db.get(Clip, s.clip_id)
+        if c is not None and c.status not in grant_statuses(g):
+            s.revoked_at = now  # pending clips leave when the access goes back to "approved only"
     return g, sync_grant(db, g)
 
 
@@ -240,6 +252,7 @@ def public_clip(db: Session, s: ClipShare, c: Clip) -> dict:
         "shared_at": s.created_at.isoformat() + "Z" if s.created_at else None,
         "expires_at": s.expires_at.isoformat() + "Z" if s.expires_at else None,
         "permissions": {"view": True, "download": s.can_download, "variants": s.can_variants},
+        "approved": c.status == "approved",  # pending review clips are labelled in the library
         "version": "atual" if s.follow_latest else "aprovada no compartilhamento",
         "video_url": f"/api/library/{c.id}/video", "thumbnail_url": f"/api/library/{c.id}/thumbnail",
         "download_url": f"/api/library/{c.id}/download" if s.can_download else None,
