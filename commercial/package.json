@@ -1,0 +1,40 @@
+{
+  "name": "ai-stream-clipper-commercial",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": "^24.0.0"
+  },
+  "scripts": {
+    "dev": "vite --port 5174 --strictPort",
+    "build": "tsc --noEmit && vite build && vite build --ssr src/prerender.tsx --outDir build/prerender && node build/prerender/prerender.js",
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "test": "node --test \"server/*.test.js\"",
+    "test:browser": "playwright test",
+    "stripe:sync": "node --env-file-if-exists=.env scripts/stripe-sync.js",
+    "billing:report": "node --env-file-if-exists=.env scripts/billing-report.js",
+    "infinitepay": "node --env-file-if-exists=.env scripts/infinitepay-admin.js"
+  },
+  "dependencies": {
+    "@fontsource-variable/instrument-sans": "5.3.0",
+    "@fontsource-variable/space-grotesk": "5.3.0",
+    "express": "5.3.0",
+    "express-rate-limit": "8.7.5",
+    "lucide-react": "1.77.0",
+    "nodemailer": "10.3.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "stripe": "23.1.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.65.1",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.8"
+  }
+}
