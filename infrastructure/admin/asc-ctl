@@ -30,7 +30,6 @@ import posixpath
 import re
 import shutil
 import subprocess
-import time
 import sys
 import tarfile
 import tempfile
@@ -782,67 +781,6 @@ def cmd_tunnel_token_remove(conf: dict, args: list[str]) -> int:
     return 0
 
 
-
-# --------------------------------------------------------------------------- homologation PostgreSQL
-
-HOMOLOG_NAME = "asc-homolog-pg"
-HOMOLOG_IMAGE = "postgres:16.4-bookworm"
-HOMOLOG_PORT = "55432"
-HOMOLOG_LABEL = "asc.homolog=1"
-
-
-def homolog_pg_args() -> list[str]:
-    """The ONLY container this command can create: fixed name, image, loopback port, in-memory data, fake
-    credentials (a throwaway test database, never production data), CPU/memory limits, auto-removed when stopped."""
-    return [DOCKER, "run", "-d", "--rm", "--name", HOMOLOG_NAME, "--label", HOMOLOG_LABEL,
-            "-p", f"127.0.0.1:{HOMOLOG_PORT}:5432", "--tmpfs", "/var/lib/postgresql/data:rw,size=4g",
-            "--cpus", "4", "--memory", "4g", "--pids-limit", "512", "--security-opt", "no-new-privileges",
-            "-e", "POSTGRES_USER=asc_test", "-e", "POSTGRES_PASSWORD=asc_test", "-e", "POSTGRES_DB=postgres",
-            HOMOLOG_IMAGE, "postgres", "-c", "max_connections=200", "-c", "fsync=off"]
-
-
-def _homolog_running() -> bool:
-    names = out([DOCKER, "ps", "-a", "--filter", f"name=^{HOMOLOG_NAME}$", "--filter", f"label={HOMOLOG_LABEL}",
-                 "--format", "{{.Names}}"]).split()
-    return HOMOLOG_NAME in names
-
-
-def cmd_homolog_pg(conf: dict, args: list[str]) -> int:
-    """Throwaway PostgreSQL for scripts/homologacao.sh: `homolog-pg up|down|status`.
-
-    Never on 212 (production database host). Touches only the container named asc-homolog-pg with the
-    asc.homolog label: no other container, volume, network or project, and no global cleanup."""
-    if conf["SERVER"] == "212":
-        raise Denied("homolog-pg never runs on the production database host")
-    if len(args) != 1 or args[0] not in ("up", "down", "status"):
-        raise Denied("usage: homolog-pg up|down|status")
-    action = args[0]
-    if action == "status":
-        run([DOCKER, "ps", "-a", "--filter", f"name=^{HOMOLOG_NAME}$", "--format", "{{.Names}}\t{{.Status}}\t{{.Ports}}"])
-        return 0
-    if action == "down":
-        if not _homolog_running():
-            print("homolog-pg: nada a remover")
-            return 0
-        return run([DOCKER, "rm", "-f", HOMOLOG_NAME])  # --rm container: removing it removes its tmpfs data too
-    if _homolog_running():
-        raise Denied("asc-homolog-pg já existe: rode `homolog-pg down` antes")
-    listening = out(["ss", "-ltnH"])
-    if re.search(rf"[:.]{HOMOLOG_PORT}\s", listening + " "):
-        raise Denied(f"porta {HOMOLOG_PORT} já está em uso")
-    rc = run(homolog_pg_args())
-    if rc != 0:
-        return rc
-    for _ in range(60):  # wait until it accepts connections
-        if run([DOCKER, "exec", HOMOLOG_NAME, "pg_isready", "-U", "asc_test", "-q"]) == 0:
-            print(f"homolog-pg: pronto em 127.0.0.1:{HOMOLOG_PORT}")
-            return 0
-        time.sleep(1)
-    run([DOCKER, "rm", "-f", HOMOLOG_NAME])
-    die("homolog-pg: o PostgreSQL de teste não ficou pronto", 1)
-    return 1
-
-
 COMMANDS = {
     "status": cmd_status, "compose": cmd_compose, "exec": cmd_exec, "build": cmd_build, "images": cmd_images,
     "image-save": cmd_image_save, "image-load": cmd_image_load, "image-rm": cmd_image_rm,
@@ -850,7 +788,6 @@ COMMANDS = {
     "tls-install-ca": cmd_tls_install_ca, "init": cmd_init, "models": cmd_models, "gpu-validate": cmd_gpu_validate,
     "test-media-add": cmd_test_media_add, "backup-db": cmd_backup_db, "db-restore": cmd_db_restore,
     "tunnel-token-install": cmd_tunnel_token_install, "tunnel-token-remove": cmd_tunnel_token_remove,
-    "homolog-pg": cmd_homolog_pg,
 }
 
 

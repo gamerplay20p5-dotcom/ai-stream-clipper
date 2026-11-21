@@ -6,9 +6,6 @@
 #   ./scripts/homologacao.sh --no-browser  skip Playwright (e.g. a server without browser dependencies)
 #   ./scripts/homologacao.sh --down        only stop and remove the homologation container
 #   HOMOLOG_PYTHON=/path/python ./scripts/homologacao.sh   reuse an existing Python environment
-#   HOMOLOG_PG=asc-ctl ./scripts/homologacao.sh   servers without direct Docker: the throwaway PostgreSQL comes from
-#                                                 `sudo -n asc-ctl homolog-pg up|down` (same container settings)
-# Without Node the commercial/dashboard steps are reported as NOT RUN (optional; validate them on another machine).
 #
 # Safety: the database is a disposable container (project "asc-homolog", 127.0.0.1:55432, fake credentials, data in
 # memory). Nothing else on the machine is touched: no global Docker cleanup, no other project, no real server, never
@@ -59,18 +56,12 @@ step() {  # name cwd command...   (stdout+stderr in <name>.log)
   else record "$name" failed $((SECONDS-start)) "$*"; echo "    FALHOU (veja $RUN/$name.log)"; fi
   return 0
 }
-skip() { record "$1" not_run 0 "$2" "$3" "${4:-1}"; echo "==> $1: NÃO EXECUTADO ($3)"; }
+skip() { record "$1" not_run 0 "$2" "$3"; echo "==> $1: NÃO EXECUTADO ($3)"; }
 
 # ---------------------------------------------------------------- prerequisites and environment
-HAVE_DOCKER=0; PG_MODE=none
-if [ "${HOMOLOG_PG:-}" = "asc-ctl" ]; then
-  if sudo -n /usr/local/sbin/asc-ctl help 2>/dev/null | grep -q "homolog-pg"; then HAVE_DOCKER=1; PG_MODE=asc-ctl
-  else echo "asc-ctl sem o comando homolog-pg: instale a versão do repositório (infrastructure/admin/asc-ctl)"; fi
-elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-  HAVE_DOCKER=1; PG_MODE=compose
-fi
-command -v git >/dev/null || { echo "pré-requisito ausente: git"; exit 69; }
-HAVE_NODE=0; command -v node >/dev/null && command -v npm >/dev/null && HAVE_NODE=1
+HAVE_DOCKER=0
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then HAVE_DOCKER=1; fi
+for tool in git node npm; do command -v "$tool" >/dev/null || { echo "pré-requisito ausente: $tool"; exit 69; }; done
 "$PY" - "$RUN/environment.json" "$ROOT" "$HAVE_DOCKER" <<'PY'
 import json, platform, subprocess, sys, datetime
 path, root, docker = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
@@ -83,15 +74,13 @@ env = {"commit": out("git", "rev-parse", "HEAD"), "branch": out("git", "branch",
        "dirty": bool(out("git", "status", "--porcelain")), "os": f"{platform.system()} {platform.release()} ({platform.platform()})",
        "python": platform.python_version(), "node": out("node", "--version"),
        "started": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
-if docker and out("sh", "-c", "command -v docker"):
+if docker:
     env["docker"], env["compose"] = out("docker", "--version"), out("docker", "compose", "version")
 json.dump(env, open(path, "w", encoding="utf-8"), indent=2)
 PY
 
 cleanup() {
-  [ $KEEP -eq 1 ] && return
-  if [ "$PG_MODE" = compose ]; then "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true; fi
-  if [ "$PG_MODE" = asc-ctl ]; then sudo -n /usr/local/sbin/asc-ctl homolog-pg down >/dev/null 2>&1 || true; fi
+  if [ $HAVE_DOCKER -eq 1 ] && [ $KEEP -eq 0 ]; then "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true; fi
 }
 trap cleanup EXIT
 
@@ -104,9 +93,8 @@ step python-deps "$ROOT/backend" "$VPY" -m pip install --quiet --upgrade pip -e 
 
 # ---------------------------------------------------------------- 3. throwaway PostgreSQL
 if [ $HAVE_DOCKER -eq 1 ]; then
-  if [ "$PG_MODE" = asc-ctl ]; then step postgres-up "$ROOT" sudo -n /usr/local/sbin/asc-ctl homolog-pg up
-  else step postgres-up "$ROOT" "${COMPOSE[@]}" up -d --wait; fi
-  PGV="$("$VPY" -c 'import psycopg; c=psycopg.connect("postgresql://asc_test:asc_test@127.0.0.1:55432/postgres"); print("PostgreSQL", c.execute("show server_version").fetchone()[0])' 2>/dev/null)"
+  step postgres-up "$ROOT" "${COMPOSE[@]}" up -d --wait
+  PGV="$(docker exec asc-test-postgres postgres --version 2>/dev/null)"
   "$PY" -c 'import json,sys; p=sys.argv[1]; e=json.load(open(p)); e["postgres"]=sys.argv[2]; json.dump(e,open(p,"w"),indent=2)' "$RUN/environment.json" "$PGV"
 fi
 
@@ -125,12 +113,6 @@ else
 fi
 
 # ---------------------------------------------------------------- 5. commercial service and landing
-if [ $HAVE_NODE -eq 0 ]; then
-  for s in commercial-install commercial-build commercial-tests commercial-audit commercial-playwright \
-           dashboard-install dashboard-typecheck dashboard-i18n dashboard-build; do
-    skip "$s" "npm" "Node ausente nesta máquina (etapa validada em outra máquina)" 0
-  done
-else
 step commercial-install "$ROOT/commercial" npm ci --no-audit --no-fund
 step commercial-build "$ROOT/commercial" npm run build
 step commercial-tests "$ROOT/commercial" npm test
@@ -146,7 +128,6 @@ step dashboard-install "$ROOT/dashboard" npm ci --no-audit --no-fund
 step dashboard-typecheck "$ROOT/dashboard" npm run typecheck
 step dashboard-i18n "$ROOT/dashboard" npm run check:i18n
 step dashboard-build "$ROOT/dashboard" npm run build
-fi
 
 # ---------------------------------------------------------------- report
 "$PY" "$ROOT/scripts/homologacao_report.py" "$RUN"

@@ -186,24 +186,3 @@ def test_tunnel_token_never_from_arguments():
         asc_ctl.cmd_tunnel_token_install(CONF, ["eyJhIjoiYiJ9" * 10])
     with pytest.raises(asc_ctl.Denied):
         asc_ctl.cmd_tunnel_token_install({**CONF, "SERVER": "201"}, [])
-
-
-def test_homolog_pg_is_one_fixed_throwaway_container():
-    args = asc_ctl.homolog_pg_args()
-    joined = " ".join(args)
-    assert "--name asc-homolog-pg" in joined and "--rm" in args
-    assert "-p 127.0.0.1:55432:5432" in joined, "loopback only"
-    assert "--tmpfs /var/lib/postgresql/data" in joined, "data in memory, nothing on disk"
-    assert "--cpus" in args and "--memory" in args
-    assert args.index("postgres:16.4-bookworm") > 0
-    assert not any(a in args for a in ("--privileged", "--network", "-v", "--volume", "--pid"))
-
-
-def test_homolog_pg_refuses_212_and_unknown_actions():
-    import pytest
-
-    with pytest.raises(asc_ctl.Denied, match="production database host"):
-        asc_ctl.cmd_homolog_pg({**CONF, "SERVER": "212"}, ["up"])
-    for bad in ([], ["prune"], ["up", "--port", "5432"], ["down", "all"]):
-        with pytest.raises(asc_ctl.Denied):
-            asc_ctl.cmd_homolog_pg({**CONF, "SERVER": "206"}, bad)
