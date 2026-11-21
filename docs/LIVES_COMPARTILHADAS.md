@@ -57,8 +57,32 @@ O intervalo completo do Short (`start` até `end`) precisa estar dentro do trech
 | Inteiramente dentro do trecho | Sim |
 | Cruza uma suspensão, um cancelamento ou um estorno | Não |
 | Capturado dentro do trecho, mas pronto depois de o acesso acabar (cancelamento, expiração ou suspensão) | Sim: as horas foram pagas enquanto o acesso valia |
-| O mesmo caso, depois de um estorno, de uma contestação ou com o pagamento em revisão | Não |
+| O mesmo caso, depois de um estorno total do período | Não |
+| O mesmo caso, com o pagamento em revisão ou contestação aberta | **Pendente**: sai sozinho quando a revisão é resolvida, ou nunca, se ela terminar em estorno |
 | Entregue antes do fim do acesso | Continua na biblioteca: entregas legítimas nunca são retiradas por isso |
+
+### Direito à entrega por período pago (decisão do dono, 2026-11-21)
+
+Cada segmento cobrado fica ligado ao **período pago** que o cobriu: a tabela `entitlement_periods` guarda a assinatura, o plano e os limites daquele momento, e `usage_entries.period_id` aponta para ela. Um corte é julgado por esses períodos, **nunca pela assinatura atual ou mais recente** (`entitlements.delivery_rights`).
+
+1. **Janela:** o corte inteiro precisa estar no trecho acompanhado.
+2. **Conta:** a conta não pode estar bloqueada por segurança (`users.active`).
+3. **Pagamento:** todos os segmentos sob o corte precisam ter sido cobrados deste cliente. Não há direito sobre horas nunca pagas.
+4. **Estado de cada período**, a partir da fotografia mais recente da assinatura:
+   - **estornado** (estorno total, chargeback ou contestação perdida): bloqueia. O estorno de um mês antigo (pagamento com status `refunded` dentro daquele período) atinge só esse mês;
+   - **revisão financeira ou contestação aberta** (`review` preenchido): pendente. A fotografia que resolve a revisão libera as entregas (`editorial.redeliver_for_user`, chamado a cada fotografia aplicada);
+   - **pago**: entrega, mesmo depois de vencimento, cancelamento normal ou suspensão operacional.
+5. **Plano aplicado:** o preset, as variantes e o limite de armazenamento são os do período do primeiro segmento do corte. Uma troca de plano no meio do período gera um período novo, e cada hora mantém o plano sob o qual foi paga.
+
+| Situação | Novas entregas | Shorts já entregues |
+| --- | --- | --- |
+| Vencimento ou cancelamento normal | Só momentos já pagos | Mantidos |
+| Suspensão operacional (inadimplência, pausa) | Só momentos já pagos. O acompanhamento das lives para | Mantidos |
+| Revisão financeira ou contestação aberta | Pendentes até a resolução | Mantidos |
+| Estorno total ou contestação perdida | Nenhuma daquele período | Mantidos (podem ser revogados pela equipe se houver fundamento contratual ou legal) |
+| Bloqueio por segurança (conta desativada pela HTS) | Nenhuma | Mantidos, mas inacessíveis enquanto a conta estiver bloqueada. Voltam ao reativar |
+
+**Limite conhecido:** a revisão vale para a assinatura inteira, porque a fotografia não diz qual cobrança está em revisão. Por precaução, todas as entregas daquela assinatura esperam.
 
 ## Cotas
 
@@ -177,6 +201,14 @@ One capture and one base analysis per live, however many customers follow the ch
 **Temporal coverage:** a Short is delivered only if its whole interval lies inside the customer's followed window (0.5 s tolerance).
 - Clips captured while access was valid but ready after it ended are still delivered, except after a refund, a chargeback or during a payment review.
 - Earlier deliveries are never withdrawn.
+
+**Delivery rights per paid period (owner decision):** each charged segment is linked to the paid period that covered it (`entitlement_periods`: subscription, plan and limits at that time). A clip is judged by those periods, never by the current or latest subscription:
+- paid periods deliver even after expiry, normal cancellation or operational suspension;
+- a fully refunded period (refund, chargeback, lost dispute) delivers nothing;
+- a financial review or open dispute keeps deliveries pending until a later snapshot resolves it;
+- the plan, preset and limits applied are those of the paying period;
+- a security block (deactivated account) stops deliveries and hides the library until reactivation;
+- legitimately delivered Shorts are kept.
 
 **PostgreSQL:** concurrency relies on:
 - the partial unique index and row locks;

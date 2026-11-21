@@ -851,3 +851,23 @@ class UsageEntry(Base):
     period_key: Mapped[str] = mapped_column(String(40))
     amount: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # the paid period (subscription, plan and limits at that moment) that this unit was charged to
+    period_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
+
+class EntitlementPeriod(Base):
+    """A period of access as it was when consumption happened: which subscription paid for it, under which plan
+    and limits. Deliveries of a followed moment are judged by THIS period, never by a later subscription, so a
+    refund, a review or a plan change applies exactly to the hours it concerns."""
+
+    __tablename__ = "entitlement_periods"
+    __table_args__ = (UniqueConstraint("user_id", "period_key", "plan", name="uq_entitlement_period"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("account_subscriptions.id", ondelete="CASCADE"))
+    period_key: Mapped[str] = mapped_column(String(40))
+    plan: Mapped[str] = mapped_column(String(20))
+    limits: Mapped[dict] = mapped_column(JSON, default=dict)
+    period_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    period_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

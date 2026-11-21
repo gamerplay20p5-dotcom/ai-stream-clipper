@@ -36,16 +36,22 @@ PRESETS: dict[str, dict] = {
 }
 
 
-def allowed_presets(ent: entitlements.Entitlement | None) -> tuple[str, ...]:
+def presets_for(limits: dict | None) -> tuple[str, ...]:
     """Basic uses the base selection; plans with editing (Creator, Pro) choose a preset."""
-    if ent is not None and ent.feature("editing"):
+    if limits and (limits.get("features") or {}).get("editing"):
         return tuple(PRESETS)
     return (DEFAULT_PRESET,)
 
 
-def effective_preset(monitor: ChannelMonitor, ent: entitlements.Entitlement | None) -> str:
-    """The preset applied now: a preset the plan no longer includes falls back to the base selection."""
-    return monitor.preset if monitor.preset in allowed_presets(ent) else DEFAULT_PRESET
+def allowed_presets(ent: entitlements.Entitlement | None) -> tuple[str, ...]:
+    return presets_for(ent.limits if ent is not None else None)
+
+
+def effective_preset(monitor: ChannelMonitor, ent: entitlements.Entitlement | None, limits: dict | None = None) -> str:
+    """The preset applied: a preset the plan (of the paid period, when given) does not include falls back to the
+    base selection."""
+    allowed = presets_for(limits) if limits is not None else allowed_presets(ent)
+    return monitor.preset if monitor.preset in allowed else DEFAULT_PRESET
 
 
 def preset_score(clip: Clip, preset: str) -> float:
@@ -73,10 +79,13 @@ def selects(clip: Clip, preset: str, min_score: float) -> bool:
     return preset_score(clip, preset) >= min_score + spec["bonus"]
 
 
-def deliver(db: Session, clip: Clip, min_score: float | None = None) -> int:
-    """Put a rendered clip in the library of every customer whose followed window contains the WHOLE clip and
-    whose preset selects it. Idempotent: never duplicates an active share; a customer whose storage is full does
-    not receive it. Shares already delivered are never withdrawn here."""
+def deliver(db: Session, clip: Clip, min_score: float | None = None, only_user: int | None = None) -> int:
+    """Put a rendered clip in the library of every customer with delivery rights to it
+    (``entitlements.delivery_rights``: whole clip inside its followed window, every segment paid by it, no
+    refunded period, no open review, account not blocked) whose preset selects it. Plan, preset and storage
+    limit are those of the PAID period of the moment, not of a later subscription. Idempotent; a delivery held by a
+    review is retried by ``redeliver_for_user`` when the review is resolved. Shares already delivered are never
+    withdrawn here."""
     if clip.is_test or clip.status not in DELIVERABLE or not clip.video_path:
         return 0
     if min_score is None:
@@ -85,20 +94,21 @@ def deliver(db: Session, clip: Clip, min_score: float | None = None) -> int:
         min_score = load_ai_settings(db).min_score
     delivered = 0
     for att in entitlements.consumers_of_clip(db, clip):
+        if only_user is not None and att.user_id != only_user:
+            continue
         monitor = db.get(ChannelMonitor, att.monitor_id)
         if monitor is None or monitor.removed_at is not None:
-            continue
-        # the moment was followed while access was valid: delivered even if the clip is ready after the end,
-        # never after a refund/chargeback or during a payment review
-        ent = entitlements.delivery_entitlement(db, att.user_id)
-        if ent is None:
-            continue
-        if not selects(clip, effective_preset(monitor, ent), min_score):
-            continue
+            continue  # the customer stopped following this channel
         if db.scalar(select(ClipShare.id).where(ClipShare.clip_id == clip.id, ClipShare.user_id == att.user_id,
                                                 ClipShare.revoked_at.is_(None))):
             continue
-        if entitlements.storage_bytes(db, att.user_id) + int(clip.file_size or 0) > ent.limits["storage_gb"] * entitlements.GB:
+        rights = entitlements.delivery_rights(db, att, clip)
+        if rights.state != "ok":
+            continue  # "hold": waits for the review; "no": never
+        limits = rights.period.limits
+        if not selects(clip, effective_preset(monitor, None, limits), min_score):
+            continue
+        if entitlements.storage_bytes(db, att.user_id) + int(clip.file_size or 0) > limits["storage_gb"] * entitlements.GB:
             log.info("clip not delivered: customer storage full", extra={"clip_id": clip.id, "user_id": att.user_id})
             continue
         from .sharing import snapshot
@@ -106,7 +116,7 @@ def deliver(db: Session, clip: Clip, min_score: float | None = None) -> int:
         try:
             with db.begin_nested():
                 share = ClipShare(clip_id=clip.id, user_id=att.user_id, created_by=None, can_view=True, can_download=True,
-                                  can_variants=bool(ent.feature("variants")), monitor_id=monitor.id)
+                                  can_variants=bool((limits.get("features") or {}).get("variants")), monitor_id=monitor.id)
                 snapshot(share, clip)
                 db.add(share)
                 db.flush()
@@ -114,3 +124,27 @@ def deliver(db: Session, clip: Clip, min_score: float | None = None) -> int:
             continue  # delivered concurrently (one active share per clip and account, enforced by the database)
         delivered += 1
     return delivered
+
+
+REDELIVER_DAYS = 60
+
+
+def redeliver_for_user(db: Session, user_id: int, days: int = REDELIVER_DAYS) -> int:
+    """After a new snapshot of this customer (review cleared, dispute won, renewal...): deliver the ready clips of
+    the lives it followed that are not in its library yet. Rights are re-checked per clip, so a refunded period or
+    an open review still delivers nothing."""
+    from datetime import timedelta
+
+    from .db import utcnow
+    from .models import MonitorSession, StreamSession
+
+    since = utcnow() - timedelta(days=days)
+    sessions = db.scalars(select(MonitorSession.session_id).join(StreamSession, StreamSession.id == MonitorSession.session_id)
+                          .where(MonitorSession.user_id == user_id, MonitorSession.state != "refused",
+                                 StreamSession.started_at >= since).distinct()).all()
+    if not sessions:
+        return 0
+    shared = select(ClipShare.clip_id).where(ClipShare.user_id == user_id, ClipShare.revoked_at.is_(None))
+    clips = db.scalars(select(Clip).where(Clip.session_id.in_(sessions), Clip.status.in_(DELIVERABLE),
+                                          Clip.is_test.is_(False), Clip.video_path != "", Clip.id.not_in(shared))).all()
+    return sum(deliver(db, clip, only_user=user_id) for clip in clips)

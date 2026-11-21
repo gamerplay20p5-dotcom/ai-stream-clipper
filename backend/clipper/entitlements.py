@@ -25,8 +25,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .db import utcnow
-from .models import (AccountSubscription, BillingEvent, ChannelMonitor, Clip, ClipShare, MonitorSession, StreamSession,
-                     Streamer, UsageEntry, User)
+from .models import (AccountSubscription, BillingEvent, ChannelMonitor, Clip, ClipShare, EntitlementPeriod, MonitorSession,
+                     Segment, StreamSession, Streamer, UsageEntry, User)
 
 log = logging.getLogger(__name__)
 
@@ -126,6 +126,10 @@ def apply_snapshot(db: Session, payload: dict) -> str:
         return "duplicate"  # a concurrent delivery of the same event won
     if outcome == "applied":
         enforce_account(db, user.id)
+        # a resolved review, a won dispute or a renewal may release deliveries that were waiting
+        from . import editorial
+
+        editorial.redeliver_for_user(db, user.id)
     return outcome
 
 
@@ -170,12 +174,13 @@ def used(db: Session, ent: Entitlement, metric: str) -> int:
         UsageEntry.user_id == ent.user_id, UsageEntry.metric == metric, UsageEntry.period_key == ent.period_key)) or 0)
 
 
-def record_usage(db: Session, user_id: int, metric: str, source_key: str, period_key: str, amount: int) -> bool:
+def record_usage(db: Session, user_id: int, metric: str, source_key: str, period_key: str, amount: int,
+                 period_id: int | None = None) -> bool:
     """Meter one unit. False when that source was already counted (retries, duplicates, reconnects)."""
     try:
         with db.begin_nested():
             db.add(UsageEntry(user_id=user_id, metric=metric, source_key=source_key[:160], period_key=period_key,
-                              amount=int(amount)))
+                              amount=int(amount), period_id=period_id))
             db.flush()
         return True
     except IntegrityError:
@@ -347,7 +352,7 @@ def meter_segment(db: Session, streamer: Streamer, sess: StreamSession, idx: int
             continue
         # The segment that crosses the limit is still delivered to this customer; it stops right after it
         record_usage(db, att.user_id, "live_seconds", f"live:{att.user_id}:{sess.id}:{idx}", ent.period_key,
-                     max(0, round(seconds)))
+                     max(0, round(seconds)), period_id=period_for(db, ent).id)
         if used(db, ent, "live_seconds") >= limit:
             _stop(att, start + seconds, "franquia de horas do ciclo esgotada")
     db.flush()
@@ -375,27 +380,105 @@ def consumers_of_clip(db: Session, clip: Clip) -> list[MonitorSession]:
     return [a for a in attachments(db, clip.session_id) if covers(a, clip.start, clip.end)]
 
 
-_REVOKED = ("refund", "chargeback", "dispute")
+def period_for(db: Session, ent: Entitlement) -> EntitlementPeriod:
+    """The paid period (subscription, plan, limits) current consumption is charged to. One row per account,
+    period and plan: a plan change inside a period starts a new row, so each hour keeps the plan it was paid under."""
+    q = select(EntitlementPeriod).where(EntitlementPeriod.user_id == ent.user_id, EntitlementPeriod.period_key == ent.period_key,
+                                        EntitlementPeriod.plan == ent.plan)
+    row = db.scalar(q)
+    if row is not None:
+        return row
+    sub = db.get(AccountSubscription, ent.subscription_id)
+    try:
+        with db.begin_nested():
+            row = EntitlementPeriod(user_id=ent.user_id, subscription_id=ent.subscription_id, period_key=ent.period_key,
+                                    plan=ent.plan, limits=dict(ent.limits), period_start=sub.period_start if sub else None,
+                                    period_end=sub.period_end if sub else None)
+            db.add(row)
+            db.flush()
+        return row
+    except IntegrityError:
+        return db.scalar(q)  # recorded concurrently
 
 
-def delivery_entitlement(db: Session, user_id: int) -> Entitlement | None:
-    """Entitlement that governs delivering a moment the customer ALREADY followed (hours charged while access was
-    valid). The current one when access is valid; otherwise the latest subscription, so a clip captured during
-    the paid period and rendered after the end is still delivered. Never after a refund, a chargeback or while the
-    payment is under review."""
-    ent = current(db, user_id)
-    if ent is not None:
-        return ent
-    row = db.scalar(select(AccountSubscription).where(AccountSubscription.user_id == user_id)
-                    .order_by(AccountSubscription.updated_at.desc(), AccountSubscription.id.desc()).limit(1))
-    if row is None or row.review or any(word in (row.financial_status or "") for word in _REVOKED):
-        return None
-    if not _valid_limits(row.limits):
-        return None
-    anchor = row.period_start or row.period_end or row.access_until or row.updated_at
-    return Entitlement(row.user_id, row.id, row.provider, row.plan, row.access_status, row.access_until or anchor,
-                       f"{row.provider}:{row.subscription_ref}:{int(anchor.replace(tzinfo=timezone.utc).timestamp())}",
-                       dict(row.limits or {}), row.review or "")
+def _epoch(value: datetime | None) -> int | None:
+    return int(value.replace(tzinfo=timezone.utc).timestamp()) if value else None
+
+
+_REFUNDED = ("refund", "chargeback")
+
+
+def period_state(db: Session, period: EntitlementPeriod) -> str:
+    """Financial state of ONE paid period, from its subscription's latest snapshot:
+
+    * ``revoked``: that period was refunded in full (refund, chargeback, dispute lost). No new deliveries from it.
+    * ``hold``: the subscription is under financial review or an open dispute. Deliveries wait until it is resolved
+      (a later snapshot releases them, see ``editorial.redeliver_for_user``).
+    * ``ok``: paid; cancellation, expiry and operational suspension do not change what was already paid."""
+    sub = db.get(AccountSubscription, period.subscription_id)
+    if sub is None:
+        return "revoked"
+    anchor = sub.period_start or sub.period_end or sub.access_until
+    is_current = anchor is not None and period.period_key == f"{sub.provider}:{sub.subscription_ref}:{_epoch(anchor)}"
+    refunded_now = any(word in (sub.financial_status or "") for word in _REFUNDED) or sub.review == "dispute_lost"
+    if refunded_now and not is_current:
+        # A full refund concerns the latest paid period of the subscription (the refund snapshot may carry other
+        # period dates): the most recent period recorded for it is revoked too, older renewed periods are not
+        latest = db.scalar(select(func.max(EntitlementPeriod.period_start)).where(
+            EntitlementPeriod.subscription_id == sub.id))
+        is_current = latest is not None and period.period_start is not None and period.period_start >= latest
+    if refunded_now and is_current:
+        return "revoked"
+    start, end = _epoch(period.period_start), _epoch(period.period_end)
+    for payment in sub.payments or []:
+        at = payment.get("at") if isinstance(payment, dict) else None
+        if payment.get("status") == "refunded" and isinstance(at, (int, float)) and start is not None and end is not None \
+                and start <= at < end:
+            return "revoked"  # e.g. one InfinitePay month refunded: only that month
+    if sub.review and sub.review != "dispute_lost":
+        return "hold"
+    return "ok"
+
+
+@dataclass(frozen=True)
+class Rights:
+    state: str  # ok | hold | no
+    period: EntitlementPeriod | None = None
+    reason: str = ""
+
+
+def delivery_rights(db: Session, att: MonitorSession, clip: Clip) -> Rights:
+    """May this customer receive this clip now? Judged by the periods that PAID for the moment, never by a later
+    or current subscription:
+
+    1. the whole clip lies in the customer's followed window (``covers``);
+    2. the account is not blocked (security: ``users.active``);
+    3. every captured segment under the clip was charged to this customer (no rights over hours never paid);
+    4. none of those periods was refunded (``revoked``) and none is under review/dispute (``hold``: retried later).
+    The plan, preset and limits applied are those of the period of the clip's first segment."""
+    if not covers(att, clip.start, clip.end):
+        return Rights("no", reason="fora do trecho acompanhado")
+    user = db.get(User, att.user_id)
+    if user is None or not user.active:
+        return Rights("no", reason="conta bloqueada")
+    segs = db.scalars(select(Segment).where(
+        Segment.session_id == clip.session_id, Segment.start < clip.end - COVERAGE_TOLERANCE_S,
+        Segment.start + Segment.duration > clip.start + COVERAGE_TOLERANCE_S).order_by(Segment.start)).all()
+    if not segs:
+        return Rights("no", reason="trecho sem captura")
+    keys = {f"live:{att.user_id}:{clip.session_id}:{s.idx}": s.start for s in segs}
+    entries = db.scalars(select(UsageEntry).where(UsageEntry.metric == "live_seconds",
+                                                  UsageEntry.source_key.in_(list(keys)))).all()
+    if len(entries) < len(keys) or any(e.user_id != att.user_id or e.period_id is None for e in entries):
+        return Rights("no", reason="trecho não pago por este assinante")
+    periods = {e.period_id: db.get(EntitlementPeriod, e.period_id) for e in entries}
+    states = {pid: (period_state(db, p) if p else "revoked") for pid, p in periods.items()}
+    first = periods[min(entries, key=lambda e: keys[e.source_key]).period_id]
+    if "revoked" in states.values():
+        return Rights("no", first, "período estornado")
+    if "hold" in states.values():
+        return Rights("hold", first, "pagamento em revisão")
+    return Rights("ok", first)
 
 
 def render_block_reason(db: Session, streamer: Streamer, clip: Clip | None = None) -> str:
@@ -404,13 +487,13 @@ def render_block_reason(db: Session, streamer: Streamer, clip: Clip | None = Non
         return ""
     reason = "nenhum assinante neste trecho da live"
     for att in consumers_of_clip(db, clip):
-        ent = delivery_entitlement(db, att.user_id)
-        if ent is None:
-            reason = "assinatura inativa"
-        elif storage_bytes(db, att.user_id) >= ent.limits["storage_gb"] * GB:
+        rights = delivery_rights(db, att, clip)
+        if rights.state == "no":
+            reason = rights.reason
+        elif storage_bytes(db, att.user_id) >= rights.period.limits["storage_gb"] * GB:
             reason = "armazenamento do plano cheio"
         else:
-            return ""
+            return ""  # ok, or held by a review that may be resolved: render once, deliver when released
     return reason
 
 
@@ -420,7 +503,12 @@ def has_feature(db: Session, streamer: Streamer | None, name: str, clip: Clip | 
     if streamer is None or streamer.hts_monitoring:
         return True
     if clip is not None:
-        consumers = consumers_of_clip(db, clip)
+        # the plan of the period that paid for this moment, not today's subscription
+        for att in consumers_of_clip(db, clip):
+            rights = delivery_rights(db, att, clip)
+            if rights.state != "no" and (rights.period.limits.get("features") or {}).get(name):
+                return True
+        return False
     else:
         live = db.scalar(select(StreamSession.id).where(StreamSession.streamer_id == streamer.id,
                                                         StreamSession.status == "live").order_by(StreamSession.id.desc()))

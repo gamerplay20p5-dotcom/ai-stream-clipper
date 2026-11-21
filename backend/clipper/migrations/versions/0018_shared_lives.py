@@ -12,6 +12,8 @@ Create Date: 2026-11-21
   behaviour is unchanged); channels added only by customers are false and are captured while someone needs them.
 * ``stream_sessions.base_profile``: analysis profile (language, models) pinned when the live starts, so every
   consumer reuses the same base analysis and a settings change never mixes incompatible results.
+* ``entitlement_periods`` + ``usage_entries.period_id``: the paid period (subscription, plan, limits) each
+  metered segment was charged to; deliveries, refunds and reviews are judged per period.
 * ``clip_shares.monitor_id``: shares created for a monitor (the customer's library); same authorization,
   snapshot and cleanup protection as every other share.
 
@@ -109,6 +111,29 @@ def upgrade() -> None:
     if not (after.get('uq_stream_sessions_one_live') or {}).get('unique'):
         raise RuntimeError("0018: o índice único uq_stream_sessions_one_live não existe após a migração")
 
+    # Paid periods as they were when hours were consumed (deliveries are judged by them)
+    if 'entitlement_periods' not in tables:
+        op.create_table(
+            'entitlement_periods',
+            sa.Column('id', sa.Integer(), primary_key=True),
+            sa.Column('user_id', sa.Integer(), sa.ForeignKey('users.id', ondelete='CASCADE'), nullable=False),
+            sa.Column('subscription_id', sa.Integer(), sa.ForeignKey('account_subscriptions.id', ondelete='CASCADE'),
+                      nullable=False),
+            sa.Column('period_key', sa.String(40), nullable=False),
+            sa.Column('plan', sa.String(20), nullable=False),
+            sa.Column('limits', sa.JSON(), nullable=False),
+            sa.Column('period_start', sa.DateTime(), nullable=True),
+            sa.Column('period_end', sa.DateTime(), nullable=True),
+            sa.Column('created_at', sa.DateTime(), nullable=False),
+            sa.UniqueConstraint('user_id', 'period_key', 'plan', name='uq_entitlement_period'),
+        )
+        op.create_index('ix_entitlement_periods_user_id', 'entitlement_periods', ['user_id'])
+    usage_cols = {c['name'] for c in inspector.get_columns('usage_entries')}
+    if 'period_id' not in usage_cols:
+        with op.batch_alter_table('usage_entries') as b:
+            b.add_column(sa.Column('period_id', sa.Integer(), nullable=True))
+            b.create_index('ix_usage_entries_period_id', ['period_id'])
+
     # Channels owned by a customer (PR #23) become that customer's monitors
     owned = bind.execute(sa.text(
         'SELECT s.id, s.owner_id, s.created_at FROM streamers s WHERE s.owner_id IS NOT NULL '
@@ -125,6 +150,11 @@ def upgrade() -> None:
 def downgrade() -> None:
     if 'uq_stream_sessions_one_live' in {i['name'] for i in sa.inspect(op.get_bind()).get_indexes('stream_sessions')}:
         op.drop_index('uq_stream_sessions_one_live', table_name='stream_sessions')
+    with op.batch_alter_table('usage_entries') as b:
+        b.drop_index('ix_usage_entries_period_id')
+        b.drop_column('period_id')
+    op.drop_index('ix_entitlement_periods_user_id', table_name='entitlement_periods')
+    op.drop_table('entitlement_periods')
     op.drop_index('ix_monitor_sessions_user', table_name='monitor_sessions')
     op.drop_index('ix_monitor_sessions_session', table_name='monitor_sessions')
     op.drop_table('monitor_sessions')
