@@ -65,7 +65,7 @@ export function Header({ t, language, languageLabel, onLanguage, join }: HeaderP
   )
 }
 
-export function Footer({ t, join, independent }: { t: Editorial; join: string; independent: string }) {
+export function Footer({ t, join, independent, portalUrl = '', manage }: { t: Editorial; join: string; independent: string; portalUrl?: string; manage: string }) {
   const { footer } = t
   return (
     <footer className="site-footer">
@@ -78,6 +78,7 @@ export function Footer({ t, join, independent }: { t: Editorial; join: string; i
         <nav className="footer-col" aria-labelledby="footer-product">
           <h2 id="footer-product">{footer.product}</h2>
           <Links links={t.links} />
+          {portalUrl ? <a href={portalUrl} rel="noopener">{manage}</a> : null}
         </nav>
         <div className="footer-col">
           <h2 id="footer-legal">{footer.legal}</h2>
