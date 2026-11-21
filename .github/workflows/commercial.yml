@@ -1,0 +1,66 @@
+name: commercial
+
+# Landing page, waitlist, Stripe (USD) and InfinitePay (BRL) billing, entitlement outbox.
+# Every payment test uses mocks of the provider APIs and signed webhooks generated locally: no real keys,
+# no purchases, no network calls to Stripe or InfinitePay.
+on:
+  pull_request:
+    paths: ["commercial/**", ".github/workflows/commercial.yml"]
+  push:
+    branches: [main]
+    paths: ["commercial/**", ".github/workflows/commercial.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commercial-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: commercial
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: commercial/package-lock.json
+      - run: npm ci
+      - name: Typecheck and production build (includes pre-rendering)
+        run: npm run build
+      - name: Server tests (waitlist, Stripe, InfinitePay, outbox, HMAC link)
+        run: npm test
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+
+  browser:
+    needs: build-and-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: commercial/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Browsers
+        run: npx playwright install --with-deps chromium firefox webkit
+      - name: Playwright (Chromium, Firefox, WebKit; axe WCAG 2.2 AA)
+        run: npx playwright test
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: commercial/test-results
+          retention-days: 7

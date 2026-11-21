@@ -120,6 +120,14 @@ def report_status(db: Session, streamer_id: int, live: bool, title: str = "", er
             sess.end_reason = f"capture job {job.status}"
             sess = None
     if sess is None:
+        # Customer channels start only within the subscription (entitled, hours left, simultaneous lives, storage)
+        from . import entitlements
+
+        blocked = entitlements.check_session_start(db, s)
+        if blocked:
+            s.last_error = f"live não capturada: {blocked}"
+            log.info("session not started (plan limits)", extra={"streamer_id": s.id, "reason": blocked})
+            return result
         concurrent = db.scalar(select(func.count()).select_from(StreamSession).where(StreamSession.status == "live"))
         sess = StreamSession(streamer_id=s.id, status="live", title=title[:500] or s.stream_title, started_at=now)
         db.add(sess)
@@ -146,10 +154,14 @@ def session_state(db: Session, session_id: int) -> dict:
         raise NotFound("session")
     streamer = db.get(Streamer, sess.streamer_id)
     next_idx = db.scalar(select(func.max(Segment.idx)).where(Segment.session_id == session_id))
+    # A customer's capture stops as soon as access ends or the cycle's hours run out (checked on every poll)
+    from . import entitlements
+
+    over_plan = bool(streamer is not None and entitlements.capture_stop_reason(db, streamer))
     return {
         "session_id": sess.id,
         "status": sess.status,
-        "stop": bool(sess.stop_requested or sess.status != "live" or streamer is None or not streamer.enabled),
+        "stop": bool(sess.stop_requested or sess.status != "live" or streamer is None or not streamer.enabled or over_plan),
         "covered_until": sess.covered_until,
         "next_idx": (next_idx + 1) if next_idx is not None else 0,
         "started_at": sess.started_at.isoformat() + "Z",
@@ -161,6 +173,9 @@ def register_segments(db: Session, session_id: int, worker_id: str, base_url: st
     if sess is None:
         raise NotFound("session")
     settings = load_ai_settings(db)
+    from . import entitlements
+
+    streamer = db.get(Streamer, sess.streamer_id)
     if base_url:
         sess.segment_base_url = base_url
         sess.capture_worker_id = worker_id
@@ -168,6 +183,7 @@ def register_segments(db: Session, session_id: int, worker_id: str, base_url: st
     for seg in segments:
         idx = int(seg["idx"])
         row = db.scalar(select(Segment).where(Segment.session_id == session_id, Segment.idx == idx))
+        new = row is None
         if row is None:
             row = Segment(session_id=session_id, idx=idx)
             db.add(row)
@@ -179,6 +195,13 @@ def register_segments(db: Session, session_id: int, worker_id: str, base_url: st
         row.sha256 = str(seg.get("sha256", ""))
         row.available = True
         sess.covered_until = max(sess.covered_until, row.start + row.duration)
+        # Customer channels: every new segment is metered once (live:{session}:{idx}); beyond the plan it is
+        # kept out of the analysis so no further work is consumed
+        if new and streamer is not None and not entitlements.meter_segment(db, streamer, session_id, idx, row.duration):
+            row.analysis_state = "skipped"
+            continue
+        if row.analysis_state == "skipped" and streamer is not None and streamer.owner_id is not None:
+            continue
         queue.enqueue(
             db, "audio_analyze",
             {
@@ -190,6 +213,8 @@ def register_segments(db: Session, session_id: int, worker_id: str, base_url: st
         )
     db.flush()
     sess.segment_count = db.scalar(select(func.count()).select_from(Segment).where(Segment.session_id == session_id))
+    if streamer is not None and entitlements.capture_stop_reason(db, streamer):
+        sess.stop_requested = True
     return added
 
 
@@ -589,13 +614,24 @@ def _route_new_clip(db: Session, clip: Clip, settings: AISettings) -> None:
         pipeline_ai.direct_without_vision(db, clip, "análise visual desativada nas configurações")
 
 
-def enqueue_render(db: Session, clip: Clip) -> Job:
+def enqueue_render(db: Session, clip: Clip) -> Job | None:
     import uuid
 
+    from . import entitlements
+
+    streamer = db.get(Streamer, clip.streamer_id)
+    blocked = entitlements.render_block_reason(db, streamer) if streamer is not None else ""
+    if blocked:
+        # Customer over its storage (or without access): nothing is rendered; it can be retried after cleanup
+        clip.status = "failed"
+        clip.error = f"render não iniciado: {blocked}"
+        return None
     clip.status = "rendering"
     clip.error = ""
+    # Plans with priority processing render ahead of the default queue position
+    priority = 60 if streamer is not None and streamer.owner_id is not None and entitlements.has_feature(db, streamer, "priority") else 70
     job = queue.enqueue(db, "render", {"clip_id": clip.id, "version": clip.version, "render_id": uuid.uuid4().hex[:12]},
-                        idempotency_key=f"render:{clip.id}:v{clip.version}", priority=70, max_attempts=3)
+                        idempotency_key=f"render:{clip.id}:v{clip.version}", priority=priority, max_attempts=3)
     # the delivery must carry this id (an existing job of the same key keeps its own id)
     prov = dict(clip.provenance or {})
     prov["render"] = {"expected": (job.payload or {}).get("render_id"), "version": clip.version}

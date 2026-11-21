@@ -1,18 +1,19 @@
 # Pagamentos: Stripe (EUA) e InfinitePay (Brasil)
 
-> **Importante:** a cobrança confirmada **ainda não libera acesso automaticamente ao AI Stream Clipper**.
+> **Integração com as contas:** o pagamento confirmado pelo provedor vira acesso automaticamente.
 >
-> - **O que é automático:** o sistema confirma e registra os pagamentos, gera os links de renovação, marca os vencimentos e guarda o histórico financeiro.
-> - **O que é manual:** criar, estender e retirar o acesso ao painel continua com a HTS. A lista do que fazer está em `npm run billing:report`, na seção **Ações manuais de acesso**.
+> - **O que este serviço faz:** grava o estado financeiro e uma fotografia da assinatura (outbox) na mesma transação.
+> - **O que a API principal faz:** recebe a fotografia por HMAC e ativa, estende, suspende ou encerra o plano da conta, aplicando as cotas.
+> - **Onde está o detalhe:** arquitetura, regras e homologação em [docs/ASSINATURAS.md](../../docs/ASSINATURAS.md).
 >
-> Enquanto não existir a integração com o painel, este sistema não deve ser apresentado como totalmente automatizado.
+> Só há checkout para contas autenticadas do painel, com e-mail verificado. A landing não cria mais cobranças.
 
 | Mercado | Moeda | Provedor | Como cobra |
 | --- | --- | --- | --- |
 | US | USD | **Stripe**, exclusivo | Assinatura recorrente (Stripe Checkout e Billing) |
 | BR | BRL | **InfinitePay** (Checkout Integrado) | Um link de pagamento por mês, com Pix ou cartão, renovado pelo nosso sistema |
 
-O navegador envia só **plano, mercado e idioma**, e o e-mail no caso do Brasil. Preço, moeda e provedor são decididos no servidor a partir do `catalog.json`. Cada mercado só oferece checkout quando o seu provedor está completamente configurado.
+O checkout é pedido pela API principal, por HMAC, para uma conta autenticada (`/internal/billing/checkout` com `account_id`, plano, mercado e idioma). Preço, moeda e provedor são decididos no servidor a partir do `catalog.json`. Cada mercado só vende quando o seu provedor **e** o vínculo com a API (`ASC_BILLING_SECRET`, `ASC_MAIN_API_URL`, `ASC_APP_URL`) estão configurados.
 
 *English summary at the end.*
 
@@ -83,7 +84,7 @@ Todo link é criado com `single_payment: true`, `valid_until` e `payment_methods
 - **Pagamento de assinatura cancelada administrativamente:**
   - **Registro:** o pagamento é gravado (`payment_confirmed` e `payment_after_cancel`), mas **não reativa** a assinatura e **não cobre nenhum período** (`period_start` igual a `period_end`). Um estorno posterior, portanto, não reduz nada.
   - **O que o cliente vê:** **"Pagamento em revisão financeira"**, nunca uma confirmação de assinatura ativa. A resposta do webhook também é `review`.
-  - **No relatório:** o caso aparece como `DO NOT GRANT` nas ações de acesso e em **Precisa de revisão**.
+  - **No relatório:** o caso aparece como `DO NOT GRANT` nas mudanças de acesso e em **Precisa de revisão**. A fotografia enviada à API mantém o acesso encerrado.
   - **Ação do operador:** decide entre o estorno (`refund`) e a conclusão da revisão (`clear-review`). Mesmo com a revisão concluída, o cliente continua vendo "em revisão", e não "ativo".
 - **E-mail:** é enviado uma vez por link. Se o SMTP falhar, o envio é repetido a cada execução até 5 vezes. Depois disso, o caso aparece como `email_gave_up` no relatório para envio manual. Falha de SMTP nunca trava o agendador.
 
@@ -168,7 +169,7 @@ Copie `.env.example` para `.env`, que é ignorado pelo git.
 
 ## English summary
 
-> Confirmed payments do **not** grant access to the AI Stream Clipper dashboard yet. HTS grants and revokes access by hand, using the "manual access actions" in `npm run billing:report`. Do not present the system as fully automated until that integration exists.
+> Provider-confirmed payments become access automatically. This service commits the financial change and an entitlement snapshot together (outbox), and the main API applies it to the account and its quotas. See `docs/ASSINATURAS.md`. Checkout exists only for authenticated dashboard accounts with a verified e-mail.
 
 **USD uses Stripe only.** It works as before: subscription Checkout, a signed webhook and the customer portal.
 

@@ -499,7 +499,29 @@ export type GateDetail = {
 };
 
 /** Multi-user (v0.7): what the session may see. The backend authorizes every request; the UI only chooses what to show. */
-export type Me = { email: string; role: string; staff: boolean; areas: ("panel" | "library")[] };
+export type Me = { email: string; role: string; staff: boolean; areas: ("panel" | "library" | "account")[] };
+
+/** Subscriber area. Every value comes from the backend; the page never computes access or limits. */
+export type AccountLimits = {
+  hours: number; channels: number; simultaneous: number; storage_gb: number; export_4k: number;
+  features: { ai: string; secondPass: boolean; variants: boolean; priority: boolean; editing: boolean };
+};
+export type AccountSubscription = {
+  plan: string; provider: "stripe" | "infinitepay"; market: string;
+  status: "active" | "grace" | "suspended" | "ended" | "none"; financial_status: string; review: string;
+  access_until: string | null; period_start: string | null; period_end: string | null; renews_at: string | null;
+  cancel_at_period_end: boolean; manage: "stripe_portal" | "infinitepay_links" | "";
+  renewal: { url: string; valid_until: number } | null;
+  payments: { id: string; at: number; amount: number; currency: string; status: string }[];
+};
+export type AccountState = {
+  entitled: boolean; subscription: AccountSubscription | null; limits: AccountLimits | null; checkout_available: boolean;
+  usage: { channels: number; storage_bytes: number; live_sessions: number; live_seconds: number; exports_4k: number };
+};
+export type AccountChannel = {
+  id: number; platform: string; channel: string; url: string; display_name: string; enabled: boolean;
+  status: string; note: string; clips: number; last_live_at: string | null;
+};
 
 export type LibraryItem = {
   clip_id: number; title: string; streamer: string; duration_s: number; shared_at: string | null; expires_at: string | null;

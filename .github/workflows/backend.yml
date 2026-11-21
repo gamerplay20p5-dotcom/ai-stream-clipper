@@ -1,0 +1,71 @@
+name: backend
+
+# API, workers, migrations and the subscription/entitlement integration.
+# Fast suite on every relevant PR/push; the end-to-end media pipeline (ffmpeg + whisper) only on main or on demand.
+on:
+  pull_request:
+    paths: ["backend/**", "tests/**", "commercial/catalog.json", ".github/workflows/backend.yml"]
+  push:
+    branches: [main]
+    paths: ["backend/**", "tests/**", "commercial/catalog.json", ".github/workflows/backend.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # same minor version as the production image (infrastructure/docker/app.Dockerfile)
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: System packages (ffmpeg and caption fonts, as in the image)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-core
+      - name: Install
+        run: python -m pip install --upgrade pip && pip install -e "./backend[dev,audio,vision]"
+      - name: Fast suite (includes billing, entitlements and quota tests)
+        run: python -m pytest -q -m "not e2e and not models" -p no:cacheprovider
+      - name: Billing and entitlement tests (explicit)
+        run: python -m pytest -q tests/test_billing_entitlements.py tests/test_accounts.py tests/test_multiuser.py -p no:cacheprovider
+      - name: Migration chain upgrades and downgrades
+        run: python -m pytest -q tests/test_migration_0009.py tests/test_streamer_grants.py -p no:cacheprovider
+
+  e2e:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-core
+      - run: python -m pip install --upgrade pip && pip install -e "./backend[dev,audio,vision]"
+      - name: End-to-end media pipeline
+        run: python -m pytest -q -m e2e -p no:cacheprovider
+
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependency vulnerabilities (pip-audit)
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip install "./backend[audio,vision]"
+          pip-audit --skip-editable

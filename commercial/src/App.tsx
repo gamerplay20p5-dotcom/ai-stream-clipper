@@ -9,7 +9,6 @@ import { Features, Questions } from './Sections'
 import { Pricing } from './Pricing'
 import { Waitlist } from './Waitlist'
 import { useBillingConfig } from './billing'
-import { CheckoutNotice } from './CheckoutNotice'
 
 export function App({ initial }: { initial: Preferences }) {
   const [{ language, market }, setPreferences] = useState(initial)
@@ -40,7 +39,6 @@ export function App({ initial }: { initial: Preferences }) {
       <a className="skip-link" href="#main">{copy.skip}</a>
       <Header t={t} language={language} languageLabel={copy.nav.language} onLanguage={next => updatePreferences(next, market)} join={copy.join} />
       <main id="main" tabIndex={-1}>
-        <CheckoutNotice copy={copy} billing={billing} />
         <Hero t={t} join={copy.join} />
         <Demo t={t} language={language} caption={t.hero.caption} />
         <Features t={t} />
@@ -48,7 +46,7 @@ export function App({ initial }: { initial: Preferences }) {
         <Questions t={t.faq} />
         <Waitlist copy={copy} language={language} market={market} interest={interest} onInterest={setInterest} marker={t.waitlistMarker} />
       </main>
-      <Footer t={t} join={copy.join} independent={copy.footer.independent} portalUrl={billing.portalUrl} manage={copy.billing.manage} />
+      <Footer t={t} join={copy.join} independent={copy.footer.independent} />
     </>
   )
 }

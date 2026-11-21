@@ -1,0 +1,20 @@
+name: security
+
+# Repository-wide checks that need no third-party action: committed secrets and sensitive files.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No real keys or sensitive files in the repository
+        run: bash .github/scripts/check-secrets.sh

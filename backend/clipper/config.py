@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     internal_secret: str = Field(default="", repr=False)
     api_url: str = "http://127.0.0.1:8780"
     signature_max_skew_s: int = 60
+    # --- billing link (API <-> commercial service) -------------------------
+    # Own secret, never the workers' internal_secret. The commercial service holds the same value.
+    billing_secret: str = Field(default="", repr=False)
+    commercial_url: str = ""  # internal address of the commercial service, e.g. http://asc-commercial:8790
     # TLS for the API (dashboard logins and worker traffic are never sent in clear text)
     tls_cert: Path | None = None  # server certificate (PEM) - enables HTTPS on `clipper api`
     tls_key: Path | None = None

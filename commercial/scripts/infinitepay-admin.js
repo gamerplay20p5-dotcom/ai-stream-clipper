@@ -10,6 +10,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { createInfinitePay, infinitePayClient, infinitePaySettings } from '../server/infinitepay.js'
+import { createOutbox } from '../server/outbox.js'
 
 const [command, target] = process.argv.slice(2)
 const flag = name => { const index = process.argv.indexOf(`--${name}`); return index > 0 ? process.argv[index + 1] ?? '' : undefined }
@@ -17,7 +18,9 @@ const root = fileURLToPath(new URL('../', import.meta.url))
 const db = new DatabaseSync(resolve(root, process.env.COMMERCIAL_DB ?? 'data/waitlist.sqlite'))
 const settings = infinitePaySettings()
 const request = command === 'reconcile' && settings.apiKey ? infinitePayClient(settings) : null
-const infinite = createInfinitePay({ db, settings, request })
+// Snapshots go to the outbox; the running server delivers them to the main backend (access follows the refund)
+const outbox = createOutbox({ db })
+const infinite = createInfinitePay({ db, settings, request, outbox })
 
 try {
   if (command === 'refund' && target) {
@@ -25,7 +28,7 @@ try {
     if (!reason) throw new Error('Pass --reason "…" so the ledger explains the refund')
     const { changed, subscription } = infinite.refund(target, { reason, cancel: process.argv.includes('--cancel') })
     console.log(changed ? 'Refund recorded' : 'Already recorded', { subscription: subscription.id, status: subscription.status, paid_until: new Date(subscription.paid_until * 1000).toISOString() })
-    console.log('Remember: update the customer\'s access in the AI Stream Clipper dashboard')
+    console.log('Access follows automatically: the server delivers the new state to the main backend (see npm run billing:report)')
   } else if (command === 'clear-review' && target) {
     console.log(infinite.clearReview(target, flag('reason') ?? '') ? 'Review cleared' : 'Charge is not under review')
   } else if (command === 'cancel' && target) {

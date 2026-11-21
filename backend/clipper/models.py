@@ -10,6 +10,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -31,7 +32,8 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), default="")
-    # admin = HTS staff (whole panel); viewer = external account (ONLY the clips shared with it).
+    # admin = HTS staff (whole panel); viewer = external account (ONLY the clips shared with it);
+    # customer = paying account: its own channels and clips, within the limits of its subscription.
     # Never admin by default: an account is admin only when someone sets it explicitly.
     role: Mapped[str] = mapped_column(String(20), default="viewer")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -72,6 +74,8 @@ class Streamer(Base):
     last_error: Mapped[str] = mapped_column(Text, default="")
     check_requested: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # NULL = HTS channel (no quotas, unchanged behaviour); set = channel of a customer account (subscription limits)
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, index=True)
 
     sessions: Mapped[list[StreamSession]] = relationship(back_populates="streamer", cascade="all, delete-orphan")
 
@@ -726,3 +730,70 @@ class FormatProfile(Base):
     created_by: Mapped[str] = mapped_column(String(255), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Customer subscriptions (commercial service -> entitlement snapshots)
+# ---------------------------------------------------------------------------
+
+
+class AccountSubscription(Base):
+    """Latest entitlement snapshot of one provider subscription, as sent by the commercial service.
+
+    The commercial service owns the money (Stripe / InfinitePay, webhooks, ledger); this table owns access.
+    ``last_seq`` is the outbox sequence of the applied snapshot: older deliveries are ignored."""
+
+    __tablename__ = "account_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("provider", "subscription_ref", name="uq_account_sub_ref"),
+        Index("ix_account_subscriptions_user", "user_id", "access_status"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(String(20))  # stripe | infinitepay
+    subscription_ref: Mapped[str] = mapped_column(String(120))
+    plan: Mapped[str] = mapped_column(String(20))
+    market: Mapped[str] = mapped_column(String(4), default="")
+    financial_status: Mapped[str] = mapped_column(String(30), default="")
+    review: Mapped[str] = mapped_column(String(40), default="")
+    access_status: Mapped[str] = mapped_column(String(20), default="none")  # active|grace|suspended|ended|none
+    access_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    period_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    period_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    renews_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, default=False)
+    limits: Mapped[dict] = mapped_column(JSON, default=dict)
+    manage: Mapped[str] = mapped_column(String(30), default="")  # stripe_portal | infinitepay_links
+    renewal: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    payments: Mapped[list] = mapped_column(JSON, default=list)
+    last_seq: Mapped[int] = mapped_column(BigInteger, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class BillingEvent(Base):
+    """Every delivered entitlement event id, once: at-least-once delivery, exactly-once effect."""
+
+    __tablename__ = "billing_events"
+    event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(20))
+    subscription_ref: Mapped[str] = mapped_column(String(120))
+    seq: Mapped[int] = mapped_column(BigInteger)
+    outcome: Mapped[str] = mapped_column(String(20))  # applied | stale
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class UsageEntry(Base):
+    """One metered unit of consumption. (metric, source_key) is unique, so retries never count twice."""
+
+    __tablename__ = "usage_entries"
+    __table_args__ = (
+        UniqueConstraint("metric", "source_key", name="uq_usage_metric_source"),
+        Index("ix_usage_user_period", "user_id", "metric", "period_key"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    metric: Mapped[str] = mapped_column(String(20))  # live_seconds | export_4k
+    source_key: Mapped[str] = mapped_column(String(160))
+    period_key: Mapped[str] = mapped_column(String(40))
+    amount: Mapped[int] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

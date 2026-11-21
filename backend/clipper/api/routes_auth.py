@@ -48,15 +48,20 @@ def logout(response: Response):
 
 @router.get("/me")
 def me(user: CurrentUser = Depends(authenticated_user)):
-    return {"email": user.email, "role": user.role, "staff": user.is_admin,
-            "areas": ["panel", "library"] if user.is_admin else ["library"]}
+    areas = ["panel", "library"] if user.is_admin else ["account", "library"] if user.role == "customer" else ["library"]
+    return {"email": user.email, "role": user.role, "staff": user.is_admin, "areas": areas}
 
 
 @router.get("/config")
 def auth_config(db: Session = Depends(get_db)):
     s = get_settings()
+    from .. import billing_link
+
+    email = accounts.smtp_ready(db)
     return {"oidc_enabled": bool(s.oidc_issuer and s.oidc_client_id), "oidc_issuer": s.oidc_issuer or None,
-            "email_enabled": accounts.smtp_ready(db), "password_min": accounts.MIN_LEN}
+            "email_enabled": email, "password_min": accounts.MIN_LEN,
+            # self sign-up needs e-mail (to prove ownership) and the billing link (to subscribe)
+            "signup_enabled": email and billing_link.configured()}
 
 
 def _session_cookie(response: Response, user: User) -> None:
@@ -162,3 +167,51 @@ def forgot(body: ForgotIn, request: Request, db: Session = Depends(get_db)):
 
             logging.getLogger(__name__).exception("forgot-password e-mail failed")
     return {"email_enabled": enabled}
+
+
+class SignupIn(BaseModel):
+    email: str = Field(max_length=255)
+
+
+@router.post("/signup", status_code=202)
+def signup(body: SignupIn, request: Request, db: Session = Depends(get_db)):
+    """Self sign-up for customers. The account can only be used after the owner of the e-mail opens the
+    single-use link and creates a password, so payments are always bound to a verified e-mail.
+    Always the same answer: it never reveals whether the e-mail already has an account."""
+    from .. import billing_link
+
+    check_login_rate(client_ip(request))
+    record_login_failure(client_ip(request))  # counts toward the limit: no e-mail flooding from one IP
+    if not (accounts.smtp_ready(db) and billing_link.configured()):
+        raise HTTPException(503, "cadastro indisponível no momento")
+    email = body.email.strip().lower()
+    if not _EMAIL.fullmatch(email) or len(email) > 254:
+        raise HTTPException(422, "e-mail inválido")
+    user = db.scalar(select(User).where(User.email == email))
+    purpose = ""
+    if user is None:
+        user = User(email=email, password_hash="", role="customer", active=True)
+        db.add(user)
+        db.flush()
+        purpose = "signup"
+    elif user.role == "customer" and user.active:
+        purpose = "reset"  # existing customer: a password reset link instead (same response)
+    if purpose:
+        raw = accounts.issue_link(db, user, purpose, "cadastro")
+        subject, text = accounts.link_mail(f"{public_origin(request)}/definir-senha?t={raw}", purpose)
+        audit(db, request, None, f"auth.signup_{purpose}", f"user:{user.id}")
+        db.commit()
+        try:
+            accounts.send_mail(db, user.email, subject, text)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("signup e-mail failed")
+    else:
+        db.commit()
+    return {"ok": True}
+
+
+import re as _re  # noqa: E402
+
+_EMAIL = _re.compile(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+")

@@ -26,7 +26,7 @@ function parseInterest(body) {
   return { email, plan, country, otherCountry, platform, language, market }
 }
 
-export function createApp({ databasePath, dist, trustProxy, stripe = null, billing = billingSettings({}), infinitepay = infinitePaySettings({}), infinitepayRequest = null, mailer = null, clock, log = console }) {
+export function createApp({ databasePath, dist, trustProxy, stripe = null, billing = billingSettings({}), infinitepay = infinitePaySettings({}), infinitepayRequest = null, mailer = null, clock, link = {}, log = console }) {
   mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 })
   const db = new DatabaseSync(databasePath, { timeout: 1_000 })
   db.exec(`
@@ -61,7 +61,7 @@ export function createApp({ databasePath, dist, trustProxy, stripe = null, billi
     next()
   })
 
-  const payments = createPayments({ db, stripe, billing, infinitepay, infinitepayRequest, mailer, clock, log })
+  const payments = createPayments({ db, stripe, billing, infinitepay, infinitepayRequest, mailer, clock, log, link })
   app.use(payments.router)
 
   app.post('/api/waitlist',
@@ -109,5 +109,5 @@ export function createApp({ databasePath, dist, trustProxy, stripe = null, billi
     return res.status(500).json({ error: 'request_failed' })
   })
 
-  return { app, markets: payments.markets, runRenewals: payments.runRenewals, close: () => db.close() }
+  return { app, markets: payments.markets, runRenewals: payments.runRenewals, dispatch: payments.dispatch, payments, close: () => db.close() }
 }

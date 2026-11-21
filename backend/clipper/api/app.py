@@ -96,6 +96,10 @@ def create_app(run_maintenance: bool = True) -> FastAPI:
     app.include_router(routes_streamers.router)
     app.include_router(routes_clips.router)
     app.include_router(routes_admin.router)
+    from . import routes_account
+
+    app.include_router(routes_account.router)
+    app.include_router(routes_account.internal)
     app.include_router(routes_review.router)
     app.include_router(routes_publish.router)
     app.include_router(routes_director.router)

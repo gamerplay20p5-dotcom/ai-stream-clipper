@@ -57,7 +57,7 @@ def issue_link(db: Session, user: User, purpose: str, by: str) -> str:
                .values(used_at=now))
     raw = secrets.token_urlsafe(32)
     db.add(PasswordToken(user_id=user.id, token_hash=_digest(raw), purpose=purpose, created_by=by[:255],
-                         expires_at=now + (INVITE_TTL if purpose == "invite" else RESET_TTL)))
+                         expires_at=now + (INVITE_TTL if purpose in ("invite", "signup") else RESET_TTL)))
     db.flush()
     return raw
 
@@ -139,6 +139,14 @@ def send_mail(db: Session, to: str, subject: str, body: str) -> None:
 
 
 def link_mail(url: str, purpose: str) -> tuple[str, str]:
+    if purpose == "signup":
+        return ("Confirme seu e-mail no AI Stream Clipper / Confirm your e-mail",
+                "Olá! Recebemos um cadastro com este e-mail no AI Stream Clipper by HTS.\n"
+                f"Para confirmar que o e-mail é seu e criar a sua senha, use este link (vale por 72 horas, uma vez só):\n{url}\n"
+                "Se não foi você, ignore este e-mail: nenhuma conta é usada sem esta confirmação.\n\n"
+                "Hi! Someone signed up for AI Stream Clipper by HTS with this e-mail.\n"
+                f"To confirm it is yours and create your password, use this link (valid for 72 hours, once):\n{url}\n"
+                "If it wasn't you, ignore this e-mail: no account can be used without this confirmation.\n")
     if purpose == "invite":
         return ("Seu acesso ao AI Stream Clipper / Your AI Stream Clipper access",
                 "Olá! Uma conta foi criada para você no AI Stream Clipper by HTS.\n"

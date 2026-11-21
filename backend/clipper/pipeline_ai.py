@@ -413,7 +413,12 @@ def _apply_gate(db: Session, clip: Clip, decision: DirectorDecision, visual: Vis
 def _needs_deep(db: Session, clip: Clip, decision: DirectorDecision, judgement: dict, settings: AISettings) -> bool:
     if not settings.deep_review_enabled or clip.is_test or "review" in (clip.provenance or {}):
         return False
-    from .models import Job
+    # The second (deep) analysis is a premium feature for customer channels; HTS channels keep it
+    from . import entitlements
+    from .models import Job, Streamer
+
+    if not entitlements.has_feature(db, db.get(Streamer, clip.streamer_id), "secondPass"):
+        return False
 
     queued = db.query(Job).filter(Job.type == "vision_analyze", Job.status == "queued").count()
     if queued >= settings.vision_queue_max:
