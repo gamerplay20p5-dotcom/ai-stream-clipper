@@ -23,6 +23,8 @@ sudo -n /usr/local/sbin/asc-ctl exec asc-api -- python3 -c "$(cat contas-de-clie
 | `fatos-webhook-stripe.mjs` | Eventos que cada endpoint da conta assina e eventos já recebidos | Não |
 | `stripe-conta-e-repasses.mjs` | Requisitos da conta Stripe, repasses, capacidades e saldo | Não |
 | `entrega-real-stripe.mjs` | Prova a entrega real e a assinatura de um evento do Stripe sem dinheiro. Acrescenta `customer.created` e `customer.deleted` **só ao nosso endpoint**, cria e apaga um cliente descartável e restaura o endpoint | Não guarda nada nosso. No Stripe, altera o endpoint só durante o teste (é restaurado no fim) e cria e apaga um cliente descartável. **Aborta se o outro projeto assinar esses eventos** |
+| `recriar-comercial.sh` | Recria só o `asc-commercial` (carrega o `asc.env`) e prova que API, workers e bancos mantiveram os mesmos processos | O contêiner comercial |
+| `smtp-autenticacao.mjs` | Conexão, STARTTLS e AUTH no SMTP configurado, sem enviar mensagem | Não |
 | `contas-de-cliente.py` | Quantas contas de cliente e assinaturas existem (só contagens) | Não |
 
 A verificação de uma compra real controlada é `commercial/scripts/purchase-check.js`
