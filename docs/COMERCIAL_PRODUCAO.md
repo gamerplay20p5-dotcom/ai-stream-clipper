@@ -87,12 +87,22 @@ com `account_id`. Os produtos e preços são criados com `metadata.asc_plan`, se
   só mostram o healthcheck e as requisições de controle. Ou seja, o upstream configurado no Caddy não é
   `192.168.1.210:8790`.
 
-**Validação de 22/11/2026, tarde:**
-- Stripe: chave live aceita, endpoint de webhook ativo com os eventos necessários, preços USD sincronizados.
-- InfinitePay: chave e handle aceitos (`payment_check`).
-- Dentro da rede, os webhooks respondem certo.
-- Na Cloudflare, **todo POST público recebe 403** ("Attention Required"), então nenhum aviso de pagamento chega ao
-  site até a regra de exceção existir.
+**Homologação de 22/11/2026 (pagamentos ainda fechados ao público):**
+- Cloudflare: os webhooks públicos chegam ao site. A assinatura inválida do Stripe recebe 400 e o token certo da
+  InfinitePay é aceito.
+- Vínculo assinado entre API e serviço comercial: funciona nos dois sentidos. Um segredo errado é recusado (401).
+- Stripe: entrega real confirmada com assinatura válida. Nosso endpoint ganhou `customer.created` e
+  `customer.deleted` só durante o teste, com um cliente descartável sem e-mail; o outro projeto não assina esses
+  eventos, e o endpoint voltou aos 17 eventos originais.
+- Ativação, testada entre processos reais (`tests/test_payment_activation_e2e.py`):
+  - Basic, Creator e Pro no Stripe ativam cada um os seus limites;
+  - o pagamento confirmado na InfinitePay ativa o Creator;
+  - pagamento recusado ou não pago não libera acesso;
+  - com a trava fechada, o checkout é recusado.
+- Pendências:
+  - repasses do Stripe desligados (`payouts_enabled=false`, nenhum requisito pendente informado pela API);
+  - SMTP;
+  - primeiro pagamento real.
 
 ## English
 

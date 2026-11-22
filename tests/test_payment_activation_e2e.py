@@ -142,3 +142,25 @@ def test_closed_payments_refuse_checkout_through_the_panel(app, client, commerci
         assert r.status_code == 503
         assert r.json()["detail"] == "pagamentos indisponíveis no momento"
     assert sub_state(c)["entitled"] is False
+
+
+@pytest.mark.parametrize("plan,channels", [("basic", 1), ("creator", 2), ("pro", 4)])
+def test_each_stripe_plan_activates_its_own_limits(app, client, commercial, plan, channels):
+    control = commercial(True)
+    uid, c = customer(app)
+    assert c.post("/api/account/checkout", json={"plan": plan, "market": "US", "language": "en"}, headers=CSRF).status_code == 201
+    _control(control, "/stripe/pay", {"account_id": uid, "plan": plan})
+    state = sub_state(c)
+    assert state["entitled"] is True and state["subscription"]["plan"] == plan
+    assert state["limits"]["channels"] == channels
+
+
+def test_declined_stripe_payment_grants_nothing(app, client, commercial):
+    control = commercial(True)
+    uid, c = customer(app)
+    assert c.post("/api/account/checkout", json={"plan": "pro", "market": "US", "language": "en"}, headers=CSRF).status_code == 201
+    out = _control(control, "/stripe/pay", {"account_id": uid, "plan": "pro", "status": "incomplete"})
+    assert out["webhook"] == 200
+    state = sub_state(c)
+    assert state["entitled"] is False, state
+    assert state["limits"] is None

@@ -70,18 +70,26 @@ const post = (url, body, headers = {}) => fetch(url, { method: 'POST', headers: 
 
 const control = express()
 control.use(express.json())
+// status 'active' = card approved; 'incomplete' = first payment declined (Stripe then sends invoice.payment_failed)
 control.post('/stripe/pay', async (req, res) => {
   const account = String(req.body.account_id)
   const plan = req.body.plan
+  const status = req.body.status ?? 'active'
   const id = `sub_e2e_${account}`
   const t = now()
-  subscriptions.set(id, { id, object: 'subscription', customer: `cus_e2e_${account}`, status: 'active', cancel_at_period_end: false,
+  subscriptions.set(id, { id, object: 'subscription', customer: `cus_e2e_${account}`, status, cancel_at_period_end: false,
     metadata: { account_id: account, plan, market: 'US' },
     items: { data: [{ current_period_start: t, current_period_end: t + 30 * DAY, price: { lookup_key: `asc_${plan}_usd_monthly` } }] } })
   const payload = JSON.stringify({ id: `evt_e2e_${account}_${t}`, object: 'event', type: 'checkout.session.completed', created: t,
     data: { object: { id: `cs_test_${account}`, object: 'checkout.session', mode: 'subscription', subscription: id, customer: `cus_e2e_${account}`,
       payment_status: 'paid', customer_details: { email: `e2e-${account}@example.com` }, metadata: { account_id: account, plan, market: 'US' } } } })
   const hook = await post(`${base}/api/stripe/webhook`, payload, { 'Stripe-Signature': signer.generateTestHeaderString({ payload, secret: WEBHOOK_SECRET }) })
+  if (status !== 'active') {
+    const failed = JSON.stringify({ id: `evt_e2e_fail_${account}_${t}`, object: 'event', type: 'invoice.payment_failed', created: t + 1,
+      data: { object: { id: `in_e2e_${account}`, object: 'invoice', customer: `cus_e2e_${account}`, status: 'open', amount_due: catalog.plans[plan].monthlyMinor.US, amount_paid: 0, currency: 'usd', attempt_count: 1,
+        parent: { subscription_details: { subscription: id, metadata: { account_id: account, plan, market: 'US' } } } } } })
+    await post(`${base}/api/stripe/webhook`, failed, { 'Stripe-Signature': signer.generateTestHeaderString({ payload: failed, secret: WEBHOOK_SECRET }) })
+  }
   await dispatch()
   res.json({ webhook: hook.status, subscription: id })
 })
