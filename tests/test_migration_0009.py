@@ -87,7 +87,7 @@ def test_image_rollback_needs_the_db_downgrade_first(tmp_path):
     url = f"sqlite:///{tmp_path / 'm.db'}"
     upgrade_db(url, "head")
     old = tmp_path / "old_migrations"
-    shutil.copytree(MIGRATIONS, old, ignore=shutil.ignore_patterns("0009_*", "0010_*", "0011_*", "0012_*", "0013_*", "0014_*", "0015_*", "0016_*", "0017_*", "__pycache__"))
+    shutil.copytree(MIGRATIONS, old, ignore=shutil.ignore_patterns("0009_*", "0010_*", "0011_*", "0012_*", "0013_*", "0014_*", "0015_*", "0016_*", "0017_*", "0018_*", "__pycache__"))
     cfg = Config()
     cfg.set_main_option("script_location", str(old))
     cfg.set_main_option("sqlalchemy.url", url)

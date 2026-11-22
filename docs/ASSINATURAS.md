@@ -29,7 +29,7 @@ Como um pagamento vira um plano ativo, com permissões e cotas aplicadas pelo ba
 - **O serviço comercial é dono do dinheiro:** cuida dos provedores, dos webhooks, do ledger e dos estornos. Não sabe nada de canais nem de cotas.
 - **A API principal é dona do acesso:** cuida das contas, dos direitos, das cotas e da fiscalização no pipeline. Não sabe nada de Stripe nem de InfinitePay. Ela recebe uma fotografia neutra, com estado de acesso, prazo e limites.
 - **Limites dos planos:** vêm só do `commercial/catalog.json`, que é a fonte única. Eles viajam dentro da fotografia, e nenhum número de plano está fixo no Python.
-- **Escolha técnica:** a mudança grande foi tornar a plataforma multicliente, com o papel `customer` e `streamers.owner_id`. Sem ela, um cliente não teria canais próprios. O resto reaproveita o que já existia: contas, links de senha e SMTP do PR #16, a biblioteca com grants (`include_pending`), o HMAC dos workers e os pontos de controle do pipeline.
+- **Escolha técnica:** a mudança grande foi tornar a plataforma multicliente, com o papel `customer` e `streamers.owner_id`. Sem ela, um cliente não teria canais próprios. **Desde a migração 0018 o canal é compartilhado:** vários clientes acompanham o mesmo streamer com uma única captura e análise-base (veja `docs/LIVES_COMPARTILHADAS.md`). O resto reaproveita o que já existia: contas, links de senha e SMTP do PR #16, a biblioteca com grants (`include_pending`), o HMAC dos workers e os pontos de controle do pipeline.
 
 ## Fluxo de ativação
 
@@ -69,7 +69,7 @@ O direito só vale com `access_status` em `active` ou `grace` **e** `access_unti
 
 ## Cotas aplicadas pelo backend
 
-Só para canais de clientes (`owner_id` preenchido). Os canais da HTS continuam sem limite, como hoje.
+Por cliente, sobre os canais que ele acompanha (`channel_monitors`), mesmo que outros clientes acompanhem o mesmo canal. Cada cliente consome a própria franquia (detalhes em `docs/LIVES_COMPARTILHADAS.md`). O trabalho que a HTS consome (`streamers.hts_monitoring`) continua sem limite.
 
 | Recurso | Onde é verificado | Como |
 | --- | --- | --- |
@@ -92,7 +92,7 @@ Só para canais de clientes (`owner_id` preenchido). Os canais da HTS continuam 
 - nenhuma live nova começa e nenhum render novo é enfileirado;
 - o que já foi capturado e medido termina de ser analisado;
 - os cortes já produzidos continuam na biblioteca do cliente;
-- os canais ficam pausados e voltam sozinhos quando a assinatura é renovada.
+- o acompanhamento daquele cliente para (a captura continua para os outros) e volta sozinho quando a assinatura é renovada.
 
 ## Segurança
 
@@ -139,7 +139,7 @@ npm run outbox -- dispatch                                 # uma passada de entr
 - [ ] **Lives simultâneas do Creator:** o catálogo diz 2 e o estudo comercial (PR #17) recomendava 1. O valor aplicado é `commercial/catalog.json` → `plans.creator.simultaneous`, e o mesmo arquivo registra a pendência em `decisions.creatorSimultaneous`.
 - [ ] **Renderização 4K:** a cota existe, mas o renderer só gera 1080p.
 - [ ] **IA econômica e IA aprimorada:** hoje a única diferença técnica entre os planos é a segunda análise, a edição alternativa e a prioridade. Basic e Creator usam o mesmo modelo, e a diferença entre os dois ainda precisa ser definida no produto.
-- [ ] **Posse do canal:** não há verificação de que o cliente é dono do canal da Twitch ou do YouTube que cadastra. Cada canal tem um único dono no sistema.
+- [x] **Posse do canal:** não é exigida. Clipadores e editores acompanham canais de terceiros, e vários clientes podem acompanhar o mesmo canal (0018). O respeito às regras das plataformas e aos direitos do criador é responsabilidade comercial e jurídica.
 - [ ] **E-mail:** o SMTP precisa estar configurado no painel (PR #16) para o cadastro funcionar.
 
 ## Configuração
@@ -181,7 +181,7 @@ The commercial service owns the money (Stripe for USD, InfinitePay for BRL, webh
 2. **Confirmation:** the provider confirms the payment (signed Stripe webhook, or InfinitePay `payment_check` for the stored amount). The financial change and a provider-neutral entitlement snapshot are committed together in an outbox.
 3. **Delivery:** snapshots are delivered over HMAC with retries. The API applies them idempotently (by event id), in order (by sequence) and only to verified customer accounts.
 4. **Enforcement:** plan limits come only from `catalog.json`. The pipeline enforces them for customer channels: session start, capture polling, per-segment hour metering (counted once), simultaneous streams, storage before rendering, and premium features (second pass, alternate edits, priority). HTS channels are unchanged.
-5. **When access ends:** captures stop, channels pause and new work is refused, while existing clips stay available.
+5. **When access ends:** that customer stops following (the shared capture goes on for the others), new work for it is refused, while existing clips stay available.
 6. **Outbox failures:** transient errors retry forever (backoff up to 1 h, one probe per cycle while the API is down); configuration errors (401/403/404/409) retry up to every 6 h; invalid snapshots (400/413/415/422) stay `rejected` and visible until an audited `npm run outbox -- resend` or a newer snapshot supersedes them. Leases make concurrent dispatchers and restarts safe, alerts flag paid subscriptions that are not synced, and a signed reconciliation re-queues what the API lost.
 7. **E-mailed links** use only the operator's `ASC_PUBLIC_ORIGIN` (https in production), never request headers. SMTP refuses to send credentials without TLS.
 
@@ -189,4 +189,4 @@ The commercial service owns the money (Stripe for USD, InfinitePay for BRL, webh
 - Creator simultaneous streams (2 in the catalog vs 1 in the study).
 - No 4K renderer yet.
 - No technical difference between economy and enhanced AI.
-- No channel ownership verification.
+- Channel ownership is not required: channels are shared between customers (migration 0018).

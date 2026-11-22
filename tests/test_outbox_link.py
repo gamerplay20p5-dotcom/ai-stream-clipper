@@ -100,9 +100,10 @@ def test_customer_cannot_read_or_change_another_customers_channels(app, client):
     uid_b, b = customer(app)
     deliver(client, snapshot(uid_a, seq=1))
     deliver(client, snapshot(uid_b, seq=1))
-    sid_b = owned_streamer(uid_b)
-    assert all(ch["id"] != sid_b for ch in a.get("/api/account/channels").json())
-    assert a.delete(f"/api/account/channels/{sid_b}", headers={"X-ASC-CSRF": "1"}).status_code == 404
+    owned_streamer(uid_b)
+    mid_b = b.get("/api/account/channels").json()[0]["id"]
+    assert a.get("/api/account/channels").json() == []
+    assert a.delete(f"/api/account/channels/{mid_b}", headers={"X-ASC-CSRF": "1"}).status_code == 404
     assert len(b.get("/api/account/channels").json()) == 1
     # Staff-only and anonymous access stay closed
     assert TestClient(app).get("/api/account/subscription").status_code == 401

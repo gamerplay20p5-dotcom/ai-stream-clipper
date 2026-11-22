@@ -16,12 +16,14 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import billing_link, entitlements, queue, sharing, storage
+from .. import billing_link, editorial, entitlements, sharing
 from ..config import get_settings
 from ..db import get_db
-from ..models import AccountSubscription, Clip, Job, Streamer
+from ..db import utcnow
+from ..models import AccountSubscription, ChannelMonitor, ClipShare, MonitorSession, StreamSession, Streamer
 from ..platforms import InvalidStreamURL, VideoUnavailable, canonical_youtube, parse_stream_url
 from ..security import sha256_bytes, verify_signature
 from .deps import CurrentUser, _path_qs, audit, authenticated_user
@@ -197,26 +199,60 @@ def portal(db: Session = Depends(get_db), user: CurrentUser = Depends(customer_u
 
 
 # ---------------------------------------------------------------------------
-# channels owned by the customer
+# channels the customer follows (a channel is shared; the monitor is the customer's own)
 # ---------------------------------------------------------------------------
 
 
-def _channel_view(db: Session, s: Streamer) -> dict:
-    clips = db.scalar(select(func.count()).select_from(Clip).where(Clip.streamer_id == s.id)) or 0
-    return {"id": s.id, "platform": s.platform, "channel": s.channel, "url": s.url, "display_name": s.display_name,
-            "enabled": s.enabled, "status": s.status, "note": s.last_error, "clips": clips,
-            "last_live_at": _iso(s.last_live_at)}
+def _monitoring(db: Session, m: ChannelMonitor, s: Streamer) -> dict:
+    """This customer's view of the live: never other customers, workers or internal scheduling."""
+    if m.paused_reason:
+        return {"state": "paused", "note": m.paused_reason}
+    att = db.scalar(select(MonitorSession).join(StreamSession, StreamSession.id == MonitorSession.session_id)
+                    .where(MonitorSession.monitor_id == m.id, StreamSession.status == "live")
+                    .order_by(MonitorSession.id.desc()))
+    if att is None:
+        return {"state": "live_pending" if s.status == "live" else "waiting", "note": ""}
+    if att.state == "watching":
+        return {"state": "watching", "note": ""}
+    return {"state": "not_following", "note": att.stop_reason}
+
+
+def _channel_view(db: Session, m: ChannelMonitor, ent) -> dict:
+    s = db.get(Streamer, m.streamer_id)
+    clips = db.scalar(select(func.count()).select_from(ClipShare).where(
+        ClipShare.monitor_id == m.id, ClipShare.revoked_at.is_(None))) or 0
+    return {"id": m.id, "platform": s.platform, "channel": s.channel, "url": s.url, "display_name": s.display_name,
+            "status": s.status if s.status in ("live", "offline") else "unknown", "clips": clips,
+            "last_live_at": _iso(s.last_live_at), "preset": editorial.effective_preset(m, ent),
+            "monitoring": _monitoring(db, m, s)}
+
+
+def _own_monitor(db: Session, mid: int, user: CurrentUser) -> ChannelMonitor:
+    m = db.get(ChannelMonitor, mid)
+    if m is None or m.user_id != user.id or m.removed_at is not None:
+        raise HTTPException(404, "canal não encontrado")  # same answer for someone else's monitor
+    return m
 
 
 @router.get("/channels")
 def channels(db: Session = Depends(get_db), user: CurrentUser = Depends(customer_user)):
-    rows = db.scalars(select(Streamer).where(Streamer.owner_id == user.id).order_by(Streamer.created_at, Streamer.id))
-    return [_channel_view(db, s) for s in rows]
+    ent = entitlements.current(db, user.id)
+    rows = db.scalars(select(ChannelMonitor).where(ChannelMonitor.user_id == user.id, ChannelMonitor.removed_at.is_(None))
+                      .order_by(ChannelMonitor.created_at, ChannelMonitor.id))
+    return [_channel_view(db, m, ent) for m in rows]
+
+
+@router.get("/presets")
+def presets(db: Session = Depends(get_db), user: CurrentUser = Depends(customer_user)):
+    ent = entitlements.current(db, user.id)
+    allowed = editorial.allowed_presets(ent)
+    return [{"id": name, "allowed": name in allowed} for name in editorial.PRESETS]
 
 
 class ChannelIn(BaseModel):
     url: str = Field(max_length=512)
     display_name: str = Field("", max_length=255)
+    preset: str = Field(editorial.DEFAULT_PRESET, max_length=20)
 
 
 @router.post("/channels", status_code=201)
@@ -241,49 +277,88 @@ async def add_channel(body: ChannelIn, request: Request, db: Session = Depends(g
     ent = entitlements.current(db, user.id)
     if ent is None:
         raise HTTPException(402, "é preciso uma assinatura ativa para monitorar canais")
+    if body.preset not in editorial.PRESETS:
+        raise HTTPException(422, "preset de cortes desconhecido")
+    if body.preset not in editorial.allowed_presets(ent):
+        raise HTTPException(403, "o seu plano usa a seleção equilibrada")
     # Serialize per account so two simultaneous requests cannot both take the last free slot
     db.scalar(select(AccountSubscription.id).where(AccountSubscription.id == ent.subscription_id).with_for_update())
     if entitlements.channel_count(db, user.id) >= int(ent.limits["channels"]):
         raise HTTPException(409, f"o plano permite {int(ent.limits['channels'])} canal(is)")
-    if db.scalar(select(Streamer.id).where(Streamer.platform == ref.platform, Streamer.channel == ref.channel)) is not None:
-        raise HTTPException(409, "este canal já está cadastrado")  # never reveals who monitors it
-    s = Streamer(platform=ref.platform, channel=ref.channel, url=ref.url, owner_id=user.id,
-                 display_name=body.display_name.strip() or ref.display_name, preferences={}, status="unknown",
-                 check_requested=True)
-    db.add(s)
-    db.flush()
-    # The owner sees every clip of the channel (including the ones still in review) in the existing library
-    sharing.grant_streamer(db, admin_id=user.id, email=user.email, streamer_id=s.id, can_download=True, include_pending=True)
-    audit(db, request, user, "account.channel_add", f"streamer:{s.id}", {"url": ref.url})
+    # The source channel is shared: reuse it if anyone (the HTS or another customer) already follows it
+    s = db.scalar(select(Streamer).where(Streamer.platform == ref.platform, Streamer.channel == ref.channel))
+    if s is None:
+        try:
+            with db.begin_nested():
+                s = Streamer(platform=ref.platform, channel=ref.channel, url=ref.url, hts_monitoring=False,
+                             display_name=body.display_name.strip() or ref.display_name, preferences={},
+                             status="unknown", check_requested=True)
+                db.add(s)
+                db.flush()
+        except IntegrityError:  # another customer created it at the same moment: use theirs
+            s = db.scalar(select(Streamer).where(Streamer.platform == ref.platform, Streamer.channel == ref.channel))
+    if db.scalar(select(ChannelMonitor.id).where(ChannelMonitor.user_id == user.id, ChannelMonitor.streamer_id == s.id,
+                                                 ChannelMonitor.removed_at.is_(None))):
+        raise HTTPException(409, "você já acompanha este canal")
+    m = ChannelMonitor(user_id=user.id, streamer_id=s.id, preset=body.preset)
+    db.add(m)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "você já acompanha este canal") from exc
+    # Second barrier (the row lock above serializes on PostgreSQL; SQLite has no row locks): recount after the
+    # insert and undo it if a concurrent request took the last slot first
+    if entitlements.channel_count(db, user.id) > int(ent.limits["channels"]):
+        db.rollback()
+        raise HTTPException(409, f"o plano permite {int(ent.limits['channels'])} canal(is)")
+    s.check_requested = True
+    audit(db, request, user, "account.channel_add", f"monitor:{m.id}", {"url": ref.url})
     db.commit()
-    return _channel_view(db, s)
+    return _channel_view(db, m, ent)
 
 
-@router.delete("/channels/{sid}")
-def delete_channel(sid: int, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(customer_user)):
-    s = db.get(Streamer, sid)
-    if s is None or s.owner_id != user.id:
-        raise HTTPException(404, "canal não encontrado")  # same answer for someone else's channel
-    session_ids = [x.id for x in s.sessions]
-    for j in db.scalars(select(Job).where(Job.status.in_(("queued", "running")))):
-        if (j.payload or {}).get("session_id") in session_ids or (j.payload or {}).get("streamer_id") == sid:
-            queue.request_cancel(db, j)
-    clip_ids = [c for (c,) in db.execute(select(Clip.id).where(Clip.streamer_id == sid))]
-    db.delete(s)
-    audit(db, request, user, "account.channel_delete", f"streamer:{sid}", {"clips": len(clip_ids)})
+class ChannelPatch(BaseModel):
+    preset: str = Field(max_length=20)
+
+
+@router.patch("/channels/{mid}")
+def update_channel(mid: int, body: ChannelPatch, request: Request, db: Session = Depends(get_db),
+                   user: CurrentUser = Depends(customer_user)):
+    """Editorial preference of THIS customer. It changes what this library receives from now on; it never
+    changes the shared analysis, other customers, quotas or the plan."""
+    m = _own_monitor(db, mid, user)
+    ent = entitlements.current(db, user.id)
+    if body.preset not in editorial.PRESETS:
+        raise HTTPException(422, "preset de cortes desconhecido")
+    if body.preset not in editorial.allowed_presets(ent):
+        raise HTTPException(403, "o seu plano usa a seleção equilibrada")
+    m.preset = body.preset
+    audit(db, request, user, "account.channel_preset", f"monitor:{m.id}", {"preset": body.preset})
     db.commit()
-    for cid in clip_ids:
-        storage.delete_clip_files(cid)
+    return _channel_view(db, m, ent)
+
+
+@router.delete("/channels/{mid}")
+def delete_channel(mid: int, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(customer_user)):
+    """Stops following the channel. The shared channel, its captures and other customers are untouched; the
+    clips already in this customer's library stay there."""
+    m = _own_monitor(db, mid, user)
+    m.removed_at = utcnow()
+    for att in db.scalars(select(MonitorSession).where(MonitorSession.monitor_id == m.id, MonitorSession.state == "watching")):
+        sess = db.get(StreamSession, att.session_id)
+        att.state, att.until_t, att.stop_reason, att.stopped_at = "stopped", sess.covered_until if sess else 0.0, \
+            "canal removido pelo assinante", utcnow()
+    audit(db, request, user, "account.channel_delete", f"monitor:{m.id}")
+    db.commit()
     return {"ok": True}
 
 
 @router.post("/clips/{cid}/export-4k")
 def export_4k(cid: int, db: Session = Depends(get_db), user: CurrentUser = Depends(customer_user)):
     """4K export entitlement check. The renderer has no 4K output yet: the quota is enforced but no export runs
-    (and nothing is consumed) until that render path exists."""
-    clip = db.get(Clip, cid)
-    streamer = db.get(Streamer, clip.streamer_id) if clip else None
-    if clip is None or streamer is None or streamer.owner_id != user.id:
+    (and nothing is consumed) until that render path exists. Only clips in this customer's own library."""
+    if sharing.active_share(db, user.id, cid) is None:
         raise HTTPException(404, "corte não encontrado")
     reason = entitlements.export_4k_block_reason(db, user.id)
     if reason:

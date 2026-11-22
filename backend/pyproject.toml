@@ -52,4 +52,5 @@ asyncio_mode = "auto"
 markers = [
     "e2e: end-to-end pipeline tests (real ffmpeg + whisper, slower)",
     "models: real model inference (OpenVINO VLM/LLM, YAMNet); skipped when models are not installed",
+    "postgres: real PostgreSQL concurrency tests; skipped unless ASC_TEST_PG_URL points to a disposable test server",
 ]

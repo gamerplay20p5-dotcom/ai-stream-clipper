@@ -121,7 +121,7 @@ def enqueue_variant(db: Session, clip: Clip, name: str) -> None:
     from .models import Streamer
 
     # Alternative edits are a premium feature for customer channels; HTS channels keep them
-    if not entitlements.has_feature(db, db.get(Streamer, clip.streamer_id), "variants"):
+    if not entitlements.has_feature(db, db.get(Streamer, clip.streamer_id), "variants", clip):
         return
 
     v = _variants(clip)
