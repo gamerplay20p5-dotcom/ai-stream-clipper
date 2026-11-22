@@ -12,6 +12,8 @@ NOTES: list[dict] = [
         "Clientes Creator e Pro podem publicar automaticamente nas próprias contas, dentro do limite diário do plano.",
         "Novo destino: Reels em Páginas do Facebook.",
         "Painel Clientes (só administradores): planos de cortesia, bloqueio de publicação e situação de cada cliente.",
+        "Painel Clientes: compensar dias de acesso (sem mexer na cobrança), upgrade temporário de plano e histórico de alterações.",
+        "Cupons promocionais para assinaturas novas (só a primeira cobrança) e recorrentes para assinaturas em andamento; funcionam quando os pagamentos estiverem ativos.",
         "Os canais, regras e publicações que já existiam continuam funcionando como antes.",
     ], "title_en": "Customer foundation: subscriptions, shared lives and per-customer publishing", "items_en": [
         "Each live is captured only once, even when several customers follow the same channel; each one gets their own clips, in their own style.",
@@ -19,6 +21,8 @@ NOTES: list[dict] = [
         "Creator and Pro customers can publish automatically to their own accounts, within the plan's daily limit.",
         "New destination: Reels on Facebook Pages.",
         "Customers panel (admins only): courtesy plans, publishing block and each customer's status.",
+        "Customers panel: compensate access days (billing untouched), temporary plan upgrades and the change history.",
+        "Promotion codes for new subscriptions (first charge only) and recurring codes for current subscriptions; they work once payments are active.",
         "Existing channels, rules and publications keep working as before.",
     ]},
     {"version": "0.7.7", "date": "2026-11-20", "title": "Senhas, acesso a cortes em revisão, seleção em massa e o banco da 212", "items": [

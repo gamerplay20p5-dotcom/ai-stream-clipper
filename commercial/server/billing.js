@@ -86,7 +86,7 @@ function migrate(db) {
 
 const idOf = value => (typeof value === 'string' ? value : value?.id) ?? ''
 
-export function createBilling({ db, stripe, settings, outbox = null, log = console }) {
+export function createBilling({ db, stripe, settings, outbox = null, promotions = null, log = console }) {
   migrate(db)
   const enabled = Boolean(stripe && settings.secretKey && settings.webhookSecret && settings.appUrl)
   const priceCache = new Map()
@@ -203,10 +203,11 @@ export function createBilling({ db, stripe, settings, outbox = null, log = conso
     return Object.hasOwn(catalog.plans, plan ?? '') && Object.hasOwn(catalog.markets, market ?? '') ? lookupKey(plan, market) : ''
   }
 
-  function storeSubscription(row) {
+  function storeSubscription(row, after = null) {
     transaction(() => {
       upsertSubscription.run(row)
       publish(row.id)
+      if (after) after()
     })
   }
 
@@ -232,7 +233,14 @@ export function createBilling({ db, stripe, settings, outbox = null, log = conso
         const subscription = await stripe.subscriptions.retrieve(idOf(object.subscription))
         const row = subscriptionRow(subscription, event.created, object.customer_details?.email ?? '')
         if (!row) return log.warn('Stripe subscription with an unknown price ignored', subscription.id)
-        return storeSubscription(row)
+        // The promotion use reserved at checkout becomes final with the subscription it paid for
+        const redemption = object.metadata?.promo_redemption
+        return storeSubscription(row, redemption && promotions ? () => promotions.redeem(redemption, row.id) : null)
+      }
+      case 'checkout.session.expired': {
+        const redemption = object.metadata?.promo_redemption
+        if (redemption && promotions) transaction(() => promotions.release(redemption, 'stripe checkout expired'))
+        return
       }
       case 'customer.subscription.created':
       case 'customer.subscription.updated':
@@ -274,6 +282,7 @@ export function createBilling({ db, stripe, settings, outbox = null, log = conso
         return transaction(() => {
           // A full refund ends access; a partial refund keeps it and asks for a financial review
           if (full) db.prepare('UPDATE subscriptions SET refunded_at = ?, updated_at = CURRENT_TIMESTAMP WHERE subscription_id = ? AND refunded_at IS NULL').run(event.created, row.subscription_id)
+          if (full && promotions) promotions.refundSubscription(row.subscription_id)
           else db.prepare("UPDATE subscriptions SET review = 'partial_refund', updated_at = CURRENT_TIMESTAMP WHERE subscription_id = ?").run(row.subscription_id)
           publish(row.subscription_id)
         })
@@ -322,12 +331,17 @@ export function createBilling({ db, stripe, settings, outbox = null, log = conso
     }
   })
 
-  /** Checkout Session for an authenticated account. Returns the URL to redirect to. */
-  async function createCheckout({ plan, market, language, accountId, email }) {
+  /**
+   * Checkout Session for an authenticated account. Returns the URL to redirect to. `promo` is a reservation already
+   * validated by server/promotions.js: a discount is applied with the mirrored Stripe promotion code, free days with
+   * the official trial. Customers cannot type other codes on Stripe's page (allow_promotion_codes is off).
+   */
+  async function createCheckout({ plan, market, language, accountId, email, promo = null }) {
     if (!STRIPE_MARKETS.includes(market)) throw Object.assign(new Error('Stripe only sells in USD'), { code: 'unsupported_market' })
     if (!ACCOUNT_ID.test(String(accountId))) throw Object.assign(new Error('Account required'), { code: 'account_required' })
+    if (promo && !promo.freeDays && !promo.stripePromotion) throw Object.assign(new Error('Promotion not synced with Stripe'), { code: 'promo_not_synced' })
     const price = await priceFor(plan, market)
-    const metadata = { plan, market, language, account_id: String(accountId) }
+    const metadata = { plan, market, language, account_id: String(accountId), ...(promo ? { promo_code: promo.code, promo_redemption: promo.redemptionId } : {}) }
     const customer = customerForAccount.get(String(accountId))?.customer_id
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
@@ -338,10 +352,11 @@ export function createBilling({ db, stripe, settings, outbox = null, log = conso
       success_url: `${settings.appUrl}/conta/assinatura?checkout=returned`,
       cancel_url: `${settings.appUrl}/conta/assinatura?checkout=cancelled`,
       locale: language === 'en' ? 'en' : 'pt-BR',
-      allow_promotion_codes: true,
+      // Only HTS codes validated by the server (plans, dates, limits per account); never a code typed on Stripe
+      ...(promo && !promo.freeDays ? { discounts: [{ promotion_code: promo.stripePromotion }] } : {}),
       billing_address_collection: 'auto',
       metadata,
-      subscription_data: { metadata },
+      subscription_data: { metadata, ...(promo?.freeDays ? { trial_period_days: promo.freeDays } : {}) },
       ...(settings.automaticTax ? { automatic_tax: { enabled: true } } : {}),
     })
     return session.url
@@ -355,6 +370,36 @@ export function createBilling({ db, stripe, settings, outbox = null, log = conso
     return session.url
   }
 
+  /** The account's running Stripe subscription (active, trialing or past due), if any. */
+  function runningFor(accountId) {
+    return db.prepare(`SELECT * FROM subscriptions WHERE account_id = ? AND status IN ('active', 'trialing', 'past_due')
+      AND refunded_at IS NULL ORDER BY last_event_at DESC LIMIT 1`).get(String(accountId)) ?? null
+  }
+
+  /**
+   * A RECURRING HTS code on a running subscription: the mirrored Stripe promotion code is attached to the
+   * subscription, so Stripe discounts its next invoices (never the one already paid). `preview` changes nothing.
+   */
+  async function applyRecurringPromo(row, code, preview = false) {
+    if (!promotions) return { ok: false, reason: 'not_found' }
+    if (!enabled) return { ok: false, reason: 'not_synced' }
+    if (row.review) return { ok: false, reason: 'account_review' }
+    const quoted = promotions.quote({ code, plan: row.plan, market: row.market, accountId: row.account_id, use: 'existing' })
+    if (!quoted.ok || preview) return quoted
+    if (promotions.hasRecurring(row.subscription_id)) return { ok: false, reason: 'already_discounted' }
+    const reserved = promotions.reserveStandalone({ code, plan: row.plan, market: row.market, accountId: row.account_id, provider: 'stripe', use: 'existing' })
+    if (!reserved.ok) return reserved
+    try {
+      await stripe.subscriptions.update(row.subscription_id, { discounts: [{ promotion_code: reserved.stripePromotion }] },
+        { idempotencyKey: `asc-apply-${reserved.redemptionId}` })
+    } catch (error) {
+      transaction(() => promotions.release(reserved.redemptionId, 'stripe update failed'))
+      throw error
+    }
+    transaction(() => promotions.redeem(reserved.redemptionId, row.subscription_id))
+    return { ...reserved, applied: true }
+  }
+
   function resync() {
     return transaction(() => {
       const ids = db.prepare("SELECT subscription_id FROM subscriptions WHERE account_id <> ''").all()
@@ -363,5 +408,5 @@ export function createBilling({ db, stripe, settings, outbox = null, log = conso
     })
   }
 
-  return { router, enabled, createCheckout, portalSession, snapshot, resync }
+  return { router, enabled, createCheckout, portalSession, snapshot, resync, runningFor, applyRecurringPromo }
 }

@@ -1,8 +1,9 @@
-"""Migrations 0015 -> 0019 on a REAL PostgreSQL (throwaway server, see tests/pg_support.py).
+"""Migrations 0015 -> 0020 on a REAL PostgreSQL (throwaway server, see tests/pg_support.py).
 
 * fresh install up to head, with the expected tables, columns and indexes;
-* the chain step by step from 0014 (the version in production) to 0019, every downgrade back, and up again;
+* the chain step by step from 0014 (the version in production) to 0020, every downgrade back, and up again;
 * a representative database at 0014 upgraded to head with its data preserved;
+* 0020 filling the benefit columns of existing entitled subscriptions and enforcing one benefit per request key;
 * 0018 refusing duplicate 'live' sessions BEFORE any change: version, schema and data intact, then success.
 
 Each scenario takes only a database URL; the tests below run them on PostgreSQL databases created and dropped per
@@ -16,9 +17,11 @@ import sqlalchemy as sa
 
 pytestmark = pytest.mark.postgres
 
-CHAIN = ["0015", "0016", "0017", "0018", "0019"]
+CHAIN = ["0015", "0016", "0017", "0018", "0019", "0020"]
+HEAD = CHAIN[-1]
 HEAD_TABLES = {"password_tokens", "account_subscriptions", "billing_events", "usage_entries", "channel_monitors",
-               "monitor_sessions", "entitlement_periods", "customer_publish_settings", "publish_units", "courtesy_grants"}
+               "monitor_sessions", "entitlement_periods", "customer_publish_settings", "publish_units", "courtesy_grants",
+               "access_benefits"}
 HEAD_COLUMNS = {
     "streamers": {"owner_id", "hts_monitoring"},
     "stream_sessions": {"base_profile"},
@@ -29,11 +32,13 @@ HEAD_COLUMNS = {
     "publications": {"owner_id"},
     "oauth_states": {"owner_id"},
     "publish_units": {"reserved_at"},
+    "account_subscriptions": {"last_entitled_until", "last_period_anchor"},
 }
 HEAD_INDEXES = {
     "stream_sessions": {"uq_stream_sessions_one_live"},
     "channel_monitors": {"uq_channel_monitors_active"},
     "publish_units": {"ix_publish_units_user_day"},
+    "access_benefits": {"ix_access_benefits_user"},
 }
 
 
@@ -69,7 +74,7 @@ def scenario_fresh_install(url: str) -> None:
     from clipper.migrate import upgrade_db
 
     upgrade_db(url)
-    assert _version(url) == "0019"
+    assert _version(url) == HEAD
     s = _inspect(url)
     assert HEAD_TABLES <= s["tables"], HEAD_TABLES - s["tables"]
     for table, cols in HEAD_COLUMNS.items():
@@ -78,7 +83,7 @@ def scenario_fresh_install(url: str) -> None:
         assert names <= set(s["indexes"][table]), (table, names - set(s["indexes"][table]))
     assert s["indexes"]["stream_sessions"]["uq_stream_sessions_one_live"]["unique"]
     upgrade_db(url)  # running it again changes nothing
-    assert _version(url) == "0019"
+    assert _version(url) == HEAD
 
 
 def scenario_chain_up_and_down(url: str) -> None:
@@ -95,7 +100,7 @@ def scenario_chain_up_and_down(url: str) -> None:
     assert not ({"channel_monitors", "publish_units", "account_subscriptions"} & s["tables"])
     assert "owner_id" not in s["columns"]["publish_accounts"]
     upgrade_db(url)
-    assert _version(url) == "0019"
+    assert _version(url) == HEAD
 
 
 def seed_0014(url: str) -> dict:
@@ -125,7 +130,7 @@ def scenario_representative_upgrade(url: str) -> None:
     upgrade_db(url, "0014")
     counts = seed_0014(url)
     upgrade_db(url)
-    assert _version(url) == "0019"
+    assert _version(url) == HEAD
     eng = sa.create_engine(url)
     with eng.connect() as c:
         for table, n in counts.items():
@@ -160,8 +165,48 @@ def scenario_duplicate_lives_refused(url: str) -> None:
         c.execute(sa.text("UPDATE stream_sessions SET status = 'ended' WHERE id = 103"))  # the operator ends the duplicate
     eng.dispose()
     upgrade_db(url)
-    assert _version(url) == "0019"
+    assert _version(url) == HEAD
     assert _inspect(url)["indexes"]["stream_sessions"]["uq_stream_sessions_one_live"]["unique"]
+
+
+def scenario_benefits_0020(url: str) -> None:
+    """0019 -> 0020 with real subscriptions: entitled rows get their benefit columns, others stay empty; request keys
+    are unique; the downgrade removes only what 0020 added."""
+    from clipper.migrate import upgrade_db
+
+    upgrade_db(url, "0019")
+    eng = sa.create_engine(url)
+    with eng.begin() as c:
+        c.execute(sa.text("INSERT INTO users (id, email, password_hash, role, active, session_version, created_at) "
+                          "VALUES (5, 'cliente@example.test', 'x', 'customer', :a, 0, CURRENT_TIMESTAMP)"), {"a": True})
+        for sid, status, until in ((1, "active", "2030-01-31 00:00:00"), (2, "ended", None)):
+            c.execute(sa.text("INSERT INTO account_subscriptions (id, user_id, provider, subscription_ref, plan, market, "
+                              "financial_status, review, access_status, access_until, period_start, period_end, renews_at, "
+                              "cancel_at_period_end, limits, manage, renewal, payments, last_seq, updated_at) VALUES (:i, 5, "
+                              "'stripe', :r, 'creator', 'US', :s, '', :s, :u, '2030-01-01 00:00:00', NULL, NULL, :f, "
+                              "CAST('{}' AS JSON), '', NULL, CAST('[]' AS JSON), 1, CURRENT_TIMESTAMP)"),
+                      {"i": sid, "r": f"sub_{sid}", "s": status, "u": until, "f": False})
+    upgrade_db(url, "0020")
+    with eng.begin() as c:
+        rows = dict(c.execute(sa.text("SELECT id, last_entitled_until IS NOT NULL FROM account_subscriptions")).all())
+        assert rows == {1: True, 2: False}, rows
+        assert str(c.execute(sa.text("SELECT last_period_anchor FROM account_subscriptions WHERE id = 1")).scalar()).startswith("2030-01-01")
+        insert = ("INSERT INTO access_benefits (user_id, kind, days, plan, starts_at, reason, request_key, created_by, created_at) "
+                  "VALUES (5, 'credit', 3, '', CURRENT_TIMESTAMP, 'queda', 'k-0123456789abcdef', 'admin', CURRENT_TIMESTAMP)")
+        c.execute(sa.text(insert))
+    with pytest.raises(sa.exc.IntegrityError):
+        with eng.begin() as c:
+            c.execute(sa.text(insert))
+    with pytest.raises(sa.exc.IntegrityError):
+        with eng.begin() as c:
+            c.execute(sa.text(insert.replace("'credit', 3", "'credit', 999").replace("k-0123", "k-9999")))
+    eng.dispose()
+    _downgrade(url, "0019")
+    s = _inspect(url)
+    assert "access_benefits" not in s["tables"] and "last_entitled_until" not in s["columns"]["account_subscriptions"]
+    assert "courtesy_grants" in s["tables"], "only 0020 is removed"
+    upgrade_db(url)
+    assert _version(url) == HEAD
 
 
 # ---------------------------------------------------------------- PostgreSQL tests
@@ -191,3 +236,7 @@ def test_representative_0014_database_upgrades_postgres(pgdb):
 
 def test_duplicate_lives_refused_without_corruption_postgres(pgdb):
     scenario_duplicate_lives_refused(pgdb)
+
+
+def test_benefits_0020_postgres(pgdb):
+    scenario_benefits_0020(pgdb)

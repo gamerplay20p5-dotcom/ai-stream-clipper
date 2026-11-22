@@ -516,6 +516,8 @@ export type AccountSubscription = {
 };
 export type AccountState = {
   entitled: boolean; subscription: AccountSubscription | null; limits: AccountLimits | null; checkout_available: boolean;
+  /** HTS benefits in effect (access credit days, temporary upgrade); never a change to payments */
+  benefits: { access_until: string | null; credit_days: number; paid_plan: string; upgrade: { plan: string; until: string | null } | null } | null;
   usage: { channels: number; storage_bytes: number; live_sessions: number; live_seconds: number; exports_4k: number };
 };
 export type AccountPreset = "balanced" | "best" | "humor" | "highlights" | "intense";

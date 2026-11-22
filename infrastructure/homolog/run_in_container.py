@@ -66,7 +66,8 @@ def main() -> int:
         step("postgres-concurrency-migrations", pytest + ["-m", "postgres", f"--junitxml={OUT}/postgres-concurrency-migrations.xml",
                                                           "../tests/test_postgres_shared_lives.py",
                                                           "../tests/test_postgres_customer_publishing.py",
-                                                          "../tests/test_postgres_migrations.py"],
+                                                          "../tests/test_postgres_migrations.py",
+                                                          "../tests/test_postgres_benefits.py"],
              src / "backend", {"ASC_REQUIRE_PG": "1", "ASC_TEST_PG_URL": PG_URL})
     else:
         for name in ("backend-postgres-suite", "postgres-concurrency-migrations"):
