@@ -42,20 +42,30 @@ contêiner `asc-api` é recriado (`sudo asc-ctl compose up --gpu api`).
 
 ## Publicação em HTTPS (fora do projeto `asc`)
 
-1. **DNS:** na Cloudflare, crie um registro `A` de `www.clipper` (zona `howto.software`) para `136.34.124.155`, em
-   modo **DNS only**, igual ao `clipper.howto.software`.
-2. **Proxy do servidor (`caddy-proxy` do Hank):** um site novo que encaminha para `192.168.1.210:8790`. O certificado
-   Let's Encrypt é emitido automaticamente.
+1. **DNS:** `getclipper.howto.software` está na Cloudflare, com proxy ligado.
+2. **Proxy do servidor (`caddy-proxy` do Hank):** o upstream precisa ser exatamente `http://192.168.1.210:8790`.
+   - É **HTTP simples**, diferente do painel, que usa HTTPS na 8780.
+   - Não serve `localhost`, `127.0.0.1` nem `asc-commercial`, porque o Caddy roda em outro contêiner e outra rede.
+
    ```
-   www.clipper.howto.software {
-       reverse_proxy 192.168.1.210:8790
-       log {
-           # o webhook da InfinitePay leva o token na URL: fora dos logs de acesso
-           output discard
-       }
+   getclipper.howto.software {
+       reverse_proxy http://192.168.1.210:8790
    }
    ```
-   Se o proxy mantiver logs de acesso para os outros sites, exclua pelo menos `/api/infinitepay/webhook/*`.
+   O webhook da InfinitePay leva o token na URL: tire `/api/infinitepay/webhook/*` dos logs de acesso.
+3. **Cloudflare com proxy:** a Cloudflare bloqueia chamadas de servidores com 403 (a verificação de navegador e de
+   bots). Os webhooks da Stripe e da InfinitePay seriam bloqueados. Antes de ligar os pagamentos, faça uma destas
+   duas coisas:
+   - crie uma regra de exceção (WAF, "Skip") para `/api/stripe/webhook` e `/api/infinitepay/webhook/*`; ou
+   - deixe o registro em **DNS only**, como o painel.
+
+   O SSL/TLS da zona deve estar em **Full (strict)**.
+
+**Diagnóstico de 22/11/2026:**
+- O site responde 200 em `192.168.1.210:8790`.
+- O Caddy devolve 502 para `getclipper`, e **nenhuma conexão do Caddy chega ao contêiner**: os testes de dentro dele
+  só mostram o healthcheck e as requisições de controle. Ou seja, o upstream configurado no Caddy não é
+  `192.168.1.210:8790`.
 
 ## English
 
