@@ -20,6 +20,8 @@ const { app, markets, runRenewals, dispatch, outbox, promotions, close } = creat
   databasePath: resolve(root, process.env.COMMERCIAL_DB ?? 'data/waitlist.sqlite'),
   dist: resolve(root, 'dist'),
   trustProxy: process.env.COMMERCIAL_TRUST_PROXY,
+  // The waitlist collects e-mails: open only with COMMERCIAL_WAITLIST_OPEN=true (after privacy policy and terms)
+  waitlistOpen: process.env.COMMERCIAL_WAITLIST_OPEN === 'true',
   stripe,
   billing,
   infinitepay,
@@ -44,7 +46,7 @@ watch.unref()
 const port = Number(process.env.COMMERCIAL_PORT ?? 8790)
 const host = process.env.COMMERCIAL_HOST ?? '127.0.0.1'
 const server = app.listen(port, host, () => {
-  console.log(`Commercial site listening on http://${host}:${port} (checkout US ${markets.US ? 'on' : 'off'}, BR ${markets.BR ? 'on' : 'off'})`)
+  console.log(`Commercial site listening on http://${host}:${port} (checkout US ${markets.US ? 'on' : 'off'}, BR ${markets.BR ? 'on' : 'off'}, waitlist ${process.env.COMMERCIAL_WAITLIST_OPEN === 'true' ? 'open' : 'closed'})`)
   // Names only, never values: BR checkout stays off until every required InfinitePay setting is present
   if (!markets.BR) console.log(`InfinitePay checkout off, missing: ${missingInfinitePaySettings(infinitepay).join(', ')}`)
   if (!link.secret || !link.mainUrl) console.log('Checkout off: set ASC_MAIN_API_URL and ASC_BILLING_SECRET (32+ chars) to link payments to accounts')
