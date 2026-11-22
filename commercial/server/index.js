@@ -51,7 +51,8 @@ const server = app.listen(port, host, () => {
   const state = market => markets[market] ? 'on' : ready[market] ? 'ready, closed' : 'off'
   console.log(`Commercial site listening on http://${host}:${port} (checkout US ${state('US')}, BR ${state('BR')}, payments ${process.env.COMMERCIAL_PAYMENTS_OPEN === 'true' ? 'open' : 'closed'}, waitlist ${process.env.COMMERCIAL_WAITLIST_OPEN === 'true' ? 'open' : 'closed'})`)
   // Names only, never values: BR checkout stays off until every required InfinitePay setting is present
-  if (!ready.BR) console.log(`InfinitePay checkout off, missing: ${missingInfinitePaySettings(infinitepay).join(', ')}`)
+  const missingIp = missingInfinitePaySettings(infinitepay)
+  if (missingIp.length) console.log(`InfinitePay checkout off, missing: ${missingIp.join(', ')}`)
   if (!link.secret || !link.mainUrl) console.log('Checkout off: set ASC_MAIN_API_URL and ASC_BILLING_SECRET (32+ chars) to link payments to accounts')
 })
 
