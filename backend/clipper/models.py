@@ -791,6 +791,12 @@ class AccountSubscription(Base):
     payments: Mapped[list] = mapped_column(JSON, default=list)
     last_seq: Mapped[int] = mapped_column(BigInteger, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Last ``access_until`` received while the subscription was entitled (active/grace). Kept when a later snapshot
+    # ends it, so HTS access credits can still run after a natural end (never after a refund or a suspension).
+    last_entitled_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Anchor of the period that was entitled then (period start, end or access date): keeps the same period key, so a
+    # credit running after the natural end never resets the quotas consumed in that period
+    last_period_anchor: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class BillingEvent(Base):
@@ -918,6 +924,34 @@ class CourtesyGrant(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     ends_at: Mapped[datetime] = mapped_column(DateTime)
     reason: Mapped[str] = mapped_column(String(300))
+    created_by: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_by: Mapped[str] = mapped_column(String(255), default="")
+    revoke_reason: Mapped[str] = mapped_column(String(300), default="")
+
+
+class AccessBenefit(Base):
+    """A benefit the HTS gives on top of a subscription, never touching the money (``benefits.py``):
+
+    * ``credit``: ``days`` of access added after the paid access ends (compensation for downtime). The next charge
+      is NOT postponed; the credit moves with every renewal, so it is never lost by renewing.
+    * ``upgrade``: the limits of a higher ``plan`` between ``starts_at`` and ``ends_at`` (e.g. Creator gets Pro for 7
+      days). Consumption stays in the paid period: quotas are not reset.
+
+    ``request_key`` makes a repeated click return the same benefit. Revocation keeps the row (audited history)."""
+
+    __tablename__ = "access_benefits"
+    __table_args__ = (Index("ix_access_benefits_user", "user_id", "kind"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(String(10))  # credit | upgrade
+    days: Mapped[int] = mapped_column(Integer, default=0)
+    plan: Mapped[str] = mapped_column(String(20), default="")
+    starts_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reason: Mapped[str] = mapped_column(String(300))
+    request_key: Mapped[str] = mapped_column(String(64), unique=True)
     created_by: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

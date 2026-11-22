@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { api } from "../api";
 import { Empty, ErrorNote, PageHeader, Skeleton, Status } from "../components/ui";
 import { locale, t } from "../i18n";
+import { AccessSummary, CreditSection, HistorySection, PromotionsPanel, UpgradeSection, type Access, type Benefit } from "./CustomerCommercial";
 
 type Plan = { plan: string; provider: string; status: string; until: string | null; courtesy: boolean; review: string } | null;
 type Row = { id: number; email: string; active: boolean; plan: Plan; destinations: number;
@@ -11,7 +12,7 @@ type Row = { id: number; email: string; active: boolean; plan: Plan; destination
   automation: { enabled: boolean; blocked: boolean }; failures_24h: number };
 type Grant = { id: number; plan: string; ends_at: string; reason: string; created_by: string; active: boolean; revoke_reason: string };
 type Detail = {
-  id: number; email: string; plan: Plan; grants: Grant[];
+  id: number; email: string; plan: Plan; grants: Grant[]; access: Access; benefits: Benefit[];
   subscriptions: { provider: string; plan: string; access_status: string; financial_status: string; review: string; until: string | null }[];
   usage: { channels: number; live_seconds: number; storage_bytes: number }; publishing_today: { used: number; limit: number };
   automation: { enabled: boolean; terms_accepted: boolean; timezone: string | null; blocked_reason: string; blocked_by: string };
@@ -37,7 +38,10 @@ function PlanTag({ plan }: { plan: Plan }) {
 function CustomerDetail({ uid }: { uid: number }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin-customer", uid], queryFn: () => api.get<Detail>(`/api/admin/customers/${uid}`) });
-  const refresh = () => { void qc.invalidateQueries({ queryKey: ["admin-customer", uid] }); void qc.invalidateQueries({ queryKey: ["admin-customers"] }); };
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ["admin-customer", uid] }); void qc.invalidateQueries({ queryKey: ["admin-customers"] });
+    void qc.invalidateQueries({ queryKey: ["admin-customer-history", uid] });
+  };
   const [grant, setGrant] = useState({ plan: "creator", days: 14, reason: "" });
   const [blockReason, setBlockReason] = useState("");
   const give = useMutation({ mutationFn: () => api.post(`/api/admin/customers/${uid}/grants`, grant), onSuccess: () => { setGrant({ ...grant, reason: "" }); refresh(); } });
@@ -53,6 +57,12 @@ function CustomerDetail({ uid }: { uid: number }) {
         <h2 className="display text-lg">{d.email}</h2>
         <PlanTag plan={d.plan} />
       </div>
+      <section className="grid gap-2" aria-label={t("Plano e acesso")}>
+        <h3 className="text-sm font-semibold">{t("Plano e acesso")}</h3>
+        <AccessSummary access={d.access} />
+      </section>
+      <CreditSection uid={uid} items={d.benefits} onDone={refresh} />
+      <UpgradeSection uid={uid} items={d.benefits} access={d.access} onDone={refresh} />
       <section className="grid gap-2" aria-label={t("Assinaturas")}>
         <h3 className="text-sm font-semibold">{t("Assinaturas e cortesias")}</h3>
         <ul className="text-sm">{d.subscriptions.map((s, i) => (
@@ -110,6 +120,7 @@ function CustomerDetail({ uid }: { uid: number }) {
           </table>
         )}
       </section>
+      <HistorySection uid={uid} />
       <ErrorNote error={give.error ?? revoke.error ?? block.error ?? unblock.error} />
     </div>
   );
@@ -184,7 +195,8 @@ function CapacityPanel() {
   );
 }
 
-/** HTS internal commercial panel: customers, plans, courtesy, automation blocks, channels and capacity. Admin only. */
+/** HTS internal commercial panel: customers, plans, access credits, temporary upgrades, courtesy, history, promotion
+ * codes, automation blocks, channels and capacity. Admin only. */
 export default function Customers() {
   const list = useQuery({ queryKey: ["admin-customers"], queryFn: () => api.get<Row[]>("/api/admin/customers") });
   const [selected, setSelected] = useState<number | null>(null);
@@ -216,6 +228,7 @@ export default function Customers() {
           </div>
         )}
         {selected && <CustomerDetail uid={selected} />}
+        <PromotionsPanel />
         <Channels />
         <CapacityPanel />
       </div>

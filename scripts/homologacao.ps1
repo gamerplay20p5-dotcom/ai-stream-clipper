@@ -108,7 +108,7 @@ try {
   Invoke-Step "backend-sqlite" $backend $VPy @("-m", "pytest", "-q", "-m", "not models and not postgres", "-p", "no:cacheprovider", "--junitxml=$Run\backend-sqlite.xml")
   if ($HaveDocker) {
     Invoke-Step "backend-postgres-suite" $backend $VPy @("-m", "pytest", "-q", "-m", "not models and not postgres", "-p", "no:cacheprovider", "--junitxml=$Run\backend-postgres-suite.xml") @{ ASC_TEST_SUITE_DB = "postgres"; ASC_TEST_PG_URL = $PgUrl }
-    Invoke-Step "postgres-concurrency-migrations" $backend $VPy @("-m", "pytest", "-q", "-m", "postgres", "-p", "no:cacheprovider", "--junitxml=$Run\postgres-concurrency-migrations.xml", "../tests/test_postgres_shared_lives.py", "../tests/test_postgres_customer_publishing.py", "../tests/test_postgres_migrations.py") @{ ASC_REQUIRE_PG = "1"; ASC_TEST_PG_URL = $PgUrl }
+    Invoke-Step "postgres-concurrency-migrations" $backend $VPy @("-m", "pytest", "-q", "-m", "postgres", "-p", "no:cacheprovider", "--junitxml=$Run\postgres-concurrency-migrations.xml", "../tests/test_postgres_shared_lives.py", "../tests/test_postgres_customer_publishing.py", "../tests/test_postgres_migrations.py", "../tests/test_postgres_benefits.py") @{ ASC_REQUIRE_PG = "1"; ASC_TEST_PG_URL = $PgUrl }
   } else {
     Skip-Step "backend-postgres-suite" "ASC_TEST_SUITE_DB=postgres pytest" "Docker indisponível nesta máquina"
     Skip-Step "postgres-concurrency-migrations" "ASC_REQUIRE_PG=1 pytest -m postgres" "Docker indisponível nesta máquina"

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CreditCard, ExternalLink, Film, KeyRound, LogOut, Radio, Send, Trash2 } from "lucide-react";
+import { CreditCard, ExternalLink, Film, KeyRound, LogOut, Radio, Send, TicketPercent, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type AccountChannel, type AccountPreset, type AccountState } from "../api";
@@ -37,13 +37,32 @@ function Usage({ label, used, total, unit }: { label: string; used: number; tota
   );
 }
 
+type Quote = { code: string; list: number; discount: number; final: number; currency: string; freeDays: number };
+const price = (minor: number, currency: string) => new Intl.NumberFormat(locale, { style: "currency", currency: currency.toUpperCase() }).format(minor / 100);
+
 function Plans({ available }: { available: boolean }) {
+  const qc = useQueryClient();
   const [params] = useSearchParams();
   const [market, setMarket] = useState<"BR" | "US">(params.get("market") === "US" ? "US" : "BR");
   const preselected = params.get("plan");
+  const [code, setCode] = useState("");
+  const [quotes, setQuotes] = useState<Record<string, Quote | string>>({});
+  // Prices with a code always come from the server; the browser only shows them
+  const check = useMutation({
+    mutationFn: async () => {
+      const out: Record<string, Quote | string> = {};
+      for (const plan of ["basic", "creator", "pro"]) {
+        try { out[plan] = await api.post<Quote>("/api/account/promo-quote", { plan, market, promo_code: code.trim() }); }
+        catch (e) { out[plan] = e instanceof Error ? e.message : String(e); }
+      }
+      return out;
+    },
+    onSuccess: setQuotes,
+  });
   const start = useMutation({
-    mutationFn: (plan: string) => api.post<{ url: string }>("/api/account/checkout", { plan, market, language: locale.startsWith("pt") ? "pt-BR" : "en" }),
-    onSuccess: (r) => window.location.assign(r.url),
+    mutationFn: (plan: string) => api.post<{ url?: string; free?: boolean }>("/api/account/checkout", {
+      plan, market, language: locale.startsWith("pt") ? "pt-BR" : "en", ...(code.trim() ? { promo_code: code.trim() } : {}) }),
+    onSuccess: (r) => { if (r.url) window.location.assign(r.url); else void qc.invalidateQueries({ queryKey: ["account"] }); },
   });
   return (
     <section className="account-card" aria-labelledby="plans-title">
@@ -56,16 +75,70 @@ function Plans({ available }: { available: boolean }) {
         <button type="button" aria-pressed={market === "US"} onClick={() => setMarket("US")}>USD</button>
       </div>
       {!available && <Notice tone="danger">{t("Os pagamentos estão indisponíveis no momento. Tente novamente mais tarde.")}</Notice>}
+      {available && (
+        <form className="mt-3 flex flex-wrap items-end gap-2" onSubmit={(e: FormEvent) => { e.preventDefault(); if (code.trim()) check.mutate(); }}>
+          <label className="label">{t("Cupom")}
+            <input className="field w-40 font-mono uppercase" value={code} maxLength={32} pattern="[A-Za-z0-9]{3,32}"
+              onChange={(e) => { setCode(e.target.value); setQuotes({}); }} />
+          </label>
+          <button className="btn-quiet" disabled={!code.trim() || check.isPending}><TicketPercent size={15} aria-hidden />{t("Aplicar cupom")}</button>
+          <p className="w-full text-xs text-ink-muted">{t("Cupons de assinatura nova valem só para a primeira cobrança; as renovações seguem o preço normal.")}</p>
+        </form>
+      )}
       <div className="account-plans">
-        {(["basic", "creator", "pro"] as const).map((plan) => (
-          <button key={plan} type="button" className={plan === preselected ? "btn-take" : "btn-quiet"} disabled={!available || start.isPending}
-            onClick={() => start.mutate(plan)}>
-            <CreditCard size={15} aria-hidden />{t("Assinar o {plan}", { plan: PLAN_NAMES[plan] })}
-          </button>
-        ))}
+        {(["basic", "creator", "pro"] as const).map((plan) => {
+          const q = quotes[plan];
+          return (
+            <div key={plan} className="grid gap-1">
+              <button type="button" className={plan === preselected ? "btn-take" : "btn-quiet"} disabled={!available || start.isPending || typeof q === "string"}
+                onClick={() => start.mutate(plan)}>
+                <CreditCard size={15} aria-hidden />{t("Assinar o {plan}", { plan: PLAN_NAMES[plan] })}
+              </button>
+              {q && typeof q !== "string" && (
+                <span className="text-xs">{q.freeDays ? t("{n} dias grátis, depois {p} por mês", { n: String(q.freeDays), p: price(q.list, q.currency) })
+                  : q.final === 0 ? t("Primeiro mês grátis, depois {p} por mês", { p: price(q.list, q.currency) })
+                    : t("Primeiro mês por {final} (de {list}), depois {list} por mês", { final: price(q.final, q.currency), list: price(q.list, q.currency) })}</span>
+              )}
+              {typeof q === "string" && <span className="text-xs text-tally">{q}</span>}
+            </div>
+          );
+        })}
       </div>
-      <ErrorNote error={start.error} />
+      {start.data?.free && <Notice tone="success">{t("Cupom aplicado: o acesso foi liberado sem cobrança. A assinatura aparece aqui em instantes.")}</Notice>}
+      <ErrorNote error={start.error ?? check.error} />
     </section>
+  );
+}
+
+/** A recurring HTS code on the running subscription: discount on the next renewals, never on what was already paid. */
+function RecurringCode() {
+  const qc = useQueryClient();
+  const [code, setCode] = useState("");
+  const preview = useMutation({ mutationFn: () => api.post<Quote & { duration: string; months: number | null }>("/api/account/promo-apply", { promo_code: code.trim(), preview: true }) });
+  const apply = useMutation({
+    mutationFn: () => api.post("/api/account/promo-apply", { promo_code: code.trim() }),
+    onSuccess: () => { setCode(""); preview.reset(); void qc.invalidateQueries({ queryKey: ["account"] }); },
+  });
+  const p = preview.data;
+  return (
+    <div className="mt-4 grid gap-2">
+      <form className="flex flex-wrap items-end gap-2" onSubmit={(e: FormEvent) => { e.preventDefault(); if (code.trim()) preview.mutate(); }}>
+        <label className="label">{t("Cupom para a assinatura em andamento")}
+          <input className="field w-40 font-mono uppercase" value={code} maxLength={32} pattern="[A-Za-z0-9]{3,32}" onChange={(e) => { setCode(e.target.value); preview.reset(); apply.reset(); }} />
+        </label>
+        <button className="btn-quiet" disabled={!code.trim() || preview.isPending}><TicketPercent size={15} aria-hidden />{t("Ver desconto")}</button>
+      </form>
+      {p && (
+        <div className="grid gap-2 text-sm">
+          <p>{p.duration === "forever"
+            ? t("As próximas renovações passam a custar {final} (de {list}).", { final: price(p.final, p.currency), list: price(p.list, p.currency) })
+            : t("As próximas {n} renovações passam a custar {final} (de {list}).", { n: String(p.months), final: price(p.final, p.currency), list: price(p.list, p.currency) })}</p>
+          <button type="button" className="btn-take w-fit" disabled={apply.isPending} onClick={() => apply.mutate()}>{t("Aplicar à minha assinatura")}</button>
+        </div>
+      )}
+      {apply.isSuccess && <Notice tone="success">{t("Cupom aplicado. O desconto vale a partir da próxima renovação.")}</Notice>}
+      <ErrorNote error={preview.error ?? apply.error} />
+    </div>
   );
 }
 
@@ -86,6 +159,7 @@ function Manage({ state }: { state: AccountState }) {
           <ExternalLink size={15} aria-hidden />{t("Abrir o portal do Stripe")}
         </button>
         <ErrorNote error={portal.error} />
+        {state.checkout_available && <RecurringCode />}
       </section>
     );
   }
@@ -98,6 +172,7 @@ function Manage({ state }: { state: AccountState }) {
           <CreditCard size={15} aria-hidden />{t("Pagar a renovação (link válido até {date})", { date: day(new Date(sub.renewal.valid_until * 1000).toISOString()) })}
         </a>
       )}
+      {state.checkout_available && <RecurringCode />}
     </section>
   );
 }
@@ -251,9 +326,16 @@ export default function AccountApp({ email }: { email: string }) {
                   {s.entitled
                     ? (s.subscription.status === "grace"
                       ? t("A renovação não foi paga. O acesso continua até {date}; depois disso o monitoramento para.", { date: day(s.subscription.access_until) })
-                      : t("Acesso ativo até {date}.", { date: day(s.subscription.period_end ?? s.subscription.access_until) }))
+                      : t("Acesso ativo até {date}.", { date: day(s.benefits?.credit_days ? s.benefits.access_until : (s.subscription.period_end ?? s.subscription.access_until)) }))
                     : t("Sem acesso no momento. Assine novamente para voltar a monitorar seus canais; seus cortes continuam na sua biblioteca.")}
                 </p>
+                {s.benefits && s.benefits.credit_days > 0 && (
+                  <p className="text-sm">{t("Inclui {n} dias de crédito de acesso da HTS. A cobrança segue a data normal.", { n: String(s.benefits.credit_days) })}</p>
+                )}
+                {s.benefits?.upgrade && (
+                  <p className="text-sm">{t("Upgrade temporário para o {plan} até {date}. Depois, volta ao seu plano {paid}.", {
+                    plan: PLAN_NAMES[s.benefits.upgrade.plan] ?? s.benefits.upgrade.plan, date: day(s.benefits.upgrade.until), paid: PLAN_NAMES[s.benefits.paid_plan] ?? s.benefits.paid_plan })}</p>
+                )}
               </section>
             )}
             {s.entitled && limits && (

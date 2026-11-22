@@ -15,9 +15,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import courtesy, customer_publish as cp, entitlements
+from .. import benefits, courtesy, customer_publish as cp, entitlements
 from ..db import get_db, utcnow
-from ..models import (AccountSubscription, ChannelMonitor, Clip, ClipShare, CourtesyGrant, Job, MonitorSession, Publication,
+from ..models import (AccountSubscription, AuditLog, ChannelMonitor, Clip, ClipShare, CourtesyGrant, Job, MonitorSession, Publication,
                       PublishAccount, StreamSession, Streamer, User)
 from ..publish.service import PLATFORM_NAME
 from .deps import CurrentUser, audit, require_admin
@@ -80,6 +80,8 @@ def customer(uid: int, db: Session = Depends(get_db), _: CurrentUser = Depends(r
                           for r in subs],
         "grants": [courtesy.view(g) for g in db.scalars(select(CourtesyGrant).where(CourtesyGrant.user_id == uid)
                                                          .order_by(CourtesyGrant.id.desc()))],
+        # paid plan, benefit in effect and dates; credits and temporary upgrades (history kept, revoked included)
+        "access": benefits.summary(db, uid), "benefits": benefits.history(db, uid),
         "usage": entitlements.usage_summary(db, uid), "publishing_today": cp.summary(db, uid),
         "automation": {"enabled": bool(s and s.enabled), "terms_accepted": bool(s and s.terms_accepted_at),
                        "timezone": s.timezone if s else None, "blocked_reason": s.blocked_reason if s else "",
@@ -159,6 +161,94 @@ def revoke(uid: int, gid: int, body: RevokeIn, request: Request, db: Session = D
     audit(db, request, admin, "admin.courtesy_revoke", f"user:{uid}", {"grant": gid, "reason": body.reason})
     db.commit()
     return courtesy.view(g)
+
+
+# ------------------------------------------------------------------ access credits and temporary upgrades
+REQUEST_KEY = r"^[A-Za-z0-9_-]{16,64}$"
+
+
+class CreditPreviewIn(BaseModel):
+    days: int = Field(..., ge=1, le=benefits.MAX_CREDIT_DAYS)
+
+
+class CreditIn(CreditPreviewIn):
+    reason: str = Field(..., min_length=5, max_length=300)
+    request_key: str = Field(..., pattern=REQUEST_KEY)
+
+
+class UpgradeIn(BaseModel):
+    plan: str = Field(..., pattern="^(creator|pro)$")
+    days: int = Field(..., ge=1, le=benefits.MAX_UPGRADE_DAYS)
+    reason: str = Field(..., min_length=5, max_length=300)
+    request_key: str = Field(..., pattern=REQUEST_KEY)
+
+
+@router.post("/customers/{uid}/credits/preview")
+def credit_preview(uid: int, body: CreditPreviewIn, db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
+    """Resulting access before confirming. Changes nothing."""
+    _customer(db, uid)
+    try:
+        return benefits.preview_credit(db, uid, body.days)
+    except benefits.BenefitError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@router.post("/customers/{uid}/credits", status_code=201)
+def credit(uid: int, body: CreditIn, request: Request, db: Session = Depends(get_db), admin: CurrentUser = Depends(require_admin)):
+    """Access credit (compensation days). Never touches payments; the next charge keeps its date."""
+    _customer(db, uid)
+    try:
+        row, created = benefits.add_credit(db, user_id=uid, days=body.days, reason=body.reason,
+                                           request_key=body.request_key, admin=admin.email)
+    except benefits.BenefitError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if created:
+        audit(db, request, admin, "admin.access_credit", f"user:{uid}", {"benefit": row.id, "days": row.days, "reason": row.reason})
+    db.commit()
+    return {**benefits.view(row), "duplicate": not created, "access": benefits.summary(db, uid)}
+
+
+@router.post("/customers/{uid}/upgrades", status_code=201)
+def upgrade(uid: int, body: UpgradeIn, request: Request, db: Session = Depends(get_db), admin: CurrentUser = Depends(require_admin)):
+    """Temporary upgrade: a higher plan's limits for a few days, then the paid plan again. Same period, same price."""
+    _customer(db, uid)
+    try:
+        row, created = benefits.add_upgrade(db, user_id=uid, plan=body.plan, days=body.days, reason=body.reason,
+                                            request_key=body.request_key, admin=admin.email)
+    except benefits.BenefitError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if created:
+        audit(db, request, admin, "admin.temporary_upgrade", f"user:{uid}",
+              {"benefit": row.id, "plan": row.plan, "days": row.days, "reason": row.reason})
+    db.commit()
+    return {**benefits.view(row), "duplicate": not created, "access": benefits.summary(db, uid)}
+
+
+@router.post("/customers/{uid}/benefits/{bid}/revoke")
+def revoke_benefit(uid: int, bid: int, body: RevokeIn, request: Request, db: Session = Depends(get_db),
+                   admin: CurrentUser = Depends(require_admin)):
+    _customer(db, uid)
+    try:
+        row = benefits.revoke(db, user_id=uid, benefit_id=bid, reason=body.reason, admin=admin.email)
+    except benefits.BenefitError as exc:
+        raise HTTPException(404 if "não encontrado" in str(exc) else 422, str(exc)) from exc
+    audit(db, request, admin, "admin.benefit_revoke", f"user:{uid}", {"benefit": bid, "kind": row.kind, "reason": body.reason})
+    db.commit()
+    return benefits.view(row)
+
+
+HISTORY_ACTIONS = ("admin.courtesy_grant", "admin.courtesy_revoke", "admin.access_credit", "admin.temporary_upgrade",
+                   "admin.benefit_revoke", "admin.customer_publish_block", "admin.customer_publish_unblock")
+
+
+@router.get("/customers/{uid}/history")
+def customer_history(uid: int, db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
+    """Audited administrative changes of this customer's access (who, when, what, why)."""
+    _customer(db, uid)
+    rows = db.scalars(select(AuditLog).where(AuditLog.target == f"user:{uid}", AuditLog.action.in_(HISTORY_ACTIONS))
+                      .order_by(AuditLog.id.desc()).limit(200))
+    return [{"id": r.id, "action": r.action, "by": r.user_email, "at": _iso(r.created_at), "details": r.details or {}}
+            for r in rows]
 
 
 @router.get("/channels")

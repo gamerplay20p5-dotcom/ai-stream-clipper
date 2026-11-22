@@ -141,6 +141,9 @@ def subscription(db: Session = Depends(get_db), user: CurrentUser = Depends(cust
         "entitled": ent is not None,
         "subscription": _subscription_view(row),
         "limits": ent.limits if ent else None,
+        # HTS benefits in effect: the access date with credit days, the plan of a temporary upgrade (never payments)
+        "benefits": {"access_until": _iso(ent.until), "credit_days": ent.credit_days, "paid_plan": ent.base_plan,
+                     "upgrade": {"plan": ent.plan, "until": _iso(ent.upgrade_until)} if ent.upgrade_until else None} if ent else None,
         "usage": usage,
         "checkout_available": billing_link.configured(),
     }
@@ -150,6 +153,36 @@ class CheckoutIn(BaseModel):
     plan: str = Field(pattern="^(basic|creator|pro)$")
     market: str = Field(pattern="^(BR|US)$")
     language: str = Field("pt-BR", pattern="^(pt-BR|en)$")
+    # HTS promotion code for a NEW subscription: validated and priced by the commercial service, never here
+    promo_code: str = Field("", pattern=r"^([A-Za-z0-9]{3,32})?$")
+
+
+class PromoQuoteIn(BaseModel):
+    plan: str = Field(pattern="^(basic|creator|pro)$")
+    market: str = Field(pattern="^(BR|US)$")
+    promo_code: str = Field(pattern=r"^[A-Za-z0-9]{3,32}$")
+
+
+class PromoApplyIn(BaseModel):
+    promo_code: str = Field(pattern=r"^[A-Za-z0-9]{3,32}$")
+    preview: bool = False
+
+
+# Why a code was refused, for the customer (the commercial service answers with a reason code)
+PROMO_REASONS = {
+    "not_found": "cupom não encontrado", "inactive": "este cupom não está mais ativo", "not_started": "este cupom ainda não começou",
+    "expired": "este cupom expirou", "plan_not_eligible": "este cupom não vale para este plano",
+    "market_not_eligible": "este cupom não vale para esta moeda", "exhausted": "este cupom esgotou",
+    "account_limit": "você já usou este cupom", "account_review": "cupons indisponíveis para esta conta no momento",
+    "below_minimum": "este cupom não pode ser usado neste plano", "not_synced": "este cupom ainda não está disponível",
+    "existing_only": "este cupom é para assinaturas em andamento: aplique-o na sua assinatura ativa",
+    "new_only": "este cupom vale só para novas assinaturas", "already_discounted": "sua assinatura já tem um cupom recorrente",
+    "no_subscription": "você não tem uma assinatura em andamento para aplicar o cupom",
+}
+
+
+def _promo_error(data: dict) -> HTTPException:
+    return HTTPException(422, PROMO_REASONS.get(str(data.get("reason")), "cupom inválido"))
 
 
 def _provider_url(url: str, market: str) -> bool:
@@ -172,16 +205,58 @@ def checkout(body: CheckoutIn, request: Request, db: Session = Depends(get_db), 
         raise HTTPException(409, "você já tem uma assinatura ativa: use as opções de gerenciamento")
     try:
         status, data = billing_link.call("/internal/billing/checkout", {
-            "account_id": user.id, "email": user.email, "plan": body.plan, "market": body.market, "language": body.language})
+            "account_id": user.id, "email": user.email, "plan": body.plan, "market": body.market, "language": body.language,
+            **({"promo_code": body.promo_code.upper()} if body.promo_code else {})})
     except billing_link.BillingUnavailable as exc:
         raise HTTPException(503, "pagamentos indisponíveis no momento") from exc
+    if status == 422 and data.get("error") == "promo_invalid":
+        raise _promo_error(data)
+    details = {"plan": body.plan, "market": body.market, **({"promo_code": body.promo_code.upper()} if body.promo_code else {})}
+    if status == 201 and data.get("free") is True and body.promo_code:
+        # 100% discount or free days: the commercial service granted access without a charge; the snapshot follows
+        audit(db, request, user, "billing.checkout_free", f"user:{user.id}", details)
+        db.commit()
+        return {"free": True}
     url = str(data.get("url") or "")
     if status != 201 or not _provider_url(url, body.market):
         log.error("checkout refused by the commercial service", extra={"status": status})
         raise HTTPException(503, "pagamentos indisponíveis no momento")
-    audit(db, request, user, "billing.checkout_started", f"user:{user.id}", {"plan": body.plan, "market": body.market})
+    audit(db, request, user, "billing.checkout_started", f"user:{user.id}", details)
     db.commit()
     return {"url": url}
+
+
+@router.post("/promo-quote")
+def promo_quote(body: PromoQuoteIn, user: CurrentUser = Depends(customer_user)):
+    """Price of a NEW subscription with a code, computed by the commercial service (shown before the checkout)."""
+    try:
+        status, data = billing_link.call("/internal/billing/quote", {
+            "account_id": user.id, "plan": body.plan, "market": body.market, "promo_code": body.promo_code.upper()})
+    except billing_link.BillingUnavailable as exc:
+        raise HTTPException(503, "pagamentos indisponíveis no momento") from exc
+    if status != 200:
+        raise HTTPException(503, "pagamentos indisponíveis no momento")
+    if not data.get("ok"):
+        raise _promo_error(data)
+    return {k: data.get(k) for k in ("code", "list", "discount", "final", "currency", "freeDays", "duration", "months")}
+
+
+@router.post("/promo-apply")
+def promo_apply(body: PromoApplyIn, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(customer_user)):
+    """A RECURRING code on the customer's running subscription: discount on the next renewals (never retroactive)."""
+    try:
+        status, data = billing_link.call("/internal/billing/apply-promo", {
+            "account_id": user.id, "promo_code": body.promo_code.upper(), "preview": body.preview})
+    except billing_link.BillingUnavailable as exc:
+        raise HTTPException(503, "pagamentos indisponíveis no momento") from exc
+    if status in (404, 422) and data.get("error") == "promo_invalid":
+        raise _promo_error(data)
+    if status != 200 or not data.get("ok"):
+        raise HTTPException(503, "pagamentos indisponíveis no momento")
+    if not body.preview:
+        audit(db, request, user, "billing.promo_applied", f"user:{user.id}", {"promo_code": body.promo_code.upper()})
+        db.commit()
+    return {k: data.get(k) for k in ("code", "list", "discount", "final", "currency", "duration", "months", "applied")}
 
 
 @router.post("/portal")

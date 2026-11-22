@@ -106,7 +106,7 @@ if [ $HAVE_DOCKER -eq 1 ]; then
     "$VPY" -m pytest -q -m "not models and not postgres" -p no:cacheprovider --junitxml="$RUN/backend-postgres-suite.xml"
   step postgres-concurrency-migrations "$ROOT/backend" env ASC_REQUIRE_PG=1 ASC_TEST_PG_URL="$PG_URL" \
     "$VPY" -m pytest -q -m postgres -p no:cacheprovider --junitxml="$RUN/postgres-concurrency-migrations.xml" \
-    ../tests/test_postgres_shared_lives.py ../tests/test_postgres_customer_publishing.py ../tests/test_postgres_migrations.py
+    ../tests/test_postgres_shared_lives.py ../tests/test_postgres_customer_publishing.py ../tests/test_postgres_migrations.py ../tests/test_postgres_benefits.py
 else
   skip backend-postgres-suite "ASC_TEST_SUITE_DB=postgres pytest" "Docker indisponível nesta máquina"
   skip postgres-concurrency-migrations "ASC_REQUIRE_PG=1 pytest -m postgres" "Docker indisponível nesta máquina"

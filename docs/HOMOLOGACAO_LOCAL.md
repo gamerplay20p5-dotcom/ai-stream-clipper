@@ -128,7 +128,8 @@ powershell -ExecutionPolicy Bypass -File scripts\homologacao.ps1 -Python C:\cami
   - a suíte inteira sobre PostgreSQL;
   - `test_postgres_shared_lives.py` (8 cenários);
   - `test_postgres_customer_publishing.py` (2);
-  - `test_postgres_migrations.py` (4).
+  - `test_postgres_migrations.py` (5, incluindo a 0020);
+  - `test_postgres_benefits.py` (3: mesma chave em 10 conexões, upgrades simultâneos, crédito e renovação juntos).
   - O código dos 4 cenários de migração foi autoconferido num SQLite descartável, só para achar erros no próprio teste. **Isso não conta como homologação.**
 - **Simulado:** YouTube, Instagram, TikTok e Facebook (APIs falsas e `httpx.MockTransport`), Stripe e InfinitePay (mocks e webhooks assinados localmente).
 - **Não homologado:** PostgreSQL real, publicação real em qualquer rede, OAuth real, pagamentos reais, deploy e migração em produção.

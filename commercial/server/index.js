@@ -16,7 +16,7 @@ const stripe = billing.secretKey ? new Stripe(billing.secretKey, { maxNetworkRet
 const infinitepay = infinitePaySettings()
 // Signed link to the main backend: checkout requests in, entitlement snapshots out
 const link = outboxSettings()
-const { app, markets, runRenewals, dispatch, outbox, close } = createApp({
+const { app, markets, runRenewals, dispatch, outbox, promotions, close } = createApp({
   databasePath: resolve(root, process.env.COMMERCIAL_DB ?? 'data/waitlist.sqlite'),
   dist: resolve(root, 'dist'),
   trustProxy: process.env.COMMERCIAL_TRUST_PROXY,
@@ -29,7 +29,8 @@ const { app, markets, runRenewals, dispatch, outbox, close } = createApp({
 })
 
 // InfinitePay has no recurring billing: renewal links and expirations are handled here, hourly
-const renew = () => runRenewals().then(() => dispatch()).catch(error => console.error('Renewal run failed', error.code ?? error.name))
+// (also releases promotion uses of Stripe checkouts that expired without paying)
+const renew = () => runRenewals().then(() => { promotions.sweep() }).then(() => dispatch()).catch(error => console.error('Renewal run failed', error.code ?? error.name))
 const renewals = setInterval(renew, 60 * 60 * 1000)
 renewals.unref()
 renew()

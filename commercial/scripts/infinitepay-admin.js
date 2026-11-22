@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { createInfinitePay, infinitePayClient, infinitePaySettings } from '../server/infinitepay.js'
 import { createOutbox } from '../server/outbox.js'
+import { createPromotions } from '../server/promotions.js'
 
 const [command, target] = process.argv.slice(2)
 const flag = name => { const index = process.argv.indexOf(`--${name}`); return index > 0 ? process.argv[index + 1] ?? '' : undefined }
@@ -20,7 +21,8 @@ const settings = infinitePaySettings()
 const request = command === 'reconcile' && settings.apiKey ? infinitePayClient(settings) : null
 // Snapshots go to the outbox; the running server delivers them to the main backend (access follows the refund)
 const outbox = createOutbox({ db })
-const infinite = createInfinitePay({ db, settings, request, outbox })
+// promotions: a recorded refund keeps the promotion use counted (same rules as the server)
+const infinite = createInfinitePay({ db, settings, request, outbox, promotions: createPromotions({ db }) })
 
 try {
   if (command === 'refund' && target) {

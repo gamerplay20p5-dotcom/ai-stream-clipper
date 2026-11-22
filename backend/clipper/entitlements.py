@@ -18,14 +18,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .db import utcnow
-from .models import (AccountSubscription, BillingEvent, ChannelMonitor, Clip, ClipShare, EntitlementPeriod, MonitorSession,
+from .models import (AccessBenefit, AccountSubscription, BillingEvent, ChannelMonitor, Clip, ClipShare, EntitlementPeriod, MonitorSession,
                      Segment, StreamSession, Streamer, UsageEntry, User)
 
 log = logging.getLogger(__name__)
@@ -117,6 +117,14 @@ def apply_snapshot(db: Session, payload: dict) -> str:
         row.payments = [p for p in (payload.get("payments") or []) if isinstance(p, dict)][:12]
         row.last_seq = seq
         row.updated_at = utcnow()
+        if row.access_status in ENTITLED and row.access_until is not None:
+            # what an HTS access credit extends after a natural end (a shorter date after a refund lowers it too)
+            row.last_entitled_until = row.access_until
+            row.last_period_anchor = row.period_start or row.period_end or row.access_until
+        elif row.last_entitled_until is not None and row.last_entitled_until > row.updated_at:
+            # ended before the date it had (immediate cancellation, expiry): access stopped NOW, so a credit can
+            # never give back the rest of that period
+            row.last_entitled_until = row.updated_at
         outcome = "applied"
     try:
         with db.begin_nested():
@@ -147,26 +155,87 @@ class Entitlement:
     period_key: str
     limits: dict
     review: str
+    base_plan: str = ""  # the subscription's own plan (paid or courtesy), without any temporary upgrade
+    credit_days: int = 0  # HTS access credit days counted in ``until``
+    upgrade_until: datetime | None = None  # end of the temporary upgrade in effect, if any
 
     def feature(self, name: str) -> bool:
         return bool((self.limits.get("features") or {}).get(name))
 
 
-def current(db: Session, user_id: int, now: datetime | None = None) -> Entitlement | None:
-    """The account's entitlement right now: the best active/grace subscription whose access has not ended."""
+# A paid subscription that ended this way may still run its HTS access credits (never after a refund, a chargeback,
+# a suspension, an administrative cancellation or an open review)
+NATURAL_END = {"stripe": {"canceled"}, "infinitepay": {"expired"}}
+
+
+def _refunded(row: AccountSubscription) -> bool:
+    return (any(isinstance(p, dict) and p.get("status") == "refunded" for p in (row.payments or []))
+            or any(word in (row.financial_status or "") for word in ("refund", "chargeback"))
+            or row.review == "dispute_lost")
+
+
+def _base_until(row: AccountSubscription) -> datetime | None:
+    """Until when this subscription's own access goes (before credits), or None when it grants nothing."""
+    if row.access_status in ENTITLED and row.access_until is not None:
+        return row.access_until
+    if (row.provider in NATURAL_END and row.access_status == "ended" and row.financial_status in NATURAL_END[row.provider]
+            and not row.review and not _refunded(row)):
+        return row.last_entitled_until
+    return None
+
+
+def credit_days(db: Session, user_id: int) -> int:
+    return int(db.scalar(select(func.coalesce(func.sum(AccessBenefit.days), 0)).where(
+        AccessBenefit.user_id == user_id, AccessBenefit.kind == "credit", AccessBenefit.revoked_at.is_(None))) or 0)
+
+
+def active_upgrade(db: Session, user_id: int, now: datetime | None = None) -> AccessBenefit | None:
     now = now or utcnow()
-    rows = db.scalars(select(AccountSubscription).where(AccountSubscription.user_id == user_id,
-                                                       AccountSubscription.access_status.in_(ENTITLED))).all()
-    valid = [r for r in rows if r.access_until is not None and r.access_until > now]
+    rows = db.scalars(select(AccessBenefit).where(
+        AccessBenefit.user_id == user_id, AccessBenefit.kind == "upgrade", AccessBenefit.revoked_at.is_(None),
+        AccessBenefit.starts_at <= now, AccessBenefit.ends_at > now)).all()
+    return max(rows, key=lambda b: (PLAN_RANK.get(b.plan, 0), b.ends_at), default=None)
+
+
+def current(db: Session, user_id: int, now: datetime | None = None, extra_credit_days: int = 0) -> Entitlement | None:
+    """The account's entitlement right now: the best subscription whose access has not ended, with the HTS benefits.
+
+    * HTS access credits (``access_benefits`` kind ``credit``) add days after the access of the latest paid
+      subscription (also after a natural end; never after a refund, suspension or during a review). They move with
+      every renewal, so renewing never loses them. ``extra_credit_days`` only previews a credit not given yet.
+    * a temporary upgrade (kind ``upgrade``) applies a higher plan's limits while it lasts, inside the SAME period
+      (same period key): consumption is never reset and access is never extended by it."""
+    from . import catalog
+
+    now = now or utcnow()
+    rows = db.scalars(select(AccountSubscription).where(AccountSubscription.user_id == user_id)).all()
+    bases = {r.id: _base_until(r) for r in rows}
+    paid = [r for r in rows if r.provider != "hts" and bases[r.id] is not None]
+    credit = (credit_days(db, user_id) + max(0, int(extra_credit_days))) if paid else 0
+    target = max(paid, key=lambda r: bases[r.id], default=None)
+    valid = []
+    for r in rows:
+        until = bases[r.id]
+        if until is None:
+            continue
+        days = credit if (target is not None and r.id == target.id and not r.review) else 0
+        until = until + timedelta(days=days)
+        if until > now:
+            own = r.access_status in ENTITLED and r.access_until is not None and r.access_until > now
+            valid.append((r, until, r.access_status if own else "active", days))
     if not valid:
         return None
     # Precedence: the highest plan wins; on the same plan a PAID subscription wins over an HTS courtesy
     # (provider "hts"), then the one that lasts longer. Courtesy rows never alter paid snapshots.
-    best = max(valid, key=lambda r: (PLAN_RANK.get(r.plan, 0), r.provider != "hts", r.access_until))
-    anchor = best.period_start or best.period_end or best.access_until
-    return Entitlement(best.user_id, best.id, best.provider, best.plan, best.access_status, best.access_until,
+    best, until, status, days = max(valid, key=lambda v: (PLAN_RANK.get(v[0].plan, 0), v[0].provider != "hts", v[1]))
+    anchor = best.period_start or best.period_end or best.access_until or best.last_period_anchor or best.last_entitled_until
+    plan, limits, up_until = best.plan, dict(best.limits or {}), None
+    up = active_upgrade(db, user_id, now)
+    if up is not None and PLAN_RANK.get(up.plan, 0) > PLAN_RANK.get(best.plan, 0):
+        plan, limits, up_until = up.plan, catalog.limits_for(up.plan), up.ends_at
+    return Entitlement(best.user_id, best.id, best.provider, plan, status, until,
                        f"{best.provider}:{best.subscription_ref}:{int(anchor.replace(tzinfo=timezone.utc).timestamp())}",
-                       dict(best.limits or {}), best.review or "")
+                       limits, best.review or "", best.plan, days, up_until)
 
 
 # ---------------------------------------------------------------------------

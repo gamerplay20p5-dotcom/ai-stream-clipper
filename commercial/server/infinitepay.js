@@ -19,6 +19,7 @@ import express from 'express'
 import { rateLimit } from 'express-rate-limit'
 import catalog from '../catalog.json' with { type: 'json' }
 import { infinitePayAccess, limitsFor } from './access.js'
+import { MIN_CHARGE, renewalPrice } from './promotions.js'
 
 export const INFINITEPAY_MARKET = 'BR'
 export const INFINITEPAY_API = 'https://api.checkout.infinitepay.io'
@@ -172,6 +173,14 @@ export function migrateInfinitePay(db) {
   if (!columns.has('review')) db.exec("ALTER TABLE ip_charges ADD COLUMN review TEXT NOT NULL DEFAULT ''")
   const subscriptionColumns = new Set(db.prepare('PRAGMA table_info(ip_subscriptions)').all().map(column => column.name))
   if (!subscriptionColumns.has('account_id')) db.exec("ALTER TABLE ip_subscriptions ADD COLUMN account_id TEXT NOT NULL DEFAULT ''")
+  // HTS promotion codes (server/promotions.js): what each charge would have cost, the discount and the code; the
+  // subscription keeps the code and how many discounted renewals are left (-1 = forever)
+  if (!columns.has('list_amount')) db.exec('ALTER TABLE ip_charges ADD COLUMN list_amount INTEGER')
+  if (!columns.has('discount_amount')) db.exec('ALTER TABLE ip_charges ADD COLUMN discount_amount INTEGER NOT NULL DEFAULT 0')
+  if (!columns.has('promo_code')) db.exec("ALTER TABLE ip_charges ADD COLUMN promo_code TEXT NOT NULL DEFAULT ''")
+  if (!columns.has('redemption_id')) db.exec("ALTER TABLE ip_charges ADD COLUMN redemption_id TEXT NOT NULL DEFAULT ''")
+  if (!subscriptionColumns.has('promo_code')) db.exec("ALTER TABLE ip_subscriptions ADD COLUMN promo_code TEXT NOT NULL DEFAULT ''")
+  if (!subscriptionColumns.has('promo_remaining')) db.exec('ALTER TABLE ip_subscriptions ADD COLUMN promo_remaining INTEGER NOT NULL DEFAULT 0')
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS ip_subscriptions_one_pending_account ON ip_subscriptions(account_id, plan, language) WHERE status = 'pending'")
   db.exec('CREATE INDEX IF NOT EXISTS ip_subscriptions_account ON ip_subscriptions(account_id)')
 }
@@ -191,7 +200,7 @@ const copy = {
   },
 }
 
-export function createInfinitePay({ db, settings, request, mailer = null, outbox = null, log = console, now = () => Math.floor(Date.now() / 1000) }) {
+export function createInfinitePay({ db, settings, request, mailer = null, outbox = null, promotions = null, log = console, now = () => Math.floor(Date.now() / 1000) }) {
   migrateInfinitePay(db)
   const enabled = Boolean(settings.handle && settings.apiKey && settings.webhookToken && settings.origin && settings.appUrl && request)
   const webhookUrl = `${settings.origin}/api/infinitepay/webhook/${settings.webhookToken}`
@@ -233,6 +242,16 @@ export function createInfinitePay({ db, settings, request, mailer = null, outbox
     emailed: db.prepare('UPDATE ip_charges SET emailed_at = ?, email_attempts = email_attempts + 1 WHERE order_nsu = ?'),
     emailFailed: db.prepare('UPDATE ip_charges SET email_attempts = email_attempts + 1 WHERE order_nsu = ? RETURNING email_attempts'),
     paidCharges: db.prepare("SELECT * FROM ip_charges WHERE status = 'paid' AND paid_at >= ? ORDER BY paid_at"),
+    setPromo: db.prepare('UPDATE ip_subscriptions SET promo_code = ?, promo_remaining = ?, updated_at = ? WHERE id = ?'),
+    usePromoCycle: db.prepare('UPDATE ip_subscriptions SET promo_remaining = promo_remaining - 1 WHERE id = ? AND promo_remaining > 0'),
+  }
+
+  /** Discounted renewals left after the first discounted month: once 0, repeating N -> N-1, forever -1. */
+  const remainingAfterFirst = quoted => (quoted.duration === 'forever' ? -1 : quoted.duration === 'repeating' ? Math.max(0, (quoted.months ?? 1) - 1) : 0)
+
+  /** A charge that will never be paid gives its promotion use back (only while it was just reserved). */
+  function releasePromo(charge, reason) {
+    if (promotions && charge?.redemption_id) promotions.release(charge.redemption_id, reason)
   }
 
   function record(subscriptionId, orderNsu, type, amount = null, detail = '') {
@@ -338,17 +357,25 @@ export function createInfinitePay({ db, settings, request, mailer = null, outbox
       // The charge stays 'creating' with the same order_nsu: the buyer's next click or the hourly job resends the
       // identical payload, which InfinitePay may answer with the same link; after five attempts it is closed
       if (attempts >= MAX_LINK_ATTEMPTS) {
-        q.setChargeStatus.run('failed', charge.order_nsu, 'creating')
-        record(subscription.id, charge.order_nsu, 'link_gave_up', charge.amount, error.code ?? error.name)
+        transaction(() => {
+          q.setChargeStatus.run('failed', charge.order_nsu, 'creating')
+          record(subscription.id, charge.order_nsu, 'link_gave_up', charge.amount, error.code ?? error.name)
+          releasePromo(q.charge.get(charge.order_nsu), 'link creation gave up')
+        })
       }
       throw error
     }
   }
 
-  /** Reserves the cycle's charge. Returns null when another worker already holds it. */
-  function reserveCharge(subscription, kind, cycleKey, validUntil) {
+  /**
+   * Reserves the cycle's charge. Returns null when another worker already holds it. `price` (from a promotion quote or
+   * a discounted renewal) sets the amount; it is frozen in request_json and payment_check must confirm exactly it.
+   */
+  function reserveCharge(subscription, kind, cycleKey, validUntil, price = null) {
     const orderNsu = `asc-${randomUUID()}`
-    const amount = catalog.plans[subscription.plan].monthlyMinor[INFINITEPAY_MARKET]
+    const list = catalog.plans[subscription.plan].monthlyMinor[INFINITEPAY_MARKET]
+    const amount = price ? price.final : list
+    if (!(amount >= MIN_CHARGE[INFINITEPAY_MARKET])) throw Object.assign(new Error('Charge below the minimum'), { code: 'below_minimum' })
     const requestJson = JSON.stringify(linkBody({ order_nsu: orderNsu, plan: subscription.plan, amount, valid_until: validUntil }, subscription))
     try {
       q.insertCharge.run(orderNsu, subscription.id, cycleKey, kind, subscription.plan, amount, requestJson, validUntil, now())
@@ -356,33 +383,83 @@ export function createInfinitePay({ db, settings, request, mailer = null, outbox
       if (String(error.message).includes('UNIQUE')) return null
       throw error
     }
+    if (price) {
+      const redemption = price.quote && promotions
+        ? promotions.reserve({ quote: price.quote, accountId: subscription.account_id, plan: subscription.plan, market: INFINITEPAY_MARKET, provider: 'infinitepay', ref: orderNsu })
+        : ''
+      db.prepare('UPDATE ip_charges SET list_amount = ?, discount_amount = ?, promo_code = ?, redemption_id = ? WHERE order_nsu = ?')
+        .run(list, list - amount, price.code ?? '', redemption, orderNsu)
+    }
     return q.charge.get(orderNsu)
   }
 
-  async function createCheckout({ plan, language, email, accountId }) {
+  /**
+   * 100% discount or free days: access without any charge (no artificial Pix/card payment). Inside the checkout
+   * transaction. The open first link of the pending subscription, if any, is retired.
+   */
+  function grantFree(pending, quoted, accountId) {
+    const at = now()
+    const open = q.activeForCycle.get(pending.id, 'first')
+    if (open && (open.status === 'open' || open.status === 'creating')) {
+      q.setChargeStatus.run('expired', open.order_nsu, open.status)
+      record(pending.id, open.order_nsu, 'link_expired', null, 'replaced by a free promotion')
+      releasePromo(open, 'replaced by a free promotion')
+    }
+    const redemption = promotions.reserve({ quote: quoted, accountId, plan: pending.plan, market: INFINITEPAY_MARKET, provider: 'infinitepay', ref: pending.id })
+    promotions.redeem(redemption, pending.id)
+    const paidUntil = quoted.freeDays ? at + quoted.freeDays * DAY : addMonth(at)
+    q.setPromo.run(quoted.code, quoted.freeDays ? 0 : remainingAfterFirst(quoted), at, pending.id)
+    record(pending.id, '', 'promo_free', 0, `${quoted.code} ${quoted.freeDays ? `${quoted.freeDays} days` : '1 month'}`)
+    setStatus(pending, 'active', paidUntil)
+  }
+
+  /**
+   * Checkout link for an account (or, with a 100% / free-days promotion, access right away: returns { free: true }).
+   * `promoCode` is validated here, in the same transaction that reserves its use: never trusted from the browser.
+   */
+  async function createCheckout({ plan, language, email, accountId, promoCode = '' }) {
     if (!enabled) throw Object.assign(new Error('InfinitePay is not configured'), { code: 'disabled' })
     if (!/^[1-9][0-9]{0,11}$/.test(String(accountId ?? ''))) throw Object.assign(new Error('Account required'), { code: 'account_required' })
+    if (promoCode && !promotions) throw Object.assign(new Error('Promotions disabled'), { code: 'promo_invalid', reason: 'not_found' })
     const account = String(accountId)
     // One transaction (BEGIN IMMEDIATE serializes writers across processes): the same account, plan and language
     // always share one pending subscription and one first charge, so double clicks, simultaneous requests and a
     // retry after a crash reuse the same order_nsu instead of creating a second charge
-    const { subscription, charge, url } = transaction(() => {
+    const { subscription, charge, url, free } = transaction(() => {
       const at = now()
+      const requested = String(promoCode ?? '').trim().toUpperCase()
       let pending = q.pendingFor.get(account, plan, language)
+      // A repeated click with the same code reuses the open discounted link (its use is already reserved)
+      const open = pending && requested ? q.activeForCycle.get(pending.id, 'first') : null
+      if (open?.promo_code === requested && open.status === 'open' && open.valid_until > at + 60 * 60) return { subscription: pending, charge: open, url: open.link_url }
+      if (open?.promo_code === requested && open.status === 'creating') return { subscription: pending, charge: open }
+      const quoted = promoCode ? promotions.quote({ code: promoCode, plan, market: INFINITEPAY_MARKET, accountId: account, at }) : null
+      if (quoted && !quoted.ok) throw Object.assign(new Error('Invalid promotion'), { code: 'promo_invalid', reason: quoted.reason })
       if (!pending) {
         q.insertSubscription.run(randomUUID(), account, email, plan, language, at, at)
         pending = q.pendingFor.get(account, plan, language)
       }
+      if (quoted && (quoted.final === 0 || quoted.freeDays > 0)) {
+        grantFree(pending, quoted, account)
+        return { free: true }
+      }
+      const amount = quoted ? quoted.final : catalog.plans[plan].monthlyMinor[INFINITEPAY_MARKET]
+      const code = quoted ? quoted.code : ''
       let current = q.activeForCycle.get(pending.id, 'first')
-      if (current?.status === 'open' && current.valid_until > at + 60 * 60) return { subscription: pending, charge: current, url: current.link_url }
-      if (current?.status === 'open') {
-        // About to expire: retire it locally (a payment that still arrives is honored) and issue a fresh link
-        q.setChargeStatus.run('expired', current.order_nsu, 'open')
-        record(pending.id, current.order_nsu, 'link_expired', null, 'replaced before checkout')
+      const same = current && current.amount === amount && (current.promo_code ?? '') === code
+      if (same && current.status === 'open' && current.valid_until > at + 60 * 60) return { subscription: pending, charge: current, url: current.link_url }
+      if (current && (current.status === 'open' || (current.status === 'creating' && !same))) {
+        // About to expire, or the code changed (added, removed or another one): retire it locally (a payment that
+        // still arrives for it is honored at its own frozen amount) and issue a fresh link with the right price
+        q.setChargeStatus.run('expired', current.order_nsu, current.status)
+        record(pending.id, current.order_nsu, 'link_expired', null, same ? 'replaced before checkout' : 'price changed by a promotion code')
+        releasePromo(current, 'replaced before checkout')
         current = null
       }
-      return { subscription: pending, charge: current ?? reserveCharge(pending, 'first', 'first', at + settings.firstLinkDays * DAY) ?? q.activeForCycle.get(pending.id, 'first') }
+      const price = quoted ? { final: quoted.final, code: quoted.code, quote: quoted } : null
+      return { subscription: pending, charge: current ?? reserveCharge(pending, 'first', 'first', at + settings.firstLinkDays * DAY, price) ?? q.activeForCycle.get(pending.id, 'first') }
     })
+    if (free) return { free: true }
     if (url) return url
     // 'creating': first attempt, or recovery of an attempt interrupted by a crash or network error
     return requestLink(charge, subscription)
@@ -413,6 +490,14 @@ export function createInfinitePay({ db, settings, request, mailer = null, outbox
         Number.isInteger(check.installments) ? check.installments : null, periodStart, periodEnd, paidAt, charge.order_nsu).changes
       if (!changed) return 'processing'
       record(subscription.id, charge.order_nsu, 'payment_confirmed', Number(check.paid_amount), `${check.capture_method ?? ''} ${check.installments ?? ''}x`)
+      if (current.redemption_id && promotions) {
+        // the first purchase with a code: the use is final and the subscription keeps the code for its renewals
+        promotions.redeem(current.redemption_id, subscription.id)
+        const terms = promotions.terms(current.promo_code)
+        if (terms) q.setPromo.run(current.promo_code, remainingAfterFirst({ duration: terms.duration, months: terms.duration_months }), paidAt, subscription.id)
+      } else if (current.kind === 'renewal' && current.discount_amount > 0) {
+        q.usePromoCycle.run(subscription.id)
+      }
       if (afterCancel) {
         // Never reactivate a subscription the operator canceled: the buyer is told it is under financial review
         q.setReview.run('after_cancel', charge.order_nsu)
@@ -480,6 +565,8 @@ export function createInfinitePay({ db, settings, request, mailer = null, outbox
       q.setChargeStatus.run('refunded', orderNsu, charge.status)
       db.prepare('UPDATE ip_charges SET refunded_at = ? WHERE order_nsu = ?').run(now(), orderNsu)
       record(subscription.id, orderNsu, 'refund_recorded', -(charge.paid_amount ?? charge.amount), reason)
+      // a refunded promotional purchase keeps its use counted (refunding never frees a code for another try)
+      if (charge.redemption_id && promotions) promotions.markRefunded(charge.redemption_id)
       // Remove exactly the refunded period; later paid periods move back by the same length
       const paidUntil = Math.max(0, subscription.paid_until - (charge.period_end - charge.period_start))
       const otherPaid = db.prepare("SELECT COUNT(*) AS n FROM ip_charges WHERE subscription_id = ? AND status = 'paid'").get(subscription.id).n
@@ -550,7 +637,12 @@ export function createInfinitePay({ db, settings, request, mailer = null, outbox
     try {
       const at = now()
       for (const charge of q.expiringCharges.all(at)) {
-        if (q.setChargeStatus.run('expired', charge.order_nsu, charge.status).changes) record(charge.subscription_id, charge.order_nsu, 'link_expired')
+        transaction(() => {
+          if (q.setChargeStatus.run('expired', charge.order_nsu, charge.status).changes) {
+            record(charge.subscription_id, charge.order_nsu, 'link_expired')
+            releasePromo(q.charge.get(charge.order_nsu), 'link expired unpaid')
+          }
+        })
       }
       for (const { id } of q.toPastDue.all(at)) setStatus(q.subscription.get(id), 'past_due')
       for (const { id } of q.toExpired.all(settings.graceDays * DAY, at)) setStatus(q.subscription.get(id), 'expired')
@@ -561,7 +653,23 @@ export function createInfinitePay({ db, settings, request, mailer = null, outbox
         const cycleKey = `due:${subscription.paid_until}`
         const validUntil = subscription.paid_until + settings.graceDays * DAY
         if (validUntil <= at + 60 * 60 || q.activeForCycle.get(subscription.id, cycleKey)) continue
-        const charge = reserveCharge(subscription, 'renewal', cycleKey, validUntil)
+        // A code redeemed at the first purchase keeps its terms for the renewals it covers (even if deactivated later)
+        const discounted = subscription.promo_code && promotions
+          ? renewalPrice(promotions.terms(subscription.promo_code), subscription.plan, subscription.promo_remaining)
+          : null
+        if (discounted && discounted.final === 0) {
+          // 100% for this month: no artificial charge, the month is granted and one discounted renewal is used
+          transaction(() => {
+            const fresh = q.subscription.get(subscription.id)
+            if (fresh.paid_until !== subscription.paid_until) return
+            q.usePromoCycle.run(subscription.id)
+            record(subscription.id, '', 'promo_free', 0, `${subscription.promo_code} renewal`)
+            setStatus(fresh, 'active', addMonth(fresh.paid_until))
+          })
+          continue
+        }
+        const price = discounted && discounted.final >= MIN_CHARGE[INFINITEPAY_MARKET] ? { final: discounted.final, code: subscription.promo_code } : null
+        const charge = transaction(() => reserveCharge(subscription, 'renewal', cycleKey, validUntil, price))
         if (!charge) continue
         try { await requestLink(charge, subscription); created++ } catch (error) { log.error('InfinitePay renewal link failed', error.code ?? error.name) }
       }
@@ -640,6 +748,33 @@ export function createInfinitePay({ db, settings, request, mailer = null, outbox
     }
   })
 
+  /**
+   * A RECURRING HTS code on the account's running subscription (active or past due): the next renewal links are
+   * created with the discount (N months or forever). An open renewal link at the old price is retired so the hourly
+   * job issues the discounted one; a month already paid is never changed. `preview` changes nothing.
+   */
+  function applyRecurringPromo(accountId, code, preview = false) {
+    if (!promotions) return { ok: false, reason: 'not_found' }
+    return transaction(() => {
+      const subscription = db.prepare("SELECT * FROM ip_subscriptions WHERE account_id = ? AND status IN ('active', 'past_due') ORDER BY paid_until DESC LIMIT 1").get(String(accountId))
+      if (!subscription) return { ok: false, reason: 'no_subscription' }
+      if (q.reviewOpen.get(subscription.id)) return { ok: false, reason: 'account_review' }
+      const quoted = promotions.quote({ code, plan: subscription.plan, market: INFINITEPAY_MARKET, accountId: String(accountId), use: 'existing' })
+      if (!quoted.ok || preview) return quoted
+      if (subscription.promo_remaining !== 0) return { ok: false, reason: 'already_discounted' }
+      const redemption = promotions.reserve({ quote: quoted, accountId: String(accountId), plan: subscription.plan, market: INFINITEPAY_MARKET, provider: 'infinitepay', ref: subscription.id })
+      promotions.redeem(redemption, subscription.id)
+      q.setPromo.run(quoted.code, quoted.duration === 'forever' ? -1 : quoted.months, now(), subscription.id)
+      record(subscription.id, '', 'promo_applied', null, `${quoted.code} ${quoted.duration} ${quoted.months ?? ''}`)
+      for (const open of db.prepare("SELECT * FROM ip_charges WHERE subscription_id = ? AND kind = 'renewal' AND status IN ('creating', 'open') AND discount_amount = 0").all(subscription.id)) {
+        q.setChargeStatus.run('expired', open.order_nsu, open.status)
+        record(subscription.id, open.order_nsu, 'link_expired', null, 'replaced by a discounted renewal')
+      }
+      publish(subscription.id)
+      return { ...quoted, applied: true }
+    })
+  }
+
   function resync() {
     return transaction(() => {
       const ids = db.prepare("SELECT id FROM ip_subscriptions WHERE account_id <> ''").all()
@@ -648,5 +783,5 @@ export function createInfinitePay({ db, settings, request, mailer = null, outbox
     })
   }
 
-  return { router, enabled, createCheckout, verify, refund, clearReview, cancel, reconcile, runRenewals, snapshot, resync }
+  return { router, enabled, createCheckout, verify, refund, clearReview, cancel, reconcile, runRenewals, snapshot, resync, applyRecurringPromo }
 }

@@ -68,6 +68,13 @@ def tick() -> dict:
         out["revisited"] = pipeline.revisit_waiting_all(db)
         _refs_retention(db)
         _sync_grants(db)
+        try:
+            from . import benefits
+
+            with db.begin_nested():
+                out["benefits_enforced"] = benefits.enforce_boundaries(db)
+        except Exception:
+            log.exception("benefit boundaries failed")
         from . import pipeline_story
         from .settings_store import load_ai_settings as _load
 
