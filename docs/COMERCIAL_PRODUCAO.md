@@ -35,10 +35,30 @@ Enquanto faltarem, a parte correspondente fica **desligada**.
 | `INFINITEPAY_WEBHOOK_TOKEN` | Texto aleatório de 32 a 128 caracteres na URL do webhook (`https://getclipper.howto.software/api/infinitepay/webhook/<token>`) | BRL desligado |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Checkout em USD. O webhook é `https://getclipper.howto.software/api/stripe/webhook` | USD desligado |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | E-mails de renovação da InfinitePay | Os links de renovação aparecem no painel do cliente, mas não são enviados por e-mail |
+| `COMMERCIAL_PAYMENTS_OPEN=true` | Abre os pagamentos ao público. Exige asc-ctl 1.3.1 para passar pelo `env-install` | Fechados: mesmo com todas as credenciais, nenhum checkout é criado. Webhooks, vínculo assinado e reconciliação funcionam normalmente |
 | `COMMERCIAL_WAITLIST_OPEN=true` | Abre a lista de espera | Fechada: a página explica e **não coleta dados**. Ligue só depois de publicar a política de privacidade e os termos |
 
 Para os checkouts passarem a valer, a API também precisa do mesmo `ASC_BILLING_SECRET`. O valor é lido quando o
 contêiner `asc-api` é recriado (`sudo asc-ctl compose up --gpu api`).
+
+### Acrescentar o `ASC_BILLING_SECRET` sem expor os outros segredos
+
+Como administrador na 210 (gera 64 caracteres aleatórios e não mostra o valor):
+
+```
+sudo sh -c 'f=/etc/asc/asc.env; grep -q "^ASC_BILLING_SECRET=" "$f" && echo "já existe" || { [ -n "$(tail -c1 "$f")" ] && echo >> "$f"; printf "ASC_BILLING_SECRET=%s
+" "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d " 
+")" >> "$f"; echo "adicionado"; }; stat -c "%U %a" "$f"'
+```
+
+Depois, recrie só `api` e `commercial` (`sudo asc-ctl compose up --gpu api commercial`).
+
+### Conta Stripe compartilhada
+
+A conta Stripe de produção também atende outro projeto (`host.howto.software`), e os eventos dele chegam ao nosso
+webhook. O serviço só grava assinaturas e faturas nossas: pelo lookup key `asc_*` ou pelo metadata do nosso checkout
+com `account_id`. Os produtos e preços são criados com `metadata.asc_plan`, sem tocar nos do outro projeto:
+`sudo asc-ctl exec asc-commercial -- node scripts/stripe-sync.js --live`.
 
 ## Publicação em HTTPS (fora do projeto `asc`)
 
@@ -67,6 +87,13 @@ contêiner `asc-api` é recriado (`sudo asc-ctl compose up --gpu api`).
   só mostram o healthcheck e as requisições de controle. Ou seja, o upstream configurado no Caddy não é
   `192.168.1.210:8790`.
 
+**Validação de 22/11/2026, tarde:**
+- Stripe: chave live aceita, endpoint de webhook ativo com os eventos necessários, preços USD sincronizados.
+- InfinitePay: chave e handle aceitos (`payment_check`).
+- Dentro da rede, os webhooks respondem certo.
+- Na Cloudflare, **todo POST público recebe 403** ("Attention Required"), então nenhum aviso de pagamento chega ao
+  site até a regra de exceção existir.
+
 ## English
 
 - **Service:** the commercial site runs as `asc-commercial` (Node.js 24) in the 210 `asc` project, on
@@ -76,6 +103,6 @@ contêiner `asc-api` é recriado (`sudo asc-ctl compose up --gpu api`).
 - **Public address:** the server's proxy publishes it as `https://getclipper.howto.software`. That needs a DNS
   record plus one proxy site block, both outside the `asc` project.
 - **Settings:** `/etc/asc/asc.env` on 210 (root, 600), installed with `asc-ctl env-install`.
-- **Payments and waitlist:** payments stay off until the billing secret and the provider keys are set. The waitlist
+- **Payments and waitlist:** payments stay off until the billing secret and the provider keys are set, and stay closed to the public until `COMMERCIAL_PAYMENTS_OPEN=true` is set. The waitlist
   stays closed, collecting nothing, until `COMMERCIAL_WAITLIST_OPEN=true` is set after the privacy policy and terms
   are published.
