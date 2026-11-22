@@ -78,7 +78,10 @@ services:
     ports: ["192.168.1.210:8780:8780"]
     volumes: ["asc_clips:/data/storage", "/etc/asc/tls:/tls:ro"]
     networks: [asc_net]
-    depends_on: { postgres: { condition: service_healthy } }
+    # No depends_on on the local postgres: the database lives on 212 (ASC_DB_HOST=192.168.1.212), so
+    # `compose up api` must never start the old local copy. Only if ASC_DB_HOST=postgres (back to the local
+    # database) start it explicitly first: `asc-ctl compose up postgres`. Until the database answers, the API
+    # exits at start-up and `restart: unless-stopped` retries it.
     healthcheck:
       test: ["CMD", "clipper", "healthcheck", "api"]
       interval: 20s
