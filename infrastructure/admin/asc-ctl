@@ -30,11 +30,12 @@ import posixpath
 import re
 import shutil
 import subprocess
+import time
 import sys
 import tarfile
 import tempfile
 
-VERSION = "1.2.1"  # 1.2.1: ASC_PUBLIC_ORIGIN accepted by env-install (required by the v0.8.0 API)
+VERSION = "1.2.2"  # 1.2.1: ASC_PUBLIC_ORIGIN in env-install; 1.2.2: restore-check (isolated backup restore test)
 CONF_FILE = "/etc/asc/asc-ctl.conf"
 ENV_FILE = "/etc/asc/asc.env"
 LOG_FILE = "/var/log/asc-ctl.log"
@@ -722,6 +723,75 @@ def cmd_db_restore(conf: dict, args: list[str]) -> int:
     return rc
 
 
+RESTORE_CHECK_NAME = "asc-restore-check"
+RESTORE_CHECK_LABEL = "asc.restore-check=1"
+COUNT_ROWS_SQL = ("select table_name || '=' || (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I', "
+                  "table_name), false, true, '')))[1]::text from information_schema.tables where table_schema='public' "
+                  "and table_type='BASE TABLE' order by 1")
+
+
+def _remove_restore_check() -> None:
+    """Removes ONLY the throwaway restore container (exact name AND label); never anything else."""
+    ids = out([DOCKER, "ps", "-aq", "--filter", f"name=^{RESTORE_CHECK_NAME}$", "--filter", f"label={RESTORE_CHECK_LABEL}"]).split()
+    for cid in ids:
+        run([DOCKER, "rm", "-f", cid])
+
+
+def cmd_restore_check(conf: dict, args: list[str]) -> int:
+    """212 only: proves that a backup-db file restores. Loads it into a THROWAWAY PostgreSQL (same image as
+    asc-postgres, no network, no port, anonymous volume removed with it) and compares the row count of every table
+    with the live asc database (run it with the writers stopped: then both must be identical).
+    Prints RESTORE-CHECK OK / FAILED. Never touches asc-postgres data or any other container."""
+    if conf["SERVER"] != "212":
+        raise Denied("restore-check runs only on 212 (the database host)")
+    if len(args) != 1:
+        raise Denied("usage: asc-ctl restore-check FILE.sql.gz (a backup-db file inside the asc home)")
+    path = user_file(conf, args[0])
+    if not path.endswith(".sql.gz"):
+        raise Denied("expected a .sql.gz made by asc-ctl backup-db")
+    if subprocess.run(["gzip", "-t", path]).returncode != 0:
+        print("RESTORE-CHECK FAILED: gzip integrity")
+        return 1
+    image = out([DOCKER, "inspect", "-f", "{{.Config.Image}}", "asc-postgres"]).strip()
+    if not POSTGRES_IMAGE_RE.match(image):
+        raise Denied(f"unexpected asc-postgres image {image!r}")
+    live = out([DOCKER, "exec", "asc-postgres", "psql", "-U", "asc", "-d", "asc", "-tAc", COUNT_ROWS_SQL]).strip().splitlines()
+    _remove_restore_check()
+    run([DOCKER, "run", "-d", "--rm", "--pull", "never", "--name", RESTORE_CHECK_NAME, "--label", RESTORE_CHECK_LABEL,
+         "--network", "none", "--cpus", "2", "--memory", "4g", "--pids-limit", "512",
+         "--security-opt", "no-new-privileges", "-e", "POSTGRES_USER=asc", "-e", "POSTGRES_PASSWORD=restore-check",
+         "-e", "POSTGRES_DB=asc", image], check=True)
+    try:
+        for _ in range(90):
+            if subprocess.run([DOCKER, "exec", RESTORE_CHECK_NAME, "pg_isready", "-h", "127.0.0.1", "-U", "asc", "-q"]).returncode == 0:
+                break
+            time.sleep(2)
+        else:
+            print("RESTORE-CHECK FAILED: throwaway PostgreSQL did not start")
+            return 1
+        with open(path, "rb") as f:
+            p1 = subprocess.Popen(["gzip", "-dc"], stdin=f, stdout=subprocess.PIPE)
+            p2 = subprocess.Popen([DOCKER, "exec", "-i", RESTORE_CHECK_NAME, "psql", "-U", "asc", "-d", "asc",
+                                   "-v", "ON_ERROR_STOP=1", "-q", "--single-transaction"], stdin=p1.stdout,
+                                  stdout=subprocess.DEVNULL)
+            p1.stdout.close()
+            rc = p2.wait() or p1.wait()
+        if rc != 0:
+            print(f"RESTORE-CHECK FAILED: restore rc={rc}")
+            return 1
+        restored = out([DOCKER, "exec", RESTORE_CHECK_NAME, "psql", "-U", "asc", "-d", "asc", "-tAc",
+                        COUNT_ROWS_SQL]).strip().splitlines()
+    finally:
+        _remove_restore_check()
+    if restored != live:
+        diff = sorted(set(live) ^ set(restored))[:20]
+        print(f"RESTORE-CHECK FAILED: row counts differ (writers still running?): {diff}")
+        return 1
+    rows = sum(int(line.split("=", 1)[1] or 0) for line in restored if "=" in line)
+    print(f"RESTORE-CHECK OK file={path} tables={len(restored)} rows={rows}")
+    return 0
+
+
 def cmd_status(conf: dict, args: list[str]) -> int:
     """Read-only overview of the host (all containers, so other projects can be monitored)."""
     print(f"== {conf['SERVER']} {datetime.datetime.now().isoformat(timespec='seconds')}")
@@ -786,7 +856,7 @@ COMMANDS = {
     "image-save": cmd_image_save, "image-load": cmd_image_load, "image-rm": cmd_image_rm,
     "env-install": cmd_env_install, "env-show": cmd_env_show, "set-tag": cmd_set_tag, "tls-init": cmd_tls_init,
     "tls-install-ca": cmd_tls_install_ca, "init": cmd_init, "models": cmd_models, "gpu-validate": cmd_gpu_validate,
-    "test-media-add": cmd_test_media_add, "backup-db": cmd_backup_db, "db-restore": cmd_db_restore,
+    "test-media-add": cmd_test_media_add, "backup-db": cmd_backup_db, "db-restore": cmd_db_restore, "restore-check": cmd_restore_check,
     "tunnel-token-install": cmd_tunnel_token_install, "tunnel-token-remove": cmd_tunnel_token_remove,
 }
 

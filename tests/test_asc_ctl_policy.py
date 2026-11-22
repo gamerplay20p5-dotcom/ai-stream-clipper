@@ -186,3 +186,26 @@ def test_tunnel_token_never_from_arguments():
         asc_ctl.cmd_tunnel_token_install(CONF, ["eyJhIjoiYiJ9" * 10])
     with pytest.raises(asc_ctl.Denied):
         asc_ctl.cmd_tunnel_token_install({**CONF, "SERVER": "201"}, [])
+
+
+def test_restore_check_only_on_212_with_a_backup_file(monkeypatch, tmp_path):
+    import pytest
+
+    with pytest.raises(asc_ctl.Denied, match="only on 212"):
+        asc_ctl.cmd_restore_check(CONF, ["asc.sql.gz"])
+    with pytest.raises(asc_ctl.Denied, match="usage"):
+        asc_ctl.cmd_restore_check(DB212, [])
+    monkeypatch.setattr(asc_ctl, "user_file", lambda conf, p: str(tmp_path / p))
+    with pytest.raises(asc_ctl.Denied, match=".sql.gz"):
+        asc_ctl.cmd_restore_check(DB212, ["notes.txt"])
+    assert "restore-check" in asc_ctl.COMMANDS
+
+
+def test_restore_check_removes_only_its_own_container(monkeypatch):
+    calls = []
+    monkeypatch.setattr(asc_ctl, "out", lambda cmd: calls.append(cmd) or "abc123\n")
+    monkeypatch.setattr(asc_ctl, "run", lambda cmd, **kw: calls.append(cmd) or 0)
+    asc_ctl._remove_restore_check()
+    listing, removal = calls
+    assert f"name=^{asc_ctl.RESTORE_CHECK_NAME}$" in listing and f"label={asc_ctl.RESTORE_CHECK_LABEL}" in listing
+    assert removal[-1] == "abc123" and "prune" not in " ".join(removal)
