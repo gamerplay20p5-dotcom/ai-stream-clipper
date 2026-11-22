@@ -19,7 +19,14 @@ from ..publish.service import PLATFORM_NAME, PublishRefused
 from .deps import CurrentUser, audit, current_user, require_admin
 
 router = APIRouter(prefix="/api/publish", tags=["publish"])
-PLATFORMS = ("youtube", "tiktok", "instagram")
+PLATFORMS = ("youtube", "tiktok", "instagram", "facebook")
+
+
+def _hts_get(db: Session, model, key):
+    """HTS publishing panel: only HTS resources (owner_id NULL). A customer's destination, rule or publication
+    is invisible here, exactly like a missing one; customers manage theirs in /api/account/publishing."""
+    obj = db.get(model, key)
+    return obj if obj is not None and getattr(obj, "owner_id", None) is None else None
 
 
 def _iso(dt):
@@ -86,10 +93,12 @@ def overview(db: Session = Depends(get_db), _: CurrentUser = Depends(current_use
                     "config_id": row.config_id if row else "", "callback_url": f"{_public_base()}/api/publish/oauth/{pf}/callback",
                     "validated": pf == "youtube",
                     "flow": ("unified" if row and row.config_id else "missing_config_id") if pf == "instagram" else "oauth2"}
-    accounts = [_account(a) for a in db.scalars(select(PublishAccount).order_by(PublishAccount.platform))]
-    rules = [_rule(r, db.get(PublishAccount, r.account_id)) for r in db.scalars(select(PublishRule).order_by(PublishRule.id))]
+    accounts = [_account(a) for a in db.scalars(select(PublishAccount).where(PublishAccount.owner_id.is_(None))
+                                                .order_by(PublishAccount.platform))]
+    rules = [_rule(r, _hts_get(db, PublishAccount, r.account_id))
+             for r in db.scalars(select(PublishRule).where(PublishRule.owner_id.is_(None)).order_by(PublishRule.id))]
     counts: dict[str, int] = {}
-    for (st,) in db.execute(select(Publication.status)):
+    for (st,) in db.execute(select(Publication.status).where(Publication.owner_id.is_(None))):
         counts[st] = counts.get(st, 0) + 1
     return {"apps": apps, "accounts": accounts, "rules": rules, "counts": counts}
 
@@ -179,26 +188,28 @@ def oauth_callback(platform: str, request: Request, db: Session = Depends(get_db
 
     if platform not in PLATFORMS:
         raise HTTPException(404, "unknown platform")
-    back = ""
+    back, page = "", "/publicacao"
     try:
         code, state = service.parse_redirect(str(request.url))
         back = service.return_to(db, state)
+        if service.state_owner(db, state) is not None:
+            page = "/conta/publicacao"  # a customer connecting its own destination returns to its own area
         acct = service.finish_oauth(db, platform, code, state, None)
     except PublishRefused as exc:
         db.commit()
-        return RedirectResponse(f"{back}/publicacao?erro={quote('; '.join(exc.problems)[:300])}", status_code=303)
+        return RedirectResponse(f"{back}{page}?erro={quote('; '.join(exc.problems)[:300])}", status_code=303)
     from ..models import AuditLog
 
     db.add(AuditLog(user_email=acct.connected_by, action="publish.connect", target=f"account:{acct.id}",
                     details={"platform": platform, "name": acct.name, "via": "callback"},
                     ip=request.client.host if request.client else ""))
     db.commit()
-    return RedirectResponse(f"{back}/publicacao?conectado=1", status_code=303)
+    return RedirectResponse(f"{back}{page}?conectado=1", status_code=303)
 
 
 @router.delete("/accounts/{aid}")
 def disconnect(aid: int, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
-    a = db.get(PublishAccount, aid)
+    a = _hts_get(db, PublishAccount, aid)
     if a is None:
         raise HTTPException(404, "account not found")
     a.tokens_enc, a.status = "", "revoked"
@@ -236,12 +247,12 @@ class RuleIn(BaseModel):
 
 
 def _check_rule(db: Session, body: RuleIn) -> PublishAccount:
-    acct = db.get(PublishAccount, body.account_id)
+    acct = _hts_get(db, PublishAccount, body.account_id)
     if acct is None:
         raise HTTPException(404, "account not found")
     if body.mode != "manual" and acct.platform == "tiktok":
         raise HTTPException(422, "TikTok exige consentimento do criador a cada postagem: use o modo manual")
-    if body.mode not in ("manual", "semi") and acct.platform == "instagram" and not body.allow_public_auto:
+    if body.mode not in ("manual", "semi") and acct.platform in ("instagram", "facebook") and not body.allow_public_auto:
         raise HTTPException(422, "Reels são públicos: postagem automática no Instagram exige ativar 'permitir público automático'")
     if body.streamer_id is not None and db.get(Streamer, body.streamer_id) is None:
         raise HTTPException(404, "streamer not found")
@@ -263,7 +274,7 @@ def create_rule(body: RuleIn, request: Request, db: Session = Depends(get_db), u
 @router.put("/rules/{rid}")
 def update_rule(rid: int, body: RuleIn, request: Request, db: Session = Depends(get_db),
                 user: CurrentUser = Depends(require_admin)):
-    r = db.get(PublishRule, rid)
+    r = _hts_get(db, PublishRule, rid)
     if r is None:
         raise HTTPException(404, "rule not found")
     _check_rule(db, body)
@@ -276,7 +287,7 @@ def update_rule(rid: int, body: RuleIn, request: Request, db: Session = Depends(
 
 @router.delete("/rules/{rid}")
 def delete_rule(rid: int, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
-    r = db.get(PublishRule, rid)
+    r = _hts_get(db, PublishRule, rid)
     if r is None:
         raise HTTPException(404, "rule not found")
     db.delete(r)
@@ -290,7 +301,7 @@ def check_clip(cid: int, account_id: int, privacy: str = "", db: Session = Depen
                _: CurrentUser = Depends(current_user)):
     """Every reason that blocks publishing this clip on this account. ``privacy`` empty = not chosen yet
     (no privacy verdict; the panel asks the person); the rights reason is included when not on file."""
-    clip, acct = db.get(Clip, cid), db.get(PublishAccount, account_id)
+    clip, acct = db.get(Clip, cid), _hts_get(db, PublishAccount, account_id)
     if clip is None:
         raise HTTPException(404, "corte não encontrado (pode ter sido excluído)")
     if acct is None:
@@ -321,7 +332,7 @@ class PublishIn(BaseModel):
 @router.post("/publications")
 def create_publication(body: PublishIn, request: Request, db: Session = Depends(get_db),
                        user: CurrentUser = Depends(require_admin)):
-    clip, acct = db.get(Clip, body.clip_id), db.get(PublishAccount, body.account_id)
+    clip, acct = db.get(Clip, body.clip_id), _hts_get(db, PublishAccount, body.account_id)
     if clip is None or acct is None:
         raise HTTPException(404, "clip or account not found")
     when = None
@@ -347,7 +358,8 @@ def create_publication(body: PublishIn, request: Request, db: Session = Depends(
 @router.get("/publications")
 def list_publications(status: str | None = None, days: int = 30, db: Session = Depends(get_db),
                       _: CurrentUser = Depends(current_user)):
-    q = select(Publication).where(Publication.created_at >= utcnow() - timedelta(days=max(1, min(days, 365))))
+    q = select(Publication).where(Publication.owner_id.is_(None),
+                                  Publication.created_at >= utcnow() - timedelta(days=max(1, min(days, 365))))
     if status:
         q = q.where(Publication.status.in_(status.split(",")))
     rows = db.scalars(q.order_by(Publication.scheduled_at.desc().nullsfirst(), Publication.id.desc()).limit(500))
@@ -356,7 +368,7 @@ def list_publications(status: str | None = None, days: int = 30, db: Session = D
 
 @router.post("/publications/{pid}/cancel")
 def cancel(pid: int, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
-    p = db.get(Publication, pid)
+    p = _hts_get(db, Publication, pid)
     if p is None:
         raise HTTPException(404, "publication not found")
     if p.status not in ("draft", "scheduled"):
@@ -371,7 +383,7 @@ def cancel(pid: int, request: Request, db: Session = Depends(get_db), user: Curr
 @router.post("/publications/{pid}/retry")
 def retry(pid: int, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
     """Administrative resend of a failed publication (resumes the saved upload session if any)."""
-    p = db.get(Publication, pid)
+    p = _hts_get(db, Publication, pid)
     if p is None:
         raise HTTPException(404, "publication not found")
     if p.status != "failed":
@@ -379,7 +391,7 @@ def retry(pid: int, request: Request, db: Session = Depends(get_db), user: Curre
     blockers = service.reuse_blockers(p)
     if blockers:
         raise HTTPException(409, blockers[0])
-    if p.remote_id and p.platform not in ("tiktok", "instagram"):
+    if p.remote_id and p.platform not in ("tiktok", "instagram", "facebook"):
         raise HTTPException(409, "esta publicação já tem um vídeo na plataforma; verifique-o lá antes de reenviar")
     if (p.remote_status or {}).get("failure") == "rejected_by_platform":
         # Meta refused the previous container for good: archive it and start a NEW session/container
@@ -395,7 +407,7 @@ def retry(pid: int, request: Request, db: Session = Depends(get_db), user: Curre
 
 @router.post("/publications/{pid}/metrics")
 def refresh_metrics(pid: int, db: Session = Depends(get_db), _: CurrentUser = Depends(require_admin)):
-    p = db.get(Publication, pid)
+    p = _hts_get(db, Publication, pid)
     if p is None or p.status != "published":
         raise HTTPException(409, "métricas só existem para publicações concluídas")
     from ..publish.runner import refresh_metrics as do
@@ -442,7 +454,7 @@ class BatchIn(BaseModel):
 
 @router.post("/batch")
 def batch(body: BatchIn, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
-    acct = db.get(PublishAccount, body.account_id)
+    acct = _hts_get(db, PublishAccount, body.account_id)
     if acct is None:
         raise HTTPException(404, "account not found")
     _privacy_ok(acct, body.privacy)
@@ -490,7 +502,7 @@ class RepackIn(BaseModel):
 @router.post("/repack")
 def repack(body: RepackIn, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(require_admin)):
     """Preview (dry_run) or apply: move scheduled publications of an account into the next free slots."""
-    if db.get(PublishAccount, body.account_id) is None:
+    if _hts_get(db, PublishAccount, body.account_id) is None:
         raise HTTPException(404, "account not found")
     plan = ed.repack(db, body.account_id, user.email, dry_run=body.dry_run)
     if not body.dry_run:
@@ -553,7 +565,7 @@ class ResolveIn(BaseModel):
 def resolve(pid: int, body: ResolveIn, request: Request, db: Session = Depends(get_db),
             user: CurrentUser = Depends(require_admin)):
     """The person checked the profile: register what really happened to an uncertain publication."""
-    p = db.get(Publication, pid)
+    p = _hts_get(db, Publication, pid)
     if p is None:
         raise HTTPException(404, "publication not found")
     if p.status not in ("uncertain", "failed"):

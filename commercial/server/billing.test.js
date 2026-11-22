@@ -139,7 +139,7 @@ test('webhook state becomes ordered, idempotent entitlement snapshots for the ac
   assert.deepEqual({ provider: all[0].provider, ref: all[0].subscription_ref, account: all[0].account_id, plan: all[0].plan, financial: all[0].financial_status },
     { provider: 'stripe', ref: 'sub_1', account: 42, plan: 'pro', financial: 'active' })
   assert.deepEqual(all[0].access, { status: 'active', until: END + STRIPE_RENEWAL_LEEWAY, period_start: START, period_end: END, renews_at: END, cancel_at_period_end: false })
-  assert.deepEqual(all[0].limits, { hours: 200, channels: 4, simultaneous: 2, storage_gb: 25, export_4k: 30, features: { ai: 'premium', secondPass: true, variants: true, priority: true, editing: true } })
+  assert.deepEqual(all[0].limits, { hours: 200, channels: 4, simultaneous: 2, storage_gb: 25, export_4k: 30, features: { ai: 'premium', secondPass: true, variants: true, priority: true, editing: true, autoPublish: true, publishDestinations: 4, publishDaily: 4 } })
   assert.equal(all[0].manage, 'stripe_portal')
 
   // Renewal failure: grace of 3 days from the start of the unpaid period, then canceled ends access

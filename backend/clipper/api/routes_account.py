@@ -167,7 +167,8 @@ def _provider_url(url: str, market: str) -> bool:
 def checkout(body: CheckoutIn, request: Request, db: Session = Depends(get_db), user: CurrentUser = Depends(customer_user)):
     """Starts a checkout bound to THIS account. The payment only becomes access once the provider confirms it
     (webhook / payment_check) and the commercial service delivers the snapshot."""
-    if entitlements.current(db, user.id) is not None:
+    ent = entitlements.current(db, user.id)
+    if ent is not None and ent.provider != "hts":  # an HTS courtesy never prevents buying a plan
         raise HTTPException(409, "você já tem uma assinatura ativa: use as opções de gerenciamento")
     try:
         status, data = billing_link.call("/internal/billing/checkout", {
@@ -345,11 +346,15 @@ def delete_channel(mid: int, request: Request, db: Session = Depends(get_db), us
     clips already in this customer's library stay there."""
     m = _own_monitor(db, mid, user)
     m.removed_at = utcnow()
+    from .. import customer_publish
+
+    # automatic publications of this channel stop: not-started ones are cancelled, its rules switched off
+    cancelled = customer_publish.on_channel_removed(db, user.id, m.streamer_id)
     for att in db.scalars(select(MonitorSession).where(MonitorSession.monitor_id == m.id, MonitorSession.state == "watching")):
         sess = db.get(StreamSession, att.session_id)
         att.state, att.until_t, att.stop_reason, att.stopped_at = "stopped", sess.covered_until if sess else 0.0, \
             "canal removido pelo assinante", utcnow()
-    audit(db, request, user, "account.channel_delete", f"monitor:{m.id}")
+    audit(db, request, user, "account.channel_delete", f"monitor:{m.id}", {"publications_cancelled": cancelled})
     db.commit()
     return {"ok": True}
 

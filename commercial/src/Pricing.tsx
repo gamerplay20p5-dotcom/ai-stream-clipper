@@ -33,6 +33,7 @@ function planFeatures(id: PlanId, t: Copy['pricing']) {
     ...(f.variants ? [t.rows.variants] : []),
     plan.export4k ? t.exportLimit(plan.export4k) : t.export1080,
     ...(f.priority ? [t.rows.priority] : []),
+    ...(f.autoPublish ? [t.publish(f.publishDestinations, f.publishDaily)] : []),
   ]
 }
 
@@ -56,6 +57,8 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
     { label: t.rows.secondPass, value: (id: PlanId) => yesNo(plans[id].features.secondPass) },
     { label: t.rows.variants, value: (id: PlanId) => yesNo(plans[id].features.variants) },
     { label: t.rows.priority, value: (id: PlanId) => yesNo(plans[id].features.priority) },
+    { label: t.rows.publish, value: (id: PlanId) => plans[id].features.autoPublish
+      ? t.publishValue(plans[id].features.publishDestinations, plans[id].features.publishDaily) : excluded },
   ]
 
   return (
@@ -99,6 +102,7 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
         <div className="pricing-notes">
           <p><Check size={15} aria-hidden="true" />{t.shared}</p>
           {enabled ? <p className="secure-note"><Lock size={14} aria-hidden="true" />{market === 'BR' ? b.secureBr : b.secure}</p> : null}
+          <p>{t.publishNote}</p>
           <p>{t.provisional}</p>
         </div>
         <div className="comparison">

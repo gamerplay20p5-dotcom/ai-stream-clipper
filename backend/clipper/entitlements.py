@@ -130,6 +130,9 @@ def apply_snapshot(db: Session, payload: dict) -> str:
         from . import editorial
 
         editorial.redeliver_for_user(db, user.id)
+        from . import customer_publish
+
+        customer_publish.enforce_destinations(db, user.id)  # downgrade/upgrade: destinations beyond the plan pause
     return outcome
 
 
@@ -157,7 +160,9 @@ def current(db: Session, user_id: int, now: datetime | None = None) -> Entitleme
     valid = [r for r in rows if r.access_until is not None and r.access_until > now]
     if not valid:
         return None
-    best = max(valid, key=lambda r: (PLAN_RANK.get(r.plan, 0), r.access_until))
+    # Precedence: the highest plan wins; on the same plan a PAID subscription wins over an HTS courtesy
+    # (provider "hts"), then the one that lasts longer. Courtesy rows never alter paid snapshots.
+    best = max(valid, key=lambda r: (PLAN_RANK.get(r.plan, 0), r.provider != "hts", r.access_until))
     anchor = best.period_start or best.period_end or best.access_until
     return Entitlement(best.user_id, best.id, best.provider, best.plan, best.access_status, best.access_until,
                        f"{best.provider}:{best.subscription_ref}:{int(anchor.replace(tzinfo=timezone.utc).timestamp())}",

@@ -7,6 +7,8 @@ from clipper.ai.manager import ModelManager
 from clipper.ai.vlm import ANSWER_REGEX, MAX_LABEL, FrameInput, VLMAnalyzer, dedupe_sentences, drop_cut_word
 
 import re
+import sys
+import types
 
 import numpy as np
 
@@ -39,6 +41,9 @@ class _FakeManager(ModelManager):
 
 
 def test_analyzer_uses_salvaged_answer_and_says_so(monkeypatch):
+    # the fake generator never reads the tensors: stand in for OpenVINO's image Tensor (not installed on light
+    # environments) so only the real JSON salvage path is exercised; cv2 resizing still runs for real
+    monkeypatch.setitem(sys.modules, "openvino", types.SimpleNamespace(Tensor=lambda array: array))
     a = VLMAnalyzer(_FakeManager(), "qwen3-vl-2b-int4")
     monkeypatch.setattr(a, "_generate", lambda pipe, prompt, tensors, **kw: LOOPING)
     img = np.zeros((90, 160, 3), np.uint8)

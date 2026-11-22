@@ -101,6 +101,10 @@ def create_app(run_maintenance: bool = True) -> FastAPI:
 
     app.include_router(routes_account.router)
     app.include_router(routes_account.internal)
+    from . import routes_admin_customers, routes_customer_publish
+
+    app.include_router(routes_customer_publish.router)  # customers: their own destinations and publications
+    app.include_router(routes_admin_customers.router)  # HTS internal commercial panel (admin only)
     app.include_router(routes_review.router)
     app.include_router(routes_publish.router)
     app.include_router(routes_director.router)

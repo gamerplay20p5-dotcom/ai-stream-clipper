@@ -27,23 +27,34 @@ pytestmark = pytest.mark.postgres
 
 ALLOWED_HOSTS = {"localhost", "127.0.0.1", "postgres"}
 DAY = 86_400
+# Same limits as the commercial catalog (clipper.catalog.limits_for, checked by test_plan_limits_unchanged):
+# publishing Basic none, Creator 2 destinations / 3 per day in total, Pro 4 / 4.
 LIMITS = {
     "basic": {"hours": 40, "channels": 1, "simultaneous": 1, "storage_gb": 5, "export_4k": 0,
-              "features": {"ai": "economy", "secondPass": False, "variants": False, "priority": False, "editing": False}},
+              "features": {"ai": "economy", "secondPass": False, "variants": False, "priority": False, "editing": False,
+                           "autoPublish": False, "publishDestinations": 0, "publishDaily": 0}},
     "creator": {"hours": 100, "channels": 2, "simultaneous": 2, "storage_gb": 12, "export_4k": 0,
-                "features": {"ai": "enhanced", "secondPass": False, "variants": False, "priority": False, "editing": True}},
+                "features": {"ai": "enhanced", "secondPass": False, "variants": False, "priority": False, "editing": True,
+                             "autoPublish": True, "publishDestinations": 2, "publishDaily": 3}},
     "pro": {"hours": 200, "channels": 4, "simultaneous": 2, "storage_gb": 25, "export_4k": 30,
-            "features": {"ai": "premium", "secondPass": True, "variants": True, "priority": True, "editing": True}},
+            "features": {"ai": "premium", "secondPass": True, "variants": True, "priority": True, "editing": True,
+                         "autoPublish": True, "publishDestinations": 4, "publishDaily": 4}},
 }
 
 
 def _safe_admin_url() -> str:
-    url = os.environ.get("ASC_TEST_PG_URL", "")
-    if not url:
+    """Admin URL of the throwaway server (tests/pg_support.py). Without one: skipped, or FAILED under
+    ASC_REQUIRE_PG=1 (homologation never reports PostgreSQL tests as skipped)."""
+    import pg_support
+
+    try:
+        url = pg_support.admin_url()
+    except pg_support.Refused as exc:
+        pytest.fail(str(exc))
+    if url is None:
+        if pg_support.required():
+            pytest.fail("ASC_REQUIRE_PG=1 but ASC_TEST_PG_URL is not set: start the throwaway PostgreSQL")
         pytest.skip("ASC_TEST_PG_URL not set: PostgreSQL homologation tests need a disposable test server")
-    host = (urlsplit(url.replace("postgresql+psycopg", "postgresql")).hostname or "").lower()
-    if host not in ALLOWED_HOSTS or "212" in host:
-        pytest.fail(f"refusing to run against {host!r}: only a local/CI test PostgreSQL is allowed")
     return url
 
 

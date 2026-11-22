@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CreditCard, ExternalLink, Film, KeyRound, LogOut, Radio, Trash2 } from "lucide-react";
+import { CreditCard, ExternalLink, Film, KeyRound, LogOut, Radio, Send, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type AccountChannel, type AccountPreset, type AccountState } from "../api";
@@ -159,7 +159,7 @@ function Channels({ state }: { state: AccountState }) {
                 </select>
               </label>
             </div>
-            <ConfirmAction title={t("Parar de acompanhar este canal?")} description={t("O acompanhamento para. Os Shorts que você já recebeu continuam na sua biblioteca.")}
+            <ConfirmAction title={t("Parar de acompanhar este canal?")} description={t("O acompanhamento para e as publicações automáticas deste canal que ainda não começaram são canceladas. Os Shorts que você já recebeu continuam na sua biblioteca.")}
               confirmLabel={t("Remover")} pending={remove.isPending} onConfirm={() => remove.mutate(ch.id)} label={t("Remover {name}", { name: ch.display_name || ch.channel })}>
               <Trash2 size={15} aria-hidden />
             </ConfirmAction>
@@ -215,8 +215,9 @@ export default function AccountApp({ email }: { email: string }) {
       <header className="library-topbar">
         <Brand />
         <nav className="flex min-w-0 items-center gap-2" aria-label={t("Conta")}>
-          <Link className="btn-quiet" to="/biblioteca"><Film size={15} aria-hidden />{t("Meus cortes")}</Link>
-          <Link className="btn-quiet" to="/conta/senha"><KeyRound size={15} aria-hidden />{t("Senha")}</Link>
+          <Link className="btn-quiet" to="/biblioteca" aria-label={t("Meus cortes")}><Film size={15} aria-hidden /><span className="hidden sm:inline">{t("Meus cortes")}</span></Link>
+          <Link className="btn-quiet" to="/conta/publicacao" aria-label={t("Publicação automática")}><Send size={15} aria-hidden /><span className="hidden sm:inline">{t("Publicação automática")}</span></Link>
+          <Link className="btn-quiet" to="/conta/senha" aria-label={t("Senha")}><KeyRound size={15} aria-hidden /><span className="hidden sm:inline">{t("Senha")}</span></Link>
           <span className="hidden truncate text-xs text-ink-muted md:inline">{email}</span>
           <button type="button" className="btn-quiet" onClick={logout} disabled={leaving}>
             <LogOut size={15} aria-hidden />{leaving ? t("Saindo…") : t("Sair")}

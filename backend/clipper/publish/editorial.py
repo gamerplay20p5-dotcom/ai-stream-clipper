@@ -51,7 +51,7 @@ def set_paused(db: Session, paused: bool, reason: str, user: str) -> dict:
 # ------------------------------------------------------------------ proposals (semi-automatic)
 def expire_proposals(db: Session) -> int:
     n = 0
-    for p in db.scalars(select(Publication).where(Publication.status == "proposed",
+    for p in db.scalars(select(Publication).where(Publication.owner_id.is_(None), Publication.status == "proposed",
                                                   Publication.scheduled_at <= utcnow())):
         p.status = "expired"
         service.log_event(p, "expired", "proposta não confirmada até o horário")
@@ -65,7 +65,7 @@ def confirm(db: Session, ids: list[int], user: str) -> dict:
     now = utcnow()
     for pid in ids:
         p = db.get(Publication, pid)
-        if p is None or p.status != "proposed":
+        if p is None or p.owner_id is not None or p.status != "proposed":  # HTS proposals only
             refused[pid] = ["não é uma proposta pendente"]
             continue
         clip = db.get(Clip, p.clip_id) if p.clip_id else None
@@ -90,7 +90,7 @@ def dismiss(db: Session, ids: list[int], user: str) -> list[int]:
     out = []
     for pid in ids:
         p = db.get(Publication, pid)
-        if p is not None and p.status == "proposed":
+        if p is not None and p.owner_id is None and p.status == "proposed":
             p.status = "cancelled"
             service.log_event(p, "dismissed", f"proposta recusada por {user}")
             out.append(pid)
@@ -141,6 +141,7 @@ def calendar(db: Session, days: int = 14) -> dict:
     now = utcnow()
     lo, hi = now - timedelta(days=2), now + timedelta(days=max(1, min(days, 60)))
     rows = db.scalars(select(Publication).where(
+        Publication.owner_id.is_(None),
         Publication.status.in_(("proposed", "scheduled", "uploading", "processing", "uncertain", "published", "expired", "failed")),
         ((Publication.scheduled_at >= lo) & (Publication.scheduled_at <= hi))
         | ((Publication.scheduled_at.is_(None)) & (Publication.created_at >= lo))
@@ -207,7 +208,7 @@ def respread_stale(db: Session, now: datetime | None = None) -> int:
     """Scheduled publications whose time passed long ago (publisher down, old queue bug) are NOT sent in a
     burst: they get the next free slots of their rule."""
     now = now or utcnow()
-    stale = list(db.scalars(select(Publication).where(Publication.status == "scheduled",
+    stale = list(db.scalars(select(Publication).where(Publication.owner_id.is_(None), Publication.status == "scheduled",
                                                       Publication.scheduled_at.is_not(None),
                                                       Publication.scheduled_at < now - STALE_AFTER)))
     return len(_move_to_next_slots(db, stale, now, "sistema", "respread")) if stale else 0
@@ -233,7 +234,7 @@ def revive_blockers(db: Session, p: Publication) -> list[str]:
     blockers = service.reuse_blockers(p)
     if blockers:
         return blockers
-    if p.remote_id and p.platform not in ("tiktok", "instagram"):
+    if p.remote_id and p.platform not in ("tiktok", "instagram", "facebook"):
         return ["esta publicação já tem um vídeo na plataforma; verifique-o lá antes de reenviar"]
     clip = db.get(Clip, p.clip_id) if p.clip_id else None
     acct = db.get(PublishAccount, p.account_id)
@@ -260,8 +261,8 @@ def autofill(db: Session, user: str, dry_run: bool = True, account_id: int | Non
     now = utcnow()
     out = {"moved": [], "retried": [], "new": [], "skipped": []}
     sp = db.begin_nested() if dry_run else None
-    rules = db.scalars(select(PublishRule).where(PublishRule.enabled.is_(True), PublishRule.mode != "manual")
-                       .order_by(PublishRule.id))
+    rules = db.scalars(select(PublishRule).where(PublishRule.enabled.is_(True), PublishRule.mode != "manual",
+                                                 PublishRule.owner_id.is_(None)).order_by(PublishRule.id))
     seen: set[int] = set()
     for rule in rules:
         acct = db.get(PublishAccount, rule.account_id)
@@ -314,7 +315,7 @@ def autofill(db: Session, user: str, dry_run: bool = True, account_id: int | Non
 
 def reschedule(db: Session, pid: int, when: datetime | None, user: str) -> Publication:
     p = db.get(Publication, pid)
-    if p is None:
+    if p is None or p.owner_id is not None:  # customers reschedule nothing through the HTS panel
         raise LookupError("publication not found")
     if p.status == "failed":  # dragged back onto the calendar: a new round, if it never went live
         why = revive_blockers(db, p)
@@ -343,7 +344,7 @@ def _num(m: dict, *keys: str) -> int:
 
 def report(db: Session, days: int = 30) -> dict:
     since = utcnow() - timedelta(days=max(1, min(days, 365)))
-    pubs = list(db.scalars(select(Publication).where(Publication.created_at >= since)))
+    pubs = list(db.scalars(select(Publication).where(Publication.owner_id.is_(None), Publication.created_at >= since)))
     by_platform: dict[str, dict] = defaultdict(lambda: {"published": 0, "views": 0, "likes": 0, "comments": 0,
                                                          "failed": 0, "with_metrics": 0})
     by_cat: dict[str, dict] = defaultdict(lambda: {"published": 0, "views": 0})

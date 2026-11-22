@@ -14,3 +14,7 @@ commercial/dist/
 !.env.example
 *.log
 .pytest_cache/
+
+# local homologation (scripts/homologacao.*): isolated venv and generated reports
+.homolog/
+reports/homologacao/

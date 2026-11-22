@@ -583,7 +583,7 @@ test('the browser return never activates by itself: only payment_check does, and
   assert.deepEqual([snapshot.provider, snapshot.plan, snapshot.market, snapshot.access.status, snapshot.access.until], ['infinitepay', 'creator', 'BR', 'active', addMonth(T0)])
   assert.equal(snapshot.access.renews_at, null, 'no automatic renewal in Brazil')
   assert.equal(snapshot.manage, 'infinitepay_links')
-  assert.deepEqual(snapshot.limits.features, { ai: 'enhanced', secondPass: false, variants: false, priority: false, editing: true })
+  assert.deepEqual(snapshot.limits.features, { ai: 'enhanced', secondPass: false, variants: false, priority: false, editing: true, autoPublish: true, publishDestinations: 2, publishDaily: 3 })
   // Delivered to the main backend
   assert.equal((await ctx.dispatch()).delivered, ctx.read('SELECT COUNT(*) AS n FROM entitlement_outbox')[0].n)
   assert.equal(ctx.main.received.at(-1).access.status, 'active')
