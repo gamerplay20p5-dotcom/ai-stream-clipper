@@ -89,7 +89,7 @@ test('lookup keys round-trip only for catalog plans and markets', () => {
 
 test('no anonymous checkout: the public route is gone and markets stay closed without the account link', async t => {
   const ctx = await start(t, { link: {} })
-  assert.deepEqual(await (await fetch(`${ctx.base}/api/billing/config`)).json(), { markets: { BR: false, US: false }, appUrl: 'https://app.clipper.example', waitlist: true })
+  assert.deepEqual(await (await fetch(`${ctx.base}/api/billing/config`)).json(), { markets: { BR: false, US: false }, appUrl: 'https://app.clipper.example', waitlist: true, legal: true })
   assert.equal((await fetch(`${ctx.base}/api/checkout`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"plan":"pro","market":"US","language":"en"}' })).status, 404)
   assert.equal((await checkout(ctx.base, {})).status, 503, 'no secret configured: the signed route refuses')
 })

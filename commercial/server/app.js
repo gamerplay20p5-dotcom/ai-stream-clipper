@@ -6,6 +6,7 @@ import { rateLimit } from 'express-rate-limit'
 import catalog from '../catalog.json' with { type: 'json' }
 import { billingSettings } from './billing.js'
 import { infinitePaySettings } from './infinitepay.js'
+import { legalRouter } from './legal.js'
 import { createPayments } from './payments.js'
 
 import { emailPattern } from './validation.js'
@@ -26,7 +27,9 @@ function parseInterest(body) {
   return { email, plan, country, otherCountry, platform, language, market }
 }
 
-export function createApp({ databasePath, dist, trustProxy, waitlistOpen = true, paymentsOpen = true, testAccounts = [], stripe = null, billing = billingSettings({}), infinitepay = infinitePaySettings({}), infinitepayRequest = null, mailer = null, clock, link = {}, log = console }) {
+export function createApp({ databasePath, dist, trustProxy, waitlistOpen = true, legalPublished = true, paymentsOpen = true, testAccounts = [], stripe = null, billing = billingSettings({}), infinitepay = infinitePaySettings({}), infinitepayRequest = null, mailer = null, clock, link = {}, log = console }) {
+  // The waitlist collects e-mails: it can only open once the privacy policy and terms are published
+  const waitlistAccepting = Boolean(waitlistOpen && legalPublished)
   mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 })
   const db = new DatabaseSync(databasePath, { timeout: 1_000 })
   db.exec(`
@@ -61,7 +64,7 @@ export function createApp({ databasePath, dist, trustProxy, waitlistOpen = true,
     next()
   })
 
-  const payments = createPayments({ db, stripe, billing, infinitepay, infinitepayRequest, mailer, clock, log, link, waitlistOpen, paymentsOpen, testAccounts })
+  const payments = createPayments({ db, stripe, billing, infinitepay, infinitepayRequest, mailer, clock, log, link, waitlistOpen: waitlistAccepting, legalPublished, paymentsOpen, testAccounts })
   app.use(payments.router)
 
   app.post('/api/waitlist',
@@ -76,7 +79,7 @@ export function createApp({ databasePath, dist, trustProxy, waitlistOpen = true,
     express.json({ limit: '4kb', inflate: false }),
     (req, res) => {
       // Closed until the privacy policy and terms are published: nothing is collected
-      if (!waitlistOpen) return res.status(503).json({ error: 'waitlist_closed' })
+      if (!waitlistAccepting) return res.status(503).json({ error: 'waitlist_closed' })
       if (!req.is('application/json')) return res.status(415).json({ error: 'unsupported_content_type' })
       // Silently accept bots and repeated addresses without disclosing list membership.
       if (typeof req.body?.website === 'string' && req.body.website.trim()) return res.sendStatus(202)
@@ -89,6 +92,7 @@ export function createApp({ databasePath, dist, trustProxy, waitlistOpen = true,
   )
 
   if (dist) {
+    app.use(legalRouter(dist, Boolean(legalPublished)))
     app.get('/', (req, res) => {
       const language = catalog.languages.includes(req.query.lang)
         ? req.query.lang

@@ -50,7 +50,8 @@ export function Waitlist({ copy, language, market, interest, onInterest, marker,
         }),
       })
       if (response.status === 202) setStatus('success')
-      else if (response.status === 503) setStatus('closed')
+      // Only the server's explicit "closed" answer hides the form; any other 503 is a temporary failure
+      else if (response.status === 503) setStatus((await response.json().catch(() => ({})))?.error === 'waitlist_closed' ? 'closed' : 'unavailable')
       else if (response.status === 422) setStatus('invalid')
       else if (response.status === 429) setStatus('rate')
       else setStatus('unavailable')
@@ -129,7 +130,7 @@ export function Waitlist({ copy, language, market, interest, onInterest, marker,
               </div>
               <label className="consent field-wide">
                 <input type="checkbox" name="consent" required />
-                <span>{t.consent}</span>
+                <span>{t.consent} (<a href={language === 'en' ? '/en/privacy' : '/privacidade'}>{language === 'en' ? 'Privacy Policy' : 'Política de Privacidade'}</a>)</span>
               </label>
               <button className="button primary field-wide" type="submit" aria-describedby="form-status">
                 {status === 'sending' ? <>{t.sending}<LoaderCircle className="form-spinner" size={18} aria-hidden="true" /></> : <>{copy.join}<ArrowUpRight size={18} aria-hidden="true" /></>}

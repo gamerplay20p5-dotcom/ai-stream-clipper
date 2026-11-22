@@ -13,7 +13,7 @@ import { createOutbox } from './outbox.js'
 import { createPromotions } from './promotions.js'
 import { normalizeEmail } from './validation.js'
 
-export function createPayments({ db, stripe, billing, infinitepay, infinitepayRequest, mailer, clock, log, link = {}, waitlistOpen = true, paymentsOpen = true, testAccounts = [] }) {
+export function createPayments({ db, stripe, billing, infinitepay, infinitepayRequest, mailer, clock, log, link = {}, waitlistOpen = true, legalPublished = true, paymentsOpen = true, testAccounts = [] }) {
   const outbox = createOutbox({ db, send: link.send ?? null, log, ...(clock ? { now: clock } : {}) })
   const stripeReady = Boolean(stripe && billing.secretKey && billing.webhookSecret && billing.appUrl)
   const promotions = createPromotions({ db, stripe, stripeEnabled: stripeReady, log, ...(clock ? { now: clock } : {}) })
@@ -39,7 +39,7 @@ export function createPayments({ db, stripe, billing, infinitepay, infinitepayRe
   // Public: only whether each market is open, where accounts live (the landing links there) and whether the
   // waitlist accepts sign-ups (closed until the privacy policy and terms are published)
   router.get('/api/billing/config', (_req, res) => {
-    res.set('Cache-Control', 'no-store').json({ markets, appUrl: billing.appUrl || '', waitlist: Boolean(waitlistOpen) })
+    res.set('Cache-Control', 'no-store').json({ markets, appUrl: billing.appUrl || '', waitlist: Boolean(waitlistOpen), legal: Boolean(legalPublished) })
   })
 
   const signed = [express.raw({ type: 'application/json', limit: '4kb' }), requireSignature(link.secret, 'main')]

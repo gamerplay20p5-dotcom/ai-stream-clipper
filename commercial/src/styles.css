@@ -148,6 +148,7 @@ main:focus, section[tabindex='-1']:focus { outline: none; }
 .footer-col a, .legal-details summary { display: flex; align-items: center; min-height: 40px; color: var(--muted); font-size: .93rem; }
 .footer-col a:hover, .legal-details summary:hover { color: var(--text); }
 .legal-details p { padding-bottom: var(--space-2); color: var(--muted); font-size: .85rem; }
+.legal-links { margin: 0; padding: 0; list-style: none; }
 .footer-end { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-3); padding-block: var(--space-5); border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; }
 
 @media (max-width: 1120px) {
