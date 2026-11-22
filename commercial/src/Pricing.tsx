@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowUpRight, Check, Crown, LoaderCircle, Lock, Minus, Plus, Sparkles, X } from 'lucide-react'
-import { startCheckout, type BillingConfig, type CheckoutError } from './billing'
+import { ArrowUpRight, Check, Crown, Lock, Minus, Plus, Sparkles } from 'lucide-react'
+import { subscribeUrl, type BillingConfig } from './billing'
 import type { Copy, Language } from './content'
 import { formatPrice, planIds, plans, type Market, type PlanId } from './market'
 
@@ -22,63 +21,28 @@ export function MarketSwitch({ market, onMarket, label }: Pick<Props, 'market' |
   )
 }
 
-// Display only: prices and allowances come from catalog.json, which the server also uses to validate plan ids.
+// Display only: prices, allowances and features come from catalog.json, the same file the commercial service
+// sends to the main backend as the plan limits (the backend enforces them; the page only shows them).
 function planFeatures(id: PlanId, t: Copy['pricing']) {
   const plan = plans[id]
-  const common = [t.hours(plan.hours), t.channels(plan.channels), t.simul(plan.simultaneous), t.storage(plan.storageGb)]
-  if (id === 'basic') return [...common, t.plans.basic.ai, t.export1080]
-  if (id === 'creator') return [...common, t.plans.creator.ai, t.rows.editing, t.export1080]
-  return [...common, t.rows.secondPass, t.rows.variants, t.exportLimit(plan.export4k), t.rows.priority]
+  const f = plan.features
+  return [
+    t.hours(plan.hours), t.channels(plan.channels), t.simul(plan.simultaneous), t.storage(plan.storageGb),
+    ...(f.secondPass ? [t.rows.secondPass] : [t.plans[id].ai]),
+    ...(f.editing && !f.variants ? [t.rows.editing] : []),
+    ...(f.variants ? [t.rows.variants] : []),
+    plan.export4k ? t.exportLimit(plan.export4k) : t.export1080,
+    ...(f.priority ? [t.rows.priority] : []),
+  ]
 }
 
 export function Pricing({ copy, market, onMarket, onInterest, billing, language }: Props) {
   const t = copy.pricing
   const b = copy.billing
-  const [pending, setPending] = useState<PlanId | null>(null)
-  const [error, setError] = useState<CheckoutError | null>(null)
-  const [chosen, setChosen] = useState<PlanId | null>(null)
-  const dialog = useRef<HTMLDialogElement>(null)
-  const opener = useRef<HTMLButtonElement | null>(null)
-  const emailInput = useRef<HTMLInputElement>(null)
-  const enabled = billing.markets[market]
-
-  async function pay(plan: PlanId, email = '') {
-    setPending(plan)
-    setError(null)
-    const problem = await startCheckout(plan, market, language, email)
-    // On success the browser is already leaving for the payment page
-    if (problem) { setError(problem); setPending(null) }
-    return problem
-  }
-
-  function subscribe(plan: PlanId, button: HTMLButtonElement) {
-    if (market !== 'BR') return void pay(plan)
-    // InfinitePay has no recurring billing: the email receives next month's payment link
-    opener.current = button
-    setChosen(plan)
-    setError(null)
-  }
-
-  // Open the dialog once its form has rendered, so the email field can take focus
-  useEffect(() => {
-    if (!chosen || dialog.current?.open) return
-    dialog.current?.showModal()
-    emailInput.current?.focus()
-  }, [chosen])
-
-  function closeDialog() {
-    dialog.current?.close()
-    opener.current?.focus()
-  }
-
-  async function submitEmail(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!chosen) return
-    const email = String(new FormData(event.currentTarget).get('email') ?? '')
-    await pay(chosen, email)
-  }
+  const enabled = billing.markets[market] && Boolean(billing.appUrl)
   const included = <><Check className="included" size={17} aria-hidden="true" /><span className="sr-only">{t.yes}</span></>
   const excluded = <><Minus size={16} aria-hidden="true" /><span className="sr-only">{t.no}</span></>
+  const yesNo = (value: boolean) => value ? included : excluded
   const rows = [
     { label: t.rows.hours, value: (id: PlanId) => `${plans[id].hours} h` },
     { label: t.rows.channels, value: (id: PlanId) => plans[id].channels },
@@ -88,10 +52,10 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
     { label: t.rows.storage, value: (id: PlanId) => `${plans[id].storageGb} GB` },
     { label: t.rows.captions, value: () => included },
     { label: t.rows.watermark, value: () => included },
-    { label: t.rows.editing, value: (id: PlanId) => id !== 'basic' ? included : excluded },
-    { label: t.rows.secondPass, value: (id: PlanId) => id === 'pro' ? included : excluded },
-    { label: t.rows.variants, value: (id: PlanId) => id === 'pro' ? included : excluded },
-    { label: t.rows.priority, value: (id: PlanId) => id === 'pro' ? included : excluded },
+    { label: t.rows.editing, value: (id: PlanId) => yesNo(plans[id].features.editing) },
+    { label: t.rows.secondPass, value: (id: PlanId) => yesNo(plans[id].features.secondPass) },
+    { label: t.rows.variants, value: (id: PlanId) => yesNo(plans[id].features.variants) },
+    { label: t.rows.priority, value: (id: PlanId) => yesNo(plans[id].features.priority) },
   ]
 
   return (
@@ -119,9 +83,10 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
                 </ul>
                 {enabled ? (
                   <div className="plan-actions">
-                    <button type="button" className={`button ${id === 'creator' ? 'primary' : 'outline'}`} disabled={pending !== null} aria-busy={pending === id} onClick={event => subscribe(id, event.currentTarget)}>
-                      {pending === id ? <>{b.redirecting}<LoaderCircle className="form-spinner" size={16} aria-hidden="true" /></> : <>{b.subscribe(plan.name)}<ArrowUpRight size={16} aria-hidden="true" /></>}
-                    </button>
+                    {/* Subscribing happens in the account area: sign in (or create a verified account), then pay */}
+                    <a className={`button ${id === 'creator' ? 'primary' : 'outline'}`} href={subscribeUrl(billing.appUrl, id, market, language)}>
+                      {b.subscribe(plan.name)}<ArrowUpRight size={16} aria-hidden="true" />
+                    </a>
                     <a className="plan-waitlist" href="#acesso" onClick={() => onInterest(id)}>{b.orWaitlist}</a>
                   </div>
                 ) : (
@@ -131,7 +96,6 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
             )
           })}
         </div>
-        <div className="checkout-feedback" role="status">{error && !chosen ? <p className="form-error">{b.errors[error]}</p> : null}</div>
         <div className="pricing-notes">
           <p><Check size={15} aria-hidden="true" />{t.shared}</p>
           {enabled ? <p className="secure-note"><Lock size={14} aria-hidden="true" />{market === 'BR' ? b.secureBr : b.secure}</p> : null}
@@ -164,31 +128,6 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
           <p className="pro-note">{t.proNote(plans.pro.export4k)}</p>
         </div>
       </div>
-      <dialog ref={dialog} className="checkout-dialog" aria-labelledby="checkout-dialog-title" onClose={() => { setChosen(null); setPending(null) }}
-        onCancel={event => { event.preventDefault(); closeDialog() }}>
-        {chosen ? (
-          <form onSubmit={submitEmail}>
-            <div className="checkout-dialog-head">
-              <h3 id="checkout-dialog-title">{b.dialog.title(plans[chosen].name)}</h3>
-              <button type="button" className="notice-close" aria-label={b.dialog.cancel} onClick={closeDialog}><X size={18} aria-hidden="true" /></button>
-            </div>
-            <p className="checkout-dialog-price"><strong>{formatPrice(chosen, market).symbol} {formatPrice(chosen, market).amount}</strong>{t.perMonth}</p>
-            <p id="checkout-dialog-detail">{b.dialog.detail}</p>
-            <label className="field">
-              <span>{b.dialog.email}</span>
-              <input ref={emailInput} name="email" type="email" autoComplete="email" autoCapitalize="none" spellCheck={false} maxLength={254} required aria-describedby="checkout-dialog-detail" />
-            </label>
-            <div role="status" className="checkout-dialog-status">{error ? <p className="form-error">{b.errors[error]}</p> : null}</div>
-            <div className="checkout-dialog-actions">
-              <button type="button" className="button outline" onClick={closeDialog}>{b.dialog.cancel}</button>
-              <button type="submit" className="button primary" disabled={pending !== null}>
-                {pending ? <>{b.redirecting}<LoaderCircle className="form-spinner" size={16} aria-hidden="true" /></> : <>{b.dialog.submit}<ArrowUpRight size={16} aria-hidden="true" /></>}
-              </button>
-            </div>
-            <p className="secure-note"><Lock size={14} aria-hidden="true" />{b.secureBr}</p>
-          </form>
-        ) : null}
-      </dialog>
     </section>
   )
 }

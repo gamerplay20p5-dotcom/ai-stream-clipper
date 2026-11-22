@@ -117,6 +117,13 @@ def enqueue_variant(db: Session, clip: Clip, name: str) -> None:
     """Queue a variant render bound to THIS plan revision (``render_id``): any other delivery is stale."""
     import uuid
 
+    from . import entitlements
+    from .models import Streamer
+
+    # Alternative edits are a premium feature for customer channels; HTS channels keep them
+    if not entitlements.has_feature(db, db.get(Streamer, clip.streamer_id), "variants"):
+        return
+
     v = _variants(clip)
     rec = dict(v[name])
     rec["round"] = int(rec.get("round", 0)) + 1

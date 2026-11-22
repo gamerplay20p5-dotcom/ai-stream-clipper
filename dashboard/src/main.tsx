@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import React, { useEffect } from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { api, ApiError, type Me } from "./api";
 import { Skeleton } from "./components/ui";
 import Layout from "./components/Layout";
@@ -12,6 +12,7 @@ import Director from "./pages/Director";
 import Evaluation from "./pages/Evaluation";
 import Publishing from "./pages/Publishing";
 import Infrastructure from "./pages/Infrastructure";
+import AccountApp from "./pages/Account";
 import LibraryApp from "./pages/Library";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
@@ -51,12 +52,17 @@ function App() {
   // External accounts only ever get their library: no staff navigation, no staff requests.
   // This is presentation only; every API route is authorized by the backend.
   if (user && !(user.staff ?? user.role === "admin")) {
+    const customer = user.role === "customer";
+    const home = customer ? "/conta" : "/biblioteca";
     return (
       <Routes>
         <Route path="/definir-senha" element={<SetPassword />} />
-        <Route path="/conta/senha" element={<main className="mx-auto max-w-md p-6"><ChangePassword back="/biblioteca" /></main>} />
+        <Route path="/conta/senha" element={<main className="mx-auto max-w-md p-6"><ChangePassword back={home} /></main>} />
         <Route path="/biblioteca" element={<LibraryApp email={user.email} />} />
-        <Route path="*" element={<Navigate to="/biblioteca" replace />} />
+        {customer && <Route path="/conta" element={<AccountApp email={user.email} />} />}
+        {customer && <Route path="/conta/assinatura" element={<AccountApp email={user.email} />} />}
+        {/* a plan chosen on the landing page (?plan=&market=) survives the login */}
+        <Route path="*" element={<KeepQuery to={home} />} />
       </Routes>
     );
   }
@@ -64,6 +70,7 @@ function App() {
     <Routes>
       <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login onDone={() => me.refetch()} />} />
       <Route path="/definir-senha" element={<SetPassword />} />
+      <Route path="/cadastro" element={user ? <Navigate to="/" replace /> : <Login signup onDone={() => me.refetch()} />} />
       {user ? (
         <Route element={<Layout email={user.email} />}>
           <Route index element={<Overview />} />
@@ -83,10 +90,16 @@ function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       ) : (
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        <Route path="*" element={<KeepQuery to="/login" />} />
       )}
     </Routes>
   );
+}
+
+/** Redirect that keeps ?plan=&market= so a plan picked on the landing page reaches the subscriber area. */
+function KeepQuery({ to }: { to: string }) {
+  const { search } = useLocation();
+  return <Navigate to={`${to}${search}`} replace />;
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
     s = get_settings()
     if s.is_production:
         s.require_secrets("jwt_secret", "internal_secret")
+        s.require_public_origin()
     init_engine(s.database_url)
     await asyncio.to_thread(upgrade_db, s.database_url)
     bootstrap_admin()
@@ -96,6 +97,10 @@ def create_app(run_maintenance: bool = True) -> FastAPI:
     app.include_router(routes_streamers.router)
     app.include_router(routes_clips.router)
     app.include_router(routes_admin.router)
+    from . import routes_account
+
+    app.include_router(routes_account.router)
+    app.include_router(routes_account.internal)
     app.include_router(routes_review.router)
     app.include_router(routes_publish.router)
     app.include_router(routes_director.router)

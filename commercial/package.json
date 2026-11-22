@@ -14,7 +14,8 @@
     "test:browser": "playwright test",
     "stripe:sync": "node --env-file-if-exists=.env scripts/stripe-sync.js",
     "billing:report": "node --env-file-if-exists=.env scripts/billing-report.js",
-    "infinitepay": "node --env-file-if-exists=.env scripts/infinitepay-admin.js"
+    "infinitepay": "node --env-file-if-exists=.env scripts/infinitepay-admin.js",
+    "outbox": "node --env-file-if-exists=.env scripts/outbox-admin.js"
   },
   "dependencies": {
     "@fontsource-variable/instrument-sans": "5.3.0",

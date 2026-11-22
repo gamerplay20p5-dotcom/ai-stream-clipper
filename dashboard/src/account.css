@@ -1,0 +1,24 @@
+/* Subscriber area (/conta): same visual language as the library (flows.css) and the panel tokens */
+@layer components {
+  .account-main { @apply max-w-4xl; }
+  .account-card { @apply space-y-3 rounded-lg border border-suite-line bg-suite-panel p-5; }
+  .account-card-title { @apply text-lg font-semibold; }
+  .account-usage { @apply space-y-1.5; }
+  .account-bar { @apply h-2 overflow-hidden rounded-full bg-suite-raised; }
+  .account-bar > span { @apply block h-full rounded-full bg-take transition-[width] duration-300; }
+  .account-bar > span[data-full] { @apply bg-tally; }
+  .account-plans { @apply mt-4 grid gap-2 sm:grid-cols-3; }
+  .account-channels { @apply divide-y divide-suite-line; }
+  .account-channels > li { @apply flex items-center gap-3 py-3; }
+  .account-channels > li > div { @apply flex-1; }
+  .account-add { @apply space-y-1.5 pt-2; }
+  .account-table { @apply w-full text-left text-sm; }
+  .account-table th { @apply border-b border-suite-line pb-2 font-medium text-ink-muted; }
+  .account-table td { @apply border-b border-suite-line py-2; }
+  .segmented { @apply inline-flex gap-1 rounded-md border border-suite-line bg-suite-raised p-1; }
+  .segmented > button { @apply min-h-9 rounded px-3 text-xs font-semibold text-ink-muted; }
+  .segmented > button[aria-pressed="true"] { @apply bg-suite-panel text-ink ring-1 ring-take; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .account-bar > span { transition: none; }
+}

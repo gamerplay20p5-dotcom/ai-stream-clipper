@@ -170,32 +170,6 @@
 .plan-actions .button:disabled { cursor: progress; opacity: .75; }
 .plan-waitlist { justify-self: center; min-height: 40px; display: inline-flex; align-items: center; color: var(--muted); font-size: .88rem; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 4px; }
 .plan-waitlist:hover { color: var(--text); text-decoration-color: var(--coral); }
-.checkout-feedback:not(:empty) { max-width: 640px; margin-top: var(--space-5); }
 .secure-note { display: flex; align-items: center; gap: 8px; }
 .secure-note svg { color: var(--coral); }
-.checkout-notice { border-bottom: 1px solid var(--line); background: linear-gradient(90deg, var(--coral-wash), transparent 70%), var(--panel); }
-.checkout-notice-inner { display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: var(--space-4); padding-block: var(--space-5); }
-.checkout-notice-inner > svg { margin-top: 2px; color: var(--coral); }
-.checkout-notice.is-confirmed { background: linear-gradient(90deg, rgb(255 79 98 / 18%), transparent 70%), var(--panel); }
-.checkout-notice h2 { font-size: var(--step-2); }
-.checkout-notice h2:focus { outline: none; }
-.checkout-notice p { max-width: 70ch; margin-top: 4px; color: var(--text-soft); }
-.notice-close { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: transparent; }
-.notice-close:hover { border-color: var(--coral); }
-/* The hero normally slides under the sticky header; after a notice it starts below it instead */
-.checkout-notice + .hero { margin-top: 0; padding-top: 0; }
-.checkout-notice .text-link { display: inline-flex; min-height: 40px; align-items: center; margin-top: 4px; color: var(--coral-text); font-weight: 650; text-decoration: underline; text-underline-offset: 4px; }
 
-/* InfinitePay email step (Brazil) */
-.checkout-dialog { width: min(460px, calc(100% - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-l); background: var(--panel); color: var(--text); box-shadow: var(--shadow-panel), var(--glow-violet); }
-.checkout-dialog::backdrop { background: rgb(9 11 16 / 80%); }
-.checkout-dialog form { display: grid; gap: var(--space-4); padding: clamp(20px, 4vw, 28px); }
-.checkout-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
-.checkout-dialog-head h3 { font-size: var(--step-2); }
-.checkout-dialog-price { color: var(--muted); }
-.checkout-dialog-price strong { margin-right: 4px; color: var(--text); font: 700 1.6rem/1 var(--display); letter-spacing: -.03em; }
-.checkout-dialog form > p { color: var(--text-soft); font-size: .92rem; }
-.checkout-dialog-status:empty { display: none; }
-.checkout-dialog-actions { display: flex; flex-direction: column-reverse; gap: var(--space-2); }
-.checkout-dialog-actions .button { width: 100%; }
-.checkout-dialog .secure-note { color: var(--muted); font-size: .82rem; }

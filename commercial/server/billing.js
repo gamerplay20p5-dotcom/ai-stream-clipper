@@ -1,17 +1,19 @@
 // Stripe billing for the US market (USD only), following the pattern of HowTo-Software/website.blog:
-// Checkout Sessions in subscription mode, a signed webhook as the source of truth, and the Stripe
-// customer portal for self-service. The browser only ever sends a plan id and a market; prices are
-// resolved on the server from Stripe lookup keys and checked against catalog.json.
+// Checkout Sessions in subscription mode, a signed webhook as the source of truth, and the official Stripe
+// customer portal for self-service.
+//
+// Checkout is only created for an authenticated account of the main platform (the main backend calls
+// createCheckout with the account id over the signed billing link). The account id travels in metadata set
+// by this server and comes back in signed webhooks, so a subscription is never linked by a typed email.
+// Every change is written together with an entitlement snapshot in the outbox (server/outbox.js).
 import express from 'express'
-import { rateLimit } from 'express-rate-limit'
 import catalog from '../catalog.json' with { type: 'json' }
+import { limitsFor, stripeAccess } from './access.js'
 
-const SESSION_ID = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/
 const PRICE_CACHE_MS = 10 * 60 * 1000
 // Stripe sells only in dollars; Brazilian customers pay through InfinitePay (server/infinitepay.js)
 export const STRIPE_MARKETS = ['US']
-// Stripe subscription states that grant access to the product
-export const ACTIVE_STATUSES = new Set(['active', 'trialing'])
+export const ACCOUNT_ID = /^[1-9][0-9]{0,11}$/
 
 export function lookupKey(plan, market) {
   return `asc_${plan}_${catalog.markets[market].currency.toLowerCase()}_monthly`
@@ -26,13 +28,14 @@ export function parseLookupKey(key) {
 }
 
 export function billingSettings(env = process.env) {
-  const portal = env.STRIPE_PORTAL_LOGIN_URL ?? ''
   const origin = env.COMMERCIAL_ORIGIN ? new URL(env.COMMERCIAL_ORIGIN).origin : ''
+  const appUrl = env.ASC_APP_URL ? new URL(env.ASC_APP_URL).origin : ''
   return {
     secretKey: env.STRIPE_SECRET_KEY ?? '',
     webhookSecret: env.STRIPE_WEBHOOK_SECRET ?? '',
     origin,
-    portalUrl: /^https:\/\/billing\.stripe\.com\/p\/login\/[A-Za-z0-9_-]+$/.test(portal) ? portal : '',
+    // Checkout returns and the customer portal go back to the dashboard, where access is shown from the backend
+    appUrl,
     automaticTax: env.STRIPE_AUTOMATIC_TAX === 'true',
   }
 }
@@ -72,27 +75,34 @@ function migrate(db) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) STRICT;
   `)
+  // Columns added for account binding, refunds and disputes
+  const columns = new Set(db.prepare('PRAGMA table_info(subscriptions)').all().map(column => column.name))
+  if (!columns.has('account_id')) db.exec("ALTER TABLE subscriptions ADD COLUMN account_id TEXT NOT NULL DEFAULT ''")
+  if (!columns.has('current_period_start')) db.exec('ALTER TABLE subscriptions ADD COLUMN current_period_start INTEGER')
+  if (!columns.has('refunded_at')) db.exec('ALTER TABLE subscriptions ADD COLUMN refunded_at INTEGER')
+  if (!columns.has('review')) db.exec("ALTER TABLE subscriptions ADD COLUMN review TEXT NOT NULL DEFAULT ''")
+  db.exec('CREATE INDEX IF NOT EXISTS subscriptions_account ON subscriptions(account_id)')
 }
 
 const idOf = value => (typeof value === 'string' ? value : value?.id) ?? ''
 
-export function createBilling({ db, stripe, settings, log = console }) {
+export function createBilling({ db, stripe, settings, outbox = null, log = console }) {
   migrate(db)
-  const enabled = Boolean(stripe && settings.secretKey && settings.webhookSecret && settings.origin)
+  const enabled = Boolean(stripe && settings.secretKey && settings.webhookSecret && settings.appUrl)
   const priceCache = new Map()
 
   const upsertSubscription = db.prepare(`
-    INSERT INTO subscriptions (subscription_id, customer_id, email, plan, market, status, current_period_end, cancel_at_period_end, last_event_at)
-    VALUES (:id, :customer, :email, :plan, :market, :status, :periodEnd, :cancelAtEnd, :eventAt)
+    INSERT INTO subscriptions (subscription_id, customer_id, account_id, email, plan, market, status, current_period_start, current_period_end, cancel_at_period_end, last_event_at)
+    VALUES (:id, :customer, :account, :email, :plan, :market, :status, :periodStart, :periodEnd, :cancelAtEnd, :eventAt)
     ON CONFLICT(subscription_id) DO UPDATE SET
       customer_id = excluded.customer_id,
+      account_id = CASE WHEN subscriptions.account_id = '' THEN excluded.account_id ELSE subscriptions.account_id END,
       email = CASE WHEN excluded.email <> '' THEN excluded.email ELSE subscriptions.email END,
       plan = excluded.plan, market = excluded.market, status = excluded.status,
-      current_period_end = excluded.current_period_end, cancel_at_period_end = excluded.cancel_at_period_end,
-      last_event_at = excluded.last_event_at, updated_at = CURRENT_TIMESTAMP
+      current_period_start = excluded.current_period_start, current_period_end = excluded.current_period_end,
+      cancel_at_period_end = excluded.cancel_at_period_end, last_event_at = excluded.last_event_at, updated_at = CURRENT_TIMESTAMP
     WHERE excluded.last_event_at >= subscriptions.last_event_at
   `)
-  const setEmail = db.prepare(`UPDATE subscriptions SET email = ?, updated_at = CURRENT_TIMESTAMP WHERE subscription_id = ? AND email = ''`)
   const upsertInvoice = db.prepare(`
     INSERT INTO invoices (invoice_id, subscription_id, customer_id, status, amount_due, amount_paid, currency, attempt_count, hosted_invoice_url, last_event_at)
     VALUES (:id, :subscription, :customer, :status, :due, :paid, :currency, :attempts, :url, :eventAt)
@@ -104,6 +114,50 @@ export function createBilling({ db, stripe, settings, log = console }) {
   `)
   const seenEvent = db.prepare('SELECT 1 FROM stripe_events WHERE id = ?')
   const recordEvent = db.prepare('INSERT OR IGNORE INTO stripe_events (id, type) VALUES (?, ?)')
+  const subscriptionById = db.prepare('SELECT * FROM subscriptions WHERE subscription_id = ?')
+  const latestForCustomer = db.prepare('SELECT * FROM subscriptions WHERE customer_id = ? ORDER BY last_event_at DESC LIMIT 1')
+  const customerForAccount = db.prepare("SELECT customer_id FROM subscriptions WHERE account_id = ? AND customer_id <> '' ORDER BY last_event_at DESC LIMIT 1")
+  const recentInvoices = db.prepare('SELECT * FROM invoices WHERE subscription_id = ? ORDER BY last_event_at DESC LIMIT 12')
+
+  function transaction(work) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = work()
+      db.exec('COMMIT')
+      return result
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /** Full, provider-neutral state of one subscription for the main backend. */
+  function snapshot(subscriptionId) {
+    const row = subscriptionById.get(subscriptionId)
+    if (!row || !row.account_id) return null
+    return {
+      provider: 'stripe',
+      subscription_ref: row.subscription_id,
+      account_id: Number(row.account_id),
+      plan: row.plan,
+      market: row.market,
+      financial_status: row.refunded_at ? 'refunded' : row.status,
+      review: row.review || '',
+      access: stripeAccess(row),
+      limits: limitsFor(row.plan),
+      renewal: null,
+      manage: 'stripe_portal',
+      payments: recentInvoices.all(row.subscription_id).map(invoice => ({
+        id: invoice.invoice_id, at: invoice.last_event_at, amount: invoice.amount_paid || invoice.amount_due,
+        currency: invoice.currency, status: invoice.status,
+      })),
+    }
+  }
+
+  function publish(subscriptionId) {
+    const value = outbox && snapshot(subscriptionId)
+    if (value) outbox.enqueue(value)
+  }
 
   /** The Stripe price for a plan, verified against the catalog so Stripe and the site can never disagree silently. */
   async function priceFor(plan, market) {
@@ -127,14 +181,17 @@ export function createBilling({ db, stripe, settings, log = console }) {
     const item = subscription.items?.data?.[0]
     const parsed = parseLookupKey(item?.price?.lookup_key) ?? parseLookupKey(lookupKeyFromMetadata(subscription.metadata))
     if (!parsed) return null
+    const account = String(subscription.metadata?.account_id ?? '')
     return {
       id: subscription.id,
       customer: idOf(subscription.customer),
+      account: ACCOUNT_ID.test(account) ? account : '',
       email,
       plan: parsed.plan,
       market: parsed.market,
       status: subscription.status,
       // Newer API versions report the period on the subscription item
+      periodStart: item?.current_period_start ?? subscription.current_period_start ?? null,
       periodEnd: item?.current_period_end ?? subscription.current_period_end ?? null,
       cancelAtEnd: subscription.cancel_at_period_end ? 1 : 0,
       eventAt,
@@ -146,6 +203,25 @@ export function createBilling({ db, stripe, settings, log = console }) {
     return Object.hasOwn(catalog.plans, plan ?? '') && Object.hasOwn(catalog.markets, market ?? '') ? lookupKey(plan, market) : ''
   }
 
+  function storeSubscription(row) {
+    transaction(() => {
+      upsertSubscription.run(row)
+      publish(row.id)
+    })
+  }
+
+  /** Finds our subscription for a charge (refunds and disputes). */
+  async function subscriptionForCharge(charge) {
+    const invoiceId = idOf(charge.invoice)
+    if (invoiceId) {
+      const invoice = await stripe.invoices.retrieve(invoiceId)
+      const id = idOf(invoice.parent?.subscription_details?.subscription ?? invoice.subscription)
+      if (id) return subscriptionById.get(id)
+    }
+    // Newer API versions do not link charges to invoices: one account has one active subscription
+    return charge.customer ? latestForCustomer.get(idOf(charge.customer)) : null
+  }
+
   async function handleEvent(event) {
     const object = event.data.object
     switch (event.type) {
@@ -154,12 +230,9 @@ export function createBilling({ db, stripe, settings, log = console }) {
         if (object.mode !== 'subscription' || !object.subscription) return
         // Retrieve the subscription so the stored state comes from Stripe, not from the session payload
         const subscription = await stripe.subscriptions.retrieve(idOf(object.subscription))
-        const email = object.customer_details?.email ?? ''
-        const row = subscriptionRow(subscription, event.created, email)
+        const row = subscriptionRow(subscription, event.created, object.customer_details?.email ?? '')
         if (!row) return log.warn('Stripe subscription with an unknown price ignored', subscription.id)
-        upsertSubscription.run(row)
-        if (email) setEmail.run(email, subscription.id)
-        return
+        return storeSubscription(row)
       }
       case 'customer.subscription.created':
       case 'customer.subscription.updated':
@@ -168,8 +241,7 @@ export function createBilling({ db, stripe, settings, log = console }) {
       case 'customer.subscription.resumed': {
         const row = subscriptionRow(object, event.created)
         if (!row) return log.warn('Stripe subscription with an unknown price ignored', object.id)
-        upsertSubscription.run(row)
-        return
+        return storeSubscription(row)
       }
       case 'invoice.finalized':
       case 'invoice.paid':
@@ -177,43 +249,57 @@ export function createBilling({ db, stripe, settings, log = console }) {
       case 'invoice.payment_failed':
       case 'invoice.voided':
       case 'invoice.marked_uncollectible': {
-        upsertInvoice.run({
-          id: object.id,
-          subscription: idOf(object.parent?.subscription_details?.subscription ?? object.subscription),
-          customer: idOf(object.customer),
-          status: event.type === 'invoice.payment_failed' ? 'payment_failed' : object.status ?? 'unknown',
-          due: object.amount_due ?? 0,
-          paid: object.amount_paid ?? 0,
-          currency: object.currency ?? '',
-          attempts: object.attempt_count ?? 0,
-          url: typeof object.hosted_invoice_url === 'string' && object.hosted_invoice_url.startsWith('https://') ? object.hosted_invoice_url : '',
-          eventAt: event.created,
+        const subscription = idOf(object.parent?.subscription_details?.subscription ?? object.subscription)
+        return transaction(() => {
+          upsertInvoice.run({
+            id: object.id,
+            subscription,
+            customer: idOf(object.customer),
+            status: event.type === 'invoice.payment_failed' ? 'payment_failed' : object.status ?? 'unknown',
+            due: object.amount_due ?? 0,
+            paid: object.amount_paid ?? 0,
+            currency: object.currency ?? '',
+            attempts: object.attempt_count ?? 0,
+            url: typeof object.hosted_invoice_url === 'string' && object.hosted_invoice_url.startsWith('https://') ? object.hosted_invoice_url : '',
+            eventAt: event.created,
+          })
+          // Payment history changed; access itself follows customer.subscription.* events
+          if (subscription) publish(subscription)
         })
-        return
+      }
+      case 'charge.refunded': {
+        const row = await subscriptionForCharge(object)
+        if (!row) return log.warn('Stripe refund for an unknown subscription', object.id)
+        const full = object.refunded === true || (object.amount_refunded ?? 0) >= (object.amount ?? Infinity)
+        return transaction(() => {
+          // A full refund ends access; a partial refund keeps it and asks for a financial review
+          if (full) db.prepare('UPDATE subscriptions SET refunded_at = ?, updated_at = CURRENT_TIMESTAMP WHERE subscription_id = ? AND refunded_at IS NULL').run(event.created, row.subscription_id)
+          else db.prepare("UPDATE subscriptions SET review = 'partial_refund', updated_at = CURRENT_TIMESTAMP WHERE subscription_id = ?").run(row.subscription_id)
+          publish(row.subscription_id)
+        })
+      }
+      case 'charge.dispute.created':
+      case 'charge.dispute.closed': {
+        const charge = typeof object.charge === 'string' ? await stripe.charges.retrieve(object.charge) : object.charge
+        const row = charge && await subscriptionForCharge(charge)
+        if (!row) return log.warn('Stripe dispute for an unknown subscription', object.id)
+        return transaction(() => {
+          if (event.type === 'charge.dispute.created') {
+            // Access is kept while the dispute is open, but the account is flagged
+            db.prepare("UPDATE subscriptions SET review = 'dispute', updated_at = CURRENT_TIMESTAMP WHERE subscription_id = ?").run(row.subscription_id)
+          } else if (object.status === 'lost') {
+            db.prepare("UPDATE subscriptions SET refunded_at = ?, review = 'dispute_lost', updated_at = CURRENT_TIMESTAMP WHERE subscription_id = ?").run(event.created, row.subscription_id)
+          } else {
+            db.prepare("UPDATE subscriptions SET review = '', updated_at = CURRENT_TIMESTAMP WHERE subscription_id = ? AND review = 'dispute'").run(row.subscription_id)
+          }
+          publish(row.subscription_id)
+        })
       }
       default:
     }
   }
 
   const router = express.Router()
-  const noStore = (_req, res, next) => { res.set('Cache-Control', 'no-store'); next() }
-  const limited = (limit) => rateLimit({ windowMs: 10 * 60 * 1000, limit, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'too_many_requests' } })
-
-  router.get('/api/checkout/session', noStore, limited(60), async (req, res) => {
-    if (!enabled) return res.status(503).json({ error: 'billing_disabled' })
-    const id = typeof req.query.id === 'string' ? req.query.id : ''
-    if (!SESSION_ID.test(id)) return res.status(422).json({ error: 'invalid_session' })
-    try {
-      const session = await stripe.checkout.sessions.retrieve(id)
-      // No personal data is returned: only what the confirmation notice needs
-      const plan = Object.hasOwn(catalog.plans, session.metadata?.plan ?? '') ? session.metadata.plan : ''
-      return res.json({ status: session.status, paymentStatus: session.payment_status, plan })
-    } catch (error) {
-      if (error.statusCode === 404 || error.code === 'resource_missing') return res.status(404).json({ error: 'not_found' })
-      log.error('Checkout session lookup failed', error.code ?? error.type ?? error.name)
-      return res.status(503).json({ error: 'checkout_unavailable' })
-    }
-  })
 
   // Stripe signs the raw body, so this route must not go through the JSON parser
   router.post('/api/stripe/webhook', express.raw({ type: 'application/json', limit: '1mb' }), async (req, res) => {
@@ -236,18 +322,21 @@ export function createBilling({ db, stripe, settings, log = console }) {
     }
   })
 
-  /** Checkout Session for a validated plan in a Stripe market. Returns the URL to redirect to. */
-  async function createCheckout({ plan, market, language }) {
+  /** Checkout Session for an authenticated account. Returns the URL to redirect to. */
+  async function createCheckout({ plan, market, language, accountId, email }) {
     if (!STRIPE_MARKETS.includes(market)) throw Object.assign(new Error('Stripe only sells in USD'), { code: 'unsupported_market' })
+    if (!ACCOUNT_ID.test(String(accountId))) throw Object.assign(new Error('Account required'), { code: 'account_required' })
     const price = await priceFor(plan, market)
-    const query = new URLSearchParams({ lang: language, market })
-    const metadata = { plan, market, language }
+    const metadata = { plan, market, language, account_id: String(accountId) }
+    const customer = customerForAccount.get(String(accountId))?.customer_id
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       line_items: [{ price, quantity: 1 }],
-      // Stripe substitutes the real id; the braces must stay unencoded
-      success_url: `${settings.origin}/?${query}&checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${settings.origin}/?${query}&checkout=cancelled#planos`,
+      client_reference_id: `account-${accountId}`,
+      ...(customer ? { customer } : { customer_email: email }),
+      // The dashboard shows the state the webhook delivered; the return itself grants nothing
+      success_url: `${settings.appUrl}/conta/assinatura?checkout=returned`,
+      cancel_url: `${settings.appUrl}/conta/assinatura?checkout=cancelled`,
       locale: language === 'en' ? 'en' : 'pt-BR',
       allow_promotion_codes: true,
       billing_address_collection: 'auto',
@@ -258,5 +347,21 @@ export function createBilling({ db, stripe, settings, log = console }) {
     return session.url
   }
 
-  return { router, enabled, createCheckout, portalUrl: enabled ? settings.portalUrl : '' }
+  /** Official Stripe customer portal for the account's own customer record. */
+  async function portalSession(accountId) {
+    const customer = customerForAccount.get(String(accountId))?.customer_id
+    if (!customer) throw Object.assign(new Error('No Stripe customer for this account'), { code: 'not_found' })
+    const session = await stripe.billingPortal.sessions.create({ customer, return_url: `${settings.appUrl}/conta/assinatura` })
+    return session.url
+  }
+
+  function resync() {
+    return transaction(() => {
+      const ids = db.prepare("SELECT subscription_id FROM subscriptions WHERE account_id <> ''").all()
+      for (const { subscription_id: id } of ids) publish(id)
+      return ids.length
+    })
+  }
+
+  return { router, enabled, createCheckout, portalSession, snapshot, resync }
 }

@@ -43,7 +43,7 @@ O padrão é `commercial/data/waitlist.sqlite`. O banco guarda os dados de conta
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | vazio | Stripe (mercado US). Sem eles, o checkout em USD fica desligado. |
 | `INFINITEPAY_HANDLE` / `INFINITEPAY_API_KEY` / `INFINITEPAY_WEBHOOK_TOKEN` | vazio | InfinitePay (mercado BR). As três são obrigatórias, e `COMMERCIAL_ORIGIN` precisa ser https. Sem elas, o checkout em BRL fica desligado. |
 | `SMTP_*` | vazio | E-mails de renovação da InfinitePay. |
-| `STRIPE_PORTAL_LOGIN_URL` | vazio | Link de login do portal do cliente do Stripe, opcional. |
+| `ASC_APP_URL` / `ASC_MAIN_API_URL` / `ASC_BILLING_SECRET` | vazio | Vínculo com a plataforma: endereço do painel, API interna e segredo HMAC compartilhado. Sem eles, nenhum mercado vende. |
 
 Para uma futura publicação, use um volume persistente fora da raiz servida e proteja o acesso ao arquivo e aos backups. Configure HTTPS no proxy. Ao ativar `COMMERCIAL_TRUST_PROXY`, restrinja o acesso direto ao serviço e configure o proxy para sobrescrever os cabeçalhos de encaminhamento recebidos do cliente. O limite de inscrições é por IP e por processo.
 
@@ -58,13 +58,14 @@ Dois provedores, escolhidos pelo mercado:
 
 Cada mercado só oferece checkout quando o seu provedor está configurado. Até lá, os planos levam à lista de espera.
 
-> **O pagamento confirmado ainda não libera acesso automaticamente ao AI Stream Clipper.** A HTS libera e retira o acesso manualmente, seguindo a seção "Ações manuais de acesso" de `npm run billing:report`.
+> **O pagamento confirmado pelo provedor vira acesso automaticamente:** a fotografia da assinatura vai pela outbox até a API principal, que ativa o plano da conta e aplica as cotas ([docs/ASSINATURAS.md](../docs/ASSINATURAS.md)). O checkout só existe para contas autenticadas do painel, com e-mail verificado; a landing leva até lá.
 
 | Comando | O que faz |
 | --- | --- |
 | `npm run stripe:sync` | Cria no Stripe os preços em USD a partir de `catalog.json` |
 | `npm run billing:report` | Resume assinaturas, faturas, vencimentos, ações manuais de acesso, casos para revisão e links de renovação a enviar |
 | `npm run infinitepay -- <comando>` | Registra estornos e cancelamentos, conclui revisões, reconcilia com o `payment_check` e mostra o histórico de uma assinatura |
+| `npm run outbox -- <comando>` | Fila de fotografias para a API principal: relatório (pendentes, bloqueados, rejeitados, pagos sem sincronizar, idade e último erro), reenvio auditado, reconciliação e entrega manual. Veja `docs/ASSINATURAS.md` |
 
 Guia completo em [docs/PAGAMENTOS.md](docs/PAGAMENTOS.md), e as variáveis em [.env.example](.env.example).
 

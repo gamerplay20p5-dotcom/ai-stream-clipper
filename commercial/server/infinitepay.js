@@ -12,12 +12,13 @@
 //                                 `npm run infinitepay -- refund`, which adjusts access and the ledger;
 //   - no sandbox               -> automated tests simulate the documented contract.
 //
-// Confirmed payments are recorded here. Granting or revoking access to the AI Stream Clipper dashboard is
-// still a manual HTS step (see `npm run billing:report`).
+// Every financial change is written together with an entitlement snapshot in the outbox (server/outbox.js);
+// the main backend turns it into access for the account that started the checkout.
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import express from 'express'
 import { rateLimit } from 'express-rate-limit'
 import catalog from '../catalog.json' with { type: 'json' }
+import { infinitePayAccess, limitsFor } from './access.js'
 
 export const INFINITEPAY_MARKET = 'BR'
 export const INFINITEPAY_API = 'https://api.checkout.infinitepay.io'
@@ -50,6 +51,8 @@ export function infinitePaySettings(env = process.env) {
     // Links keep the webhook URL they were created with, so the previous token stays valid during rotation
     previousWebhookToken: TOKEN.test(previous) ? previous : '',
     origin: isSecureOrigin(origin) ? origin : '',
+    // Where buyers land after paying: the dashboard, which shows the access granted by the backend
+    appUrl: env.ASC_APP_URL ? new URL(env.ASC_APP_URL).origin : '',
     renewDaysBefore: Number(env.INFINITEPAY_RENEW_DAYS_BEFORE ?? 5),
     graceDays: Number(env.INFINITEPAY_GRACE_DAYS ?? 3),
     firstLinkDays: 7,
@@ -59,7 +62,7 @@ export function infinitePaySettings(env = process.env) {
 /** Which settings are missing, for the startup log (never the values themselves). */
 export function missingInfinitePaySettings(settings) {
   return [['INFINITEPAY_HANDLE', settings.handle], ['INFINITEPAY_API_KEY', settings.apiKey],
-    ['INFINITEPAY_WEBHOOK_TOKEN', settings.webhookToken], ['COMMERCIAL_ORIGIN (https)', settings.origin]]
+    ['INFINITEPAY_WEBHOOK_TOKEN', settings.webhookToken], ['COMMERCIAL_ORIGIN (https)', settings.origin], ['ASC_APP_URL', settings.appUrl]]
     .filter(([, value]) => !value).map(([name]) => name)
 }
 
@@ -114,8 +117,8 @@ export function migrateInfinitePay(db) {
       updated_at INTEGER NOT NULL
     ) STRICT;
     CREATE INDEX IF NOT EXISTS ip_subscriptions_email ON ip_subscriptions(email, plan, status);
-    -- Simultaneous checkouts of the same customer, plan and language share one pending subscription
-    CREATE UNIQUE INDEX IF NOT EXISTS ip_subscriptions_one_pending ON ip_subscriptions(email, plan, language) WHERE status = 'pending';
+    -- Simultaneous checkouts of the same account, plan and language share one pending subscription
+    DROP INDEX IF EXISTS ip_subscriptions_one_pending;
     CREATE TABLE IF NOT EXISTS ip_charges (
       order_nsu TEXT PRIMARY KEY,
       subscription_id TEXT NOT NULL REFERENCES ip_subscriptions(id),
@@ -167,6 +170,10 @@ export function migrateInfinitePay(db) {
   const columns = new Set(db.prepare('PRAGMA table_info(ip_charges)').all().map(column => column.name))
   if (!columns.has('request_json')) db.exec("ALTER TABLE ip_charges ADD COLUMN request_json TEXT NOT NULL DEFAULT ''")
   if (!columns.has('review')) db.exec("ALTER TABLE ip_charges ADD COLUMN review TEXT NOT NULL DEFAULT ''")
+  const subscriptionColumns = new Set(db.prepare('PRAGMA table_info(ip_subscriptions)').all().map(column => column.name))
+  if (!subscriptionColumns.has('account_id')) db.exec("ALTER TABLE ip_subscriptions ADD COLUMN account_id TEXT NOT NULL DEFAULT ''")
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS ip_subscriptions_one_pending_account ON ip_subscriptions(account_id, plan, language) WHERE status = 'pending'")
+  db.exec('CREATE INDEX IF NOT EXISTS ip_subscriptions_account ON ip_subscriptions(account_id)')
 }
 
 const copy = {
@@ -184,15 +191,20 @@ const copy = {
   },
 }
 
-export function createInfinitePay({ db, settings, request, mailer = null, log = console, now = () => Math.floor(Date.now() / 1000) }) {
+export function createInfinitePay({ db, settings, request, mailer = null, outbox = null, log = console, now = () => Math.floor(Date.now() / 1000) }) {
   migrateInfinitePay(db)
-  const enabled = Boolean(settings.handle && settings.apiKey && settings.webhookToken && settings.origin && request)
+  const enabled = Boolean(settings.handle && settings.apiKey && settings.webhookToken && settings.origin && settings.appUrl && request)
   const webhookUrl = `${settings.origin}/api/infinitepay/webhook/${settings.webhookToken}`
   let renewalsRunning = false
 
   const q = {
-    insertSubscription: db.prepare("INSERT INTO ip_subscriptions (id, email, plan, language, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?)"),
-    pendingFor: db.prepare("SELECT * FROM ip_subscriptions WHERE email = ? AND plan = ? AND language = ? AND status = 'pending'"),
+    insertSubscription: db.prepare("INSERT INTO ip_subscriptions (id, account_id, email, plan, language, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)"),
+    pendingFor: db.prepare("SELECT * FROM ip_subscriptions WHERE account_id = ? AND plan = ? AND language = ? AND status = 'pending'"),
+    latestPeriod: db.prepare("SELECT period_start FROM ip_charges WHERE subscription_id = ? AND status IN ('paid', 'reversal_review') AND review = '' ORDER BY period_end DESC LIMIT 1"),
+    openRenewal: db.prepare("SELECT link_url, valid_until FROM ip_charges WHERE subscription_id = ? AND kind = 'renewal' AND status = 'open' AND valid_until > ? ORDER BY created_at DESC LIMIT 1"),
+    reviewOpen: db.prepare(`SELECT 1 FROM ip_charges c WHERE c.subscription_id = ? AND (c.status = 'reversal_review' OR c.review <> '')
+      AND NOT EXISTS (SELECT 1 FROM ip_ledger l WHERE l.order_nsu = c.order_nsu AND l.type IN ('review_cleared', 'refund_recorded')) LIMIT 1`),
+    payments: db.prepare("SELECT order_nsu, paid_at, refunded_at, paid_amount, status FROM ip_charges WHERE subscription_id = ? AND paid_at IS NOT NULL ORDER BY paid_at DESC LIMIT 12"),
     insertCharge: db.prepare(`INSERT INTO ip_charges (order_nsu, subscription_id, cycle_key, kind, plan, amount, status, request_json, valid_until, created_at)
       VALUES (?, ?, ?, ?, ?, ?, 'creating', ?, ?, ?)`),
     activeForCycle: db.prepare(`SELECT * FROM ip_charges WHERE subscription_id = ? AND cycle_key = ? AND status IN ${ACTIVE_CHARGE}`),
@@ -227,8 +239,12 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
     q.ledger.run(subscriptionId, orderNsu, type, amount, String(detail).slice(0, 200), now())
   }
 
+  let depth = 0
+  /** BEGIN IMMEDIATE transaction; nested calls join the outer one. */
   function transaction(work) {
+    if (depth > 0) return work()
     db.exec('BEGIN IMMEDIATE')
+    depth++
     try {
       const result = work()
       db.exec('COMMIT')
@@ -236,12 +252,51 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
     } catch (error) {
       db.exec('ROLLBACK')
       throw error
+    } finally {
+      depth--
     }
   }
 
+  /** Full, provider-neutral state of one subscription for the main backend. */
+  function snapshot(subscriptionId) {
+    const row = q.subscription.get(subscriptionId)
+    if (!row?.account_id) return null
+    const renewal = q.openRenewal.get(row.id, now())
+    return {
+      provider: 'infinitepay',
+      subscription_ref: row.id,
+      account_id: Number(row.account_id),
+      plan: row.plan,
+      market: INFINITEPAY_MARKET,
+      financial_status: row.status,
+      review: q.reviewOpen.get(row.id) ? 'payment_review' : '',
+      access: infinitePayAccess(row, q.latestPeriod.get(row.id)?.period_start, settings.graceDays),
+      limits: limitsFor(row.plan),
+      // No automatic renewal in Brazil: the next month is a new Pix/card payment through this link
+      renewal: renewal ? { url: renewal.link_url, valid_until: renewal.valid_until } : null,
+      manage: 'infinitepay_links',
+      payments: q.payments.all(row.id).map(charge => ({
+        id: charge.order_nsu, at: charge.paid_at, amount: charge.paid_amount, currency: 'brl',
+        status: charge.status === 'refunded' ? 'refunded' : 'paid',
+      })),
+    }
+  }
+
+  /** Queues the subscription's snapshot; always inside the transaction that changed it. */
+  function publish(subscriptionId) {
+    if (!outbox) return
+    transaction(() => {
+      const value = snapshot(subscriptionId)
+      if (value) outbox.enqueue(value)
+    })
+  }
+
   function setStatus(subscription, status, paidUntil = subscription.paid_until) {
-    q.setSubscription.run(status, paidUntil, now(), subscription.id)
-    if (status !== subscription.status) record(subscription.id, '', `status_${status}`, null, `from ${subscription.status}`)
+    transaction(() => {
+      q.setSubscription.run(status, paidUntil, now(), subscription.id)
+      if (status !== subscription.status) record(subscription.id, '', `status_${status}`, null, `from ${subscription.status}`)
+      publish(subscription.id)
+    })
   }
 
   /** The documented /links body. Built once, when the charge is reserved, and stored in request_json. */
@@ -269,7 +324,13 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
       const body = charge.request_json ? JSON.parse(charge.request_json) : linkBody(charge, subscription)
       const url = linkUrl(await request('/links', body))
       if (!url) throw Object.assign(new Error('InfinitePay link response without a usable URL'), { code: 'invalid_link_response' })
-      if (q.opened.run(url, charge.order_nsu).changes) record(subscription.id, charge.order_nsu, 'link_created', charge.amount)
+      transaction(() => {
+        if (q.opened.run(url, charge.order_nsu).changes) {
+          record(subscription.id, charge.order_nsu, 'link_created', charge.amount)
+          // A new renewal link is shown in the dashboard
+          if (charge.kind === 'renewal') publish(subscription.id)
+        }
+      })
       return url
     } catch (error) {
       q.attemptFailed.run(charge.order_nsu)
@@ -298,17 +359,19 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
     return q.charge.get(orderNsu)
   }
 
-  async function createCheckout({ plan, language, email }) {
+  async function createCheckout({ plan, language, email, accountId }) {
     if (!enabled) throw Object.assign(new Error('InfinitePay is not configured'), { code: 'disabled' })
-    // One transaction (BEGIN IMMEDIATE serializes writers across processes): the same email, plan and language
+    if (!/^[1-9][0-9]{0,11}$/.test(String(accountId ?? ''))) throw Object.assign(new Error('Account required'), { code: 'account_required' })
+    const account = String(accountId)
+    // One transaction (BEGIN IMMEDIATE serializes writers across processes): the same account, plan and language
     // always share one pending subscription and one first charge, so double clicks, simultaneous requests and a
     // retry after a crash reuse the same order_nsu instead of creating a second charge
     const { subscription, charge, url } = transaction(() => {
       const at = now()
-      let pending = q.pendingFor.get(email, plan, language)
+      let pending = q.pendingFor.get(account, plan, language)
       if (!pending) {
-        q.insertSubscription.run(randomUUID(), email, plan, language, at, at)
-        pending = q.pendingFor.get(email, plan, language)
+        q.insertSubscription.run(randomUUID(), account, email, plan, language, at, at)
+        pending = q.pendingFor.get(account, plan, language)
       }
       let current = q.activeForCycle.get(pending.id, 'first')
       if (current?.status === 'open' && current.valid_until > at + 60 * 60) return { subscription: pending, charge: current, url: current.link_url }
@@ -355,6 +418,7 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
         q.setReview.run('after_cancel', charge.order_nsu)
         record(subscription.id, charge.order_nsu, 'payment_after_cancel', Number(check.paid_amount))
         log.warn('InfinitePay payment after cancellation needs review', charge.order_nsu.slice(0, 12))
+        publish(subscription.id)
         return 'review'
       }
       setStatus(subscription, 'active', periodEnd)
@@ -382,6 +446,7 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
         transaction(() => {
           q.setChargeStatus.run('reversal_review', orderNsu, 'paid')
           record(charge.subscription_id, orderNsu, 'reversal_reported', charge.paid_amount, 'payment_check reports the paid charge as unpaid')
+          publish(charge.subscription_id)
         })
         log.warn('InfinitePay charge needs refund review', orderNsu.slice(0, 12))
         return { result: 'review', plan: charge.plan }
@@ -433,6 +498,7 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
       if (charge?.status === 'reversal_review') q.setChargeStatus.run('paid', orderNsu, 'reversal_review')
       else if (charge?.review !== 'after_cancel') return false
       record(charge.subscription_id, orderNsu, 'review_cleared', null, reason)
+      publish(charge.subscription_id)
       return true
     })
   }
@@ -531,15 +597,18 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
   // Links keep the webhook URL frozen in their payload, so the previous token must stay accepted until they expire
   const tokens = [settings.webhookToken, settings.previousWebhookToken].filter(Boolean).map(value => Buffer.from(value))
 
-  // Return from InfinitePay: forward only the validated identifiers to the page, which confirms them
-  router.get('/pagamento/infinitepay/:lang', noStore, (req, res) => {
-    const language = catalog.languages.includes(req.params.lang) ? req.params.lang : 'pt-BR'
-    const query = new URLSearchParams({ lang: language, market: INFINITEPAY_MARKET, checkout: 'success', provider: 'infinitepay' })
+  // Return from InfinitePay. The redirect itself proves nothing: the server asks payment_check (the same
+  // verification as the webhook) and then sends the buyer to the dashboard, which shows the backend's state.
+  router.get('/pagamento/infinitepay/:lang', noStore, limited(60), async (req, res) => {
     const { order_nsu: orderNsu, slug, transaction_nsu: transactionNsu } = req.query
-    if (typeof orderNsu === 'string' && ORDER.test(orderNsu)) query.set('order_nsu', orderNsu)
-    if (typeof slug === 'string' && SLUG.test(slug)) query.set('slug', slug)
-    if (typeof transactionNsu === 'string' && SLUG.test(transactionNsu)) query.set('transaction_nsu', transactionNsu)
-    res.redirect(303, `/?${query}`)
+    if (enabled && [orderNsu, slug, transactionNsu].every(value => typeof value === 'string')) {
+      try {
+        await verify({ orderNsu, slug, transactionNsu, source: 'browser' })
+      } catch (error) {
+        log.error('InfinitePay return check failed', error.code ?? error.name)
+      }
+    }
+    res.redirect(303, `${settings.appUrl || ''}/conta/assinatura?checkout=returned`)
   })
 
   router.post('/api/infinitepay/confirm', noStore, limited(30), express.json({ limit: '2kb', inflate: false }), async (req, res) => {
@@ -571,5 +640,13 @@ export function createInfinitePay({ db, settings, request, mailer = null, log = 
     }
   })
 
-  return { router, enabled, createCheckout, verify, refund, clearReview, cancel, reconcile, runRenewals }
+  function resync() {
+    return transaction(() => {
+      const ids = db.prepare("SELECT id FROM ip_subscriptions WHERE account_id <> ''").all()
+      for (const { id } of ids) publish(id)
+      return ids.length
+    })
+  }
+
+  return { router, enabled, createCheckout, verify, refund, clearReview, cancel, reconcile, runRenewals, snapshot, resync }
 }

@@ -1,0 +1,43 @@
+name: dashboard
+
+on:
+  pull_request:
+    paths: ["dashboard/**", ".github/workflows/dashboard.yml"]
+  push:
+    branches: [main]
+    paths: ["dashboard/**", ".github/workflows/dashboard.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dashboard-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: dashboard
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # same version as the dashboard build stage of the production image
+          node-version: "20.18.0"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Every visible text has an English translation
+        run: npm run check:i18n
+      - run: npm run build
+      - name: Dependency audit
+        # Known findings already on main (react-router-dom 6.27, postcss, esbuild via vite): reported, not blocking,
+        # until the dependency upgrade lands in its own PR. Remove continue-on-error after that.
+        continue-on-error: true
+        run: npm audit --audit-level=high

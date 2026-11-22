@@ -275,7 +275,7 @@ def test_every_api_route_is_closed_to_an_external_account(app, admin, store):
     Positive control: the same requests as admin never get 403, so the 403 comes from the role."""
     _account("crawler@externo.com")
     u = _login(app, "crawler@externo.com")
-    allow = re.compile(r"^/api/(auth/(login|logout|me|config|password|password-link|forgot)|library(/.*)?|publish/oauth/\{platform\}/callback)$")
+    allow = re.compile(r"^/api/(auth/(login|logout|me|config|password|password-link|forgot|signup)|library(/.*)?|publish/oauth/\{platform\}/callback)$")
     spec = app.openapi()
     checked, admin_403 = 0, []
     for path, ops in spec["paths"].items():
@@ -288,6 +288,9 @@ def test_every_api_route_is_closed_to_an_external_account(app, admin, store):
             r = u.request(method.upper(), url, json={}, headers=CSRF)
             checked += 1
             assert r.status_code == 403, (method, path, r.status_code, r.text[:120])
+            if path.startswith("/api/account/"):  # subscriber area: closed to viewers (and to staff)
+                assert r.json().get("detail") == "área exclusiva de assinantes", (method, path)
+                continue
             assert r.json().get("detail") == "acesso restrito à equipe", (method, path)
             if method.upper() == "GET":  # positive control (read-only, no side effects)
                 ra = admin.get(url)

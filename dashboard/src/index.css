@@ -4,6 +4,7 @@
 @import "./workspace.css";
 @import "./studio.css";
 @import "./flows.css";
+@import "./account.css";
 
 @tailwind base;
 @tailwind components;

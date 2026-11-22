@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import { createApp } from './app.js'
+import { fakeMain, internalPost, LINK_SECRET } from './test-helpers.js'
+import { createOutbox } from './outbox.js'
 import { addMonth, createInfinitePay, INFINITEPAY_API, infinitePayClient, infinitePaySettings, linkUrl, WEBHOOK_EVENTS } from './infinitepay.js'
 
 // Contract from https://www.infinitepay.io/checkout-documentacao (no sandbox exists, so it is simulated here)
@@ -25,7 +27,10 @@ const OLD_TOKEN = 'old_0123456789abcdefghijklmnopqrstuv'
 const KEY = 'inchk_secretkey123'
 const DAY = 86_400
 const T0 = 1_780_000_000
-const env = extra => ({ INFINITEPAY_HANDLE: '$hts', INFINITEPAY_API_KEY: KEY, INFINITEPAY_WEBHOOK_TOKEN: TOKEN, COMMERCIAL_ORIGIN: 'https://clipper.example', ...extra })
+const env = extra => ({ INFINITEPAY_HANDLE: '$hts', INFINITEPAY_API_KEY: KEY, INFINITEPAY_WEBHOOK_TOKEN: TOKEN, COMMERCIAL_ORIGIN: 'https://clipper.example', ASC_APP_URL: 'https://app.clipper.example', ...extra })
+// Each test email stands for one account of the main platform (checkout is always account-bound)
+const accounts = new Map()
+const accountFor = email => { const key = String(email).trim().toLowerCase(); if (!accounts.has(key)) accounts.set(key, accounts.size + 1); return accounts.get(key) }
 const settings = (extra = {}) => infinitePaySettings(env(extra))
 
 /** Fake InfinitePay following the documented contract; identical /links requests return the same link. */
@@ -62,9 +67,10 @@ async function start(t, { ip = settings(), api = fakeApi(), mailer, logger = cap
   const databasePath = join(dir, 'test.sqlite')
   const time = { now: T0 }
   const mails = []
-  const { app, close, runRenewals } = createApp({
+  const main = fakeMain()
+  const { app, close, runRenewals, dispatch } = createApp({
     databasePath, infinitepay: ip, infinitepayRequest: api.request, log: logger.log, clock: () => time.now,
-    mailer: mailer ?? (async message => { mails.push(message) }),
+    mailer: mailer ?? (async message => { mails.push(message) }), link: { secret: LINK_SECRET, send: main.send },
   })
   const server = app.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -81,13 +87,17 @@ async function start(t, { ip = settings(), api = fakeApi(), mailer, logger = cap
   const admin = () => {
     const db = new DatabaseSync(databasePath, { timeout: 2_000 })
     handles.push(db)
-    return createInfinitePay({ db, settings: ip, request: api.request, log: logger.log, now: () => time.now })
+    // Same wiring as scripts/infinitepay-admin.js: changes are queued in the outbox for the server to deliver
+    return createInfinitePay({ db, settings: ip, request: api.request, log: logger.log, now: () => time.now, outbox: createOutbox({ db, log: logger.log, now: () => time.now }) })
   }
-  return { base, api, time, read, runRenewals, mails, logger, admin, stop, dir, databasePath, handles }
+  return { base, api, time, read, runRenewals, mails, logger, admin, stop, dir, databasePath, handles, main, dispatch }
 }
 
 const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-const buy = (base, extra = {}) => post(`${base}/api/checkout`, { plan: 'creator', market: 'BR', language: 'pt-BR', email: 'Streamer@Example.com', ...extra })
+const buy = (base, extra = {}) => {
+  const body = { plan: 'creator', market: 'BR', language: 'pt-BR', email: 'Streamer@Example.com', ...extra }
+  return internalPost(base, '/internal/billing/checkout', { account_id: body.account ?? accountFor(body.email), ...body })
+}
 const hook = (base, body, token = TOKEN) => post(`${base}/api/infinitepay/webhook/${token}`, body)
 const notice = (order, slug = 'slug1', tx = 'tx-1') => ({ invoice_slug: slug, amount: 13990, paid_amount: 13990, installments: 1, capture_method: 'pix', transaction_nsu: tx, order_nsu: order, receipt_url: 'https://comprovante.example/1', items: [] })
 const confirm = (base, order, slug = 'slug1', tx = 'tx-1') => post(`${base}/api/infinitepay/confirm`, { orderNsu: order, slug, transactionNsu: tx })
@@ -549,7 +559,40 @@ test('webhook token: previous token accepted during rotation, never logged, retu
   const logs = logger.lines.join('\n')
   for (const secret of [TOKEN, OLD_TOKEN, KEY, 'streamer@example.com', 'x@example.com']) assert.ok(!logs.includes(secret), `log leaks ${secret.slice(0, 6)}`)
 
+  // The return always lands on the dashboard; it never carries parameters forward
   const response = await fetch(`${ctx.base}/pagamento/infinitepay/en?order_nsu=${order}&slug=abc123&transaction_nsu=tx-1&receipt_url=https://evil.example`, { redirect: 'manual' })
-  assert.equal(response.headers.get('location'), `/?lang=en&market=BR&checkout=success&provider=infinitepay&order_nsu=${order}&slug=abc123&transaction_nsu=tx-1`)
-  assert.equal((await fetch(`${ctx.base}/pagamento/infinitepay/xx?order_nsu=<script>`, { redirect: 'manual' })).headers.get('location'), '/?lang=pt-BR&market=BR&checkout=success&provider=infinitepay')
+  assert.equal(response.headers.get('location'), 'https://app.clipper.example/conta/assinatura?checkout=returned')
+  assert.equal((await fetch(`${ctx.base}/pagamento/infinitepay/xx?order_nsu=<script>`, { redirect: 'manual' })).headers.get('location'), 'https://app.clipper.example/conta/assinatura?checkout=returned')
+})
+
+test('the browser return never activates by itself: only payment_check does, and snapshots carry the account', async t => {
+  const ctx = await start(t)
+  await buy(ctx.base, { email: 'owner@example.com' })
+  const [{ order_nsu: order }] = ctx.read('SELECT order_nsu FROM ip_charges')
+  const back = (slug = 's1', tx = 't1') => fetch(`${ctx.base}/pagamento/infinitepay/pt-BR?order_nsu=${order}&slug=${slug}&transaction_nsu=${tx}`, { redirect: 'manual' })
+  // Forged or premature return: InfinitePay says unpaid
+  assert.equal((await back()).status, 303)
+  assert.equal(ctx.read('SELECT status FROM ip_subscriptions')[0].status, 'pending')
+  assert.equal(ctx.read('SELECT COUNT(*) AS n FROM entitlement_outbox')[0].n, 0, 'nothing to grant')
+  // Paid at InfinitePay: the same return now confirms through payment_check
+  ctx.api.pay(order)
+  await back()
+  assert.equal(ctx.read('SELECT status FROM ip_subscriptions')[0].status, 'active')
+  const [snapshot] = ctx.read('SELECT payload FROM entitlement_outbox ORDER BY seq DESC LIMIT 1').map(row => JSON.parse(row.payload))
+  assert.equal(snapshot.account_id, accountFor('owner@example.com'))
+  assert.deepEqual([snapshot.provider, snapshot.plan, snapshot.market, snapshot.access.status, snapshot.access.until], ['infinitepay', 'creator', 'BR', 'active', addMonth(T0)])
+  assert.equal(snapshot.access.renews_at, null, 'no automatic renewal in Brazil')
+  assert.equal(snapshot.manage, 'infinitepay_links')
+  assert.deepEqual(snapshot.limits.features, { ai: 'enhanced', secondPass: false, variants: false, priority: false, editing: true })
+  // Delivered to the main backend
+  assert.equal((await ctx.dispatch()).delivered, ctx.read('SELECT COUNT(*) AS n FROM entitlement_outbox')[0].n)
+  assert.equal(ctx.main.received.at(-1).access.status, 'active')
+
+  // A renewal link shows up in the snapshot; a refund ends access
+  ctx.time.now = addMonth(T0) - 4 * DAY
+  await ctx.runRenewals()
+  const latest = () => ctx.read('SELECT payload FROM entitlement_outbox ORDER BY seq DESC LIMIT 1').map(row => JSON.parse(row.payload))[0]
+  assert.match(latest().renewal.url, /^https:\/\/checkout\.infinitepay\.io\//)
+  ctx.admin().refund(order, { reason: 'teste' })
+  assert.deepEqual([latest().financial_status, latest().access.status], ['refunded', 'ended'])
 })

@@ -26,7 +26,8 @@ if (tables.has('ip_subscriptions')) {
   console.log('\nInfinitePay (BR) — subscriptions by plan and status')
   console.table(rows('SELECT plan, status, COUNT(*) AS total FROM ip_subscriptions GROUP BY plan, status ORDER BY plan, status'))
   // Payments are recorded automatically, but dashboard access is still granted and revoked by hand
-  console.log('InfinitePay — MANUAL ACCESS ACTIONS (last 30 days): grant on payment, revoke on expired/refunded/canceled')
+  // Access follows automatically through the outbox; this is the audit trail of what the API was told
+  console.log('InfinitePay — ACCESS CHANGES sent to the main API (last 30 days)')
   console.table(rows(`SELECT datetime(l.created_at, 'unixepoch') AS at, s.email, s.plan,
       CASE WHEN l.type = 'payment_confirmed' AND c.review = 'after_cancel' THEN 'DO NOT GRANT: paid after cancellation (financial review)'
            WHEN l.type = 'payment_confirmed' THEN 'GRANT/EXTEND until ' || datetime(c.period_end, 'unixepoch')
@@ -49,6 +50,15 @@ if (tables.has('ip_subscriptions')) {
   console.table(rows(`SELECT c.order_nsu, s.email, c.plan, c.amount, c.email_attempts, c.link_url, datetime(c.valid_until, 'unixepoch') AS valid_until
     FROM ip_charges c JOIN ip_subscriptions s ON s.id = c.subscription_id
     WHERE c.kind = 'renewal' AND c.status = 'open' AND c.emailed_at IS NULL ORDER BY c.created_at`))
+}
+
+if (tables.has('entitlement_outbox')) {
+  // Snapshots not yet accepted by the main API: access there may be behind until they are delivered
+  console.log('\nEntitlement outbox (to the main API) - details, alerts and audited resend: npm run outbox -- report')
+  console.table(rows(`SELECT SUM(delivered_at IS NULL AND rejected_at IS NULL) AS pending, SUM(rejected_at IS NOT NULL) AS rejected,
+    datetime(MIN(CASE WHEN delivered_at IS NULL AND rejected_at IS NULL THEN created_at END), 'unixepoch') AS oldest_pending FROM entitlement_outbox`))
+  console.table(rows(`SELECT seq, provider, subscription_ref, attempts, last_error, datetime(created_at, 'unixepoch') AS created
+    FROM entitlement_outbox WHERE rejected_at IS NOT NULL OR (delivered_at IS NULL AND attempts > 0) ORDER BY seq DESC LIMIT 20`))
 }
 
 if (!tables.has('subscriptions') && !tables.has('ip_subscriptions')) {
