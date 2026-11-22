@@ -26,7 +26,7 @@ function parseInterest(body) {
   return { email, plan, country, otherCountry, platform, language, market }
 }
 
-export function createApp({ databasePath, dist, trustProxy, waitlistOpen = true, paymentsOpen = true, stripe = null, billing = billingSettings({}), infinitepay = infinitePaySettings({}), infinitepayRequest = null, mailer = null, clock, link = {}, log = console }) {
+export function createApp({ databasePath, dist, trustProxy, waitlistOpen = true, paymentsOpen = true, testAccounts = [], stripe = null, billing = billingSettings({}), infinitepay = infinitePaySettings({}), infinitepayRequest = null, mailer = null, clock, link = {}, log = console }) {
   mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 })
   const db = new DatabaseSync(databasePath, { timeout: 1_000 })
   db.exec(`
@@ -61,7 +61,7 @@ export function createApp({ databasePath, dist, trustProxy, waitlistOpen = true,
     next()
   })
 
-  const payments = createPayments({ db, stripe, billing, infinitepay, infinitepayRequest, mailer, clock, log, link, waitlistOpen, paymentsOpen })
+  const payments = createPayments({ db, stripe, billing, infinitepay, infinitepayRequest, mailer, clock, log, link, waitlistOpen, paymentsOpen, testAccounts })
   app.use(payments.router)
 
   app.post('/api/waitlist',

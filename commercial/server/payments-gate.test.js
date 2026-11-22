@@ -18,7 +18,7 @@ const TOKEN = 'tok_0123456789abcdefghijklmnopqrstuv'
 const infinitepay = infinitePaySettings({ INFINITEPAY_HANDLE: 'hts', INFINITEPAY_API_KEY: 'inchk_secretkey123', INFINITEPAY_WEBHOOK_TOKEN: TOKEN, COMMERCIAL_ORIGIN: 'https://clipper.example', ASC_APP_URL: 'https://app.clipper.example' })
 const quiet = { warn() {}, error() {} }
 
-async function start(t, paymentsOpen) {
+async function start(t, paymentsOpen, testAccounts = []) {
   const directory = await mkdtemp(join(tmpdir(), 'asc-gate-'))
   const calls = { sessions: 0, links: 0 }
   const stripe = {
@@ -31,7 +31,7 @@ async function start(t, paymentsOpen) {
     return { success: true, paid: false }
   }
   const main = fakeMain()
-  const { app, close } = createApp({ databasePath: join(directory, 'gate.sqlite'), stripe, billing, infinitepay, infinitepayRequest: request, log: quiet, link: { secret: LINK_SECRET, send: main.send }, paymentsOpen })
+  const { app, close } = createApp({ databasePath: join(directory, 'gate.sqlite'), stripe, billing, infinitepay, infinitepayRequest: request, log: quiet, link: { secret: LINK_SECRET, send: main.send }, paymentsOpen, testAccounts })
   const server = app.listen(0, '127.0.0.1')
   await once(server, 'listening')
   t.after(async () => {
@@ -42,7 +42,7 @@ async function start(t, paymentsOpen) {
   return { base: `http://127.0.0.1:${server.address().port}`, calls }
 }
 
-const buy = (base, market) => internalPost(base, '/internal/billing/checkout', { account_id: 7, email: 'buyer@example.com', plan: 'pro', market, language: 'en' })
+const buy = (base, market, account = 7) => internalPost(base, '/internal/billing/checkout', { account_id: account, email: 'buyer@example.com', plan: 'pro', market, language: 'en' })
 
 test('closed payments: configured but nobody can pay; webhooks and status still work', async t => {
   const { base, calls } = await start(t, false)
@@ -82,4 +82,17 @@ test('open payments: the same configuration sells in both markets', async t => {
   assert.equal((await buy(base, 'BR')).status, 201)
   assert.deepEqual(calls, { sessions: 1, links: 1 })
   assert.equal((await (await internalPost(base, '/internal/billing/status', {})).json()).open, true)
+})
+
+test('controlled purchase: only the listed test account can pay while payments stay closed', async t => {
+  const { base, calls } = await start(t, false, ['7', 'not-an-id'])
+  assert.deepEqual((await (await fetch(`${base}/api/billing/config`)).json()).markets, { BR: false, US: false })
+  assert.equal((await buy(base, 'US', 7)).status, 201)
+  assert.equal((await buy(base, 'BR', 7)).status, 201)
+  assert.equal((await buy(base, 'US', 8)).status, 503)
+  assert.equal((await buy(base, 'BR', 8)).status, 503)
+  assert.deepEqual(calls, { sessions: 1, links: 1 })
+  const status = await (await internalPost(base, '/internal/billing/status', {})).json()
+  assert.equal(status.open, false)
+  assert.equal(status.test_accounts, 1)
 })

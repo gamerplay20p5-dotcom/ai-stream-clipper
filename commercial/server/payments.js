@@ -13,7 +13,7 @@ import { createOutbox } from './outbox.js'
 import { createPromotions } from './promotions.js'
 import { normalizeEmail } from './validation.js'
 
-export function createPayments({ db, stripe, billing, infinitepay, infinitepayRequest, mailer, clock, log, link = {}, waitlistOpen = true, paymentsOpen = true }) {
+export function createPayments({ db, stripe, billing, infinitepay, infinitepayRequest, mailer, clock, log, link = {}, waitlistOpen = true, paymentsOpen = true, testAccounts = [] }) {
   const outbox = createOutbox({ db, send: link.send ?? null, log, ...(clock ? { now: clock } : {}) })
   const stripeReady = Boolean(stripe && billing.secretKey && billing.webhookSecret && billing.appUrl)
   const promotions = createPromotions({ db, stripe, stripeEnabled: stripeReady, log, ...(clock ? { now: clock } : {}) })
@@ -27,6 +27,10 @@ export function createPayments({ db, stripe, billing, infinitepay, infinitepayRe
   const ready = Object.fromEntries(Object.keys(catalog.markets).map(market => [market, linked && (
     STRIPE_MARKETS.includes(market) ? stripeBilling.enabled : market === INFINITEPAY_MARKET ? infinite.enabled : false)]))
   const markets = Object.fromEntries(Object.entries(ready).map(([market, on]) => [market, on && Boolean(paymentsOpen)]))
+  // Controlled real purchase while payments are closed: only these accounts may check out (the public config,
+  // the landing and every other account still see payments closed). Empty by default.
+  const testers = new Set(testAccounts.map(String).filter(id => ACCOUNT_ID.test(id)))
+  const canBuy = (market, accountId) => Boolean(markets[market] || (ready[market] && testers.has(String(accountId))))
 
   const router = express.Router()
   router.use(stripeBilling.router)
@@ -42,7 +46,7 @@ export function createPayments({ db, stripe, billing, infinitepay, infinitepayRe
 
   // Operator check of the link (signed, read-only): what is configured and whether the public can pay
   router.post('/internal/billing/status', ...signed, (_req, res) => {
-    res.json({ ready, open: Boolean(paymentsOpen), markets, stripe: stripeBilling.enabled, infinitepay: infinite.enabled, outbox: outbox.stats() })
+    res.json({ ready, open: Boolean(paymentsOpen), markets, test_accounts: testers.size, stripe: stripeBilling.enabled, infinitepay: infinite.enabled, outbox: outbox.stats() })
   })
 
   const validCheckout = ({ account_id: accountId, plan, market, language, promo_code: promoCode }) =>
@@ -56,7 +60,7 @@ export function createPayments({ db, stripe, billing, infinitepay, infinitepayRe
     const promoCode = typeof body.promo_code === 'string' ? body.promo_code.trim() : ''
     const email = normalizeEmail(body.email)
     if (!email || !validCheckout(body)) return res.status(422).json({ error: 'invalid_checkout' })
-    if (!markets[market]) return res.status(503).json({ error: 'billing_disabled' })
+    if (!canBuy(market, accountId)) return res.status(503).json({ error: 'billing_disabled' })
     let reservation = null
     try {
       if (market === INFINITEPAY_MARKET) {

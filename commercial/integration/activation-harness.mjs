@@ -120,7 +120,7 @@ control.post('/state', async (req, res) => {
 control.post('/dispatch', async (_req, res) => { await dispatch(); res.json({ ok: true }) })
 const controlServer = control.listen(0, '127.0.0.1')
 await once(controlServer, 'listening')
-console.log(JSON.stringify({ app: server.address().port, control: controlServer.address().port }))
+console.log(JSON.stringify({ app: server.address().port, control: controlServer.address().port, db: databasePath }))
 
 function shutdown() {
   controlServer.close()

@@ -56,7 +56,7 @@ def _harness(api: str, *, open_: bool):
         proc.kill()
         raise AssertionError(f"harness failed: {proc.stderr.read()}")
     ports = json.loads(line)
-    return proc, f"http://127.0.0.1:{ports['app']}", f"http://127.0.0.1:{ports['control']}"
+    return proc, f"http://127.0.0.1:{ports['app']}", f"http://127.0.0.1:{ports['control']}", ports["db"]
 
 
 @pytest.fixture
@@ -67,8 +67,9 @@ def commercial(api_url, monkeypatch):
     procs = []
 
     def start(open_: bool = True):
-        proc, app_url, control = _harness(api_url, open_=open_)
+        proc, app_url, control, db = _harness(api_url, open_=open_)
         procs.append(proc)
+        start.db, start.api = db, api_url
         monkeypatch.setenv("ASC_COMMERCIAL_URL", app_url)
         reset_settings_cache()
         return control
@@ -164,3 +165,19 @@ def test_declined_stripe_payment_grants_nothing(app, client, commercial):
     state = sub_state(c)
     assert state["entitled"] is False, state
     assert state["limits"] is None
+
+
+def test_purchase_check_reports_what_both_sides_recorded(app, client, commercial):
+    """scripts/purchase-check.js (the operator check for the controlled real purchase) on a real database."""
+    control = commercial(True)
+    uid, c = customer(app)
+    c.post("/api/account/checkout", json={"plan": "pro", "market": "US", "language": "en"}, headers=CSRF)
+    _control(control, "/stripe/pay", {"account_id": uid, "plan": "pro"})
+    env = {**os.environ, "COMMERCIAL_DB": commercial.db, "ASC_MAIN_API_URL": commercial.api, "ASC_BILLING_SECRET": BILLING_SECRET}
+    out = subprocess.run([NODE, "scripts/purchase-check.js", str(uid)], cwd=HARNESS.parents[1], env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert "ERRO" not in out.stdout, out.stdout
+    assert f"Stripe sub_e2e_{uid}: pro/US status=active" in out.stdout, out.stdout
+    assert "checkout.session.completed" in out.stdout
+    assert "entregue" in out.stdout
+    assert f"API aplicou stripe sub_e2e_{uid}: plano pro, acesso active" in out.stdout, out.stdout

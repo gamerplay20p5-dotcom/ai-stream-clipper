@@ -180,6 +180,8 @@ services:
       COMMERCIAL_WAITLIST_OPEN: ${COMMERCIAL_WAITLIST_OPEN:-false}
       # No checkout for the public until COMMERCIAL_PAYMENTS_OPEN=true (webhooks and the signed link work anyway)
       COMMERCIAL_PAYMENTS_OPEN: ${COMMERCIAL_PAYMENTS_OPEN:-false}
+      # Controlled real purchase while closed: only these account ids may check out (empty = nobody)
+      COMMERCIAL_PAYMENTS_TEST_ACCOUNTS: ${COMMERCIAL_PAYMENTS_TEST_ACCOUNTS:-}
       ASC_APP_URL: ${ASC_PUBLIC_ORIGIN:-}
       ASC_MAIN_API_URL: https://api:8780
       ASC_BILLING_SECRET: ${ASC_BILLING_SECRET:-}

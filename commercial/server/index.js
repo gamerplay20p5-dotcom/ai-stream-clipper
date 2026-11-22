@@ -24,6 +24,8 @@ const { app, markets, ready, runRenewals, dispatch, outbox, promotions, close } 
   waitlistOpen: process.env.COMMERCIAL_WAITLIST_OPEN === 'true',
   // Payments open to the public only with COMMERCIAL_PAYMENTS_OPEN=true (after the integration was validated)
   paymentsOpen: process.env.COMMERCIAL_PAYMENTS_OPEN === 'true',
+  // Account ids allowed to buy while payments are closed (controlled real purchase), comma separated
+  testAccounts: (process.env.COMMERCIAL_PAYMENTS_TEST_ACCOUNTS ?? '').split(',').map(v => v.trim()).filter(Boolean),
   stripe,
   billing,
   infinitepay,
@@ -49,7 +51,7 @@ const port = Number(process.env.COMMERCIAL_PORT ?? 8790)
 const host = process.env.COMMERCIAL_HOST ?? '127.0.0.1'
 const server = app.listen(port, host, () => {
   const state = market => markets[market] ? 'on' : ready[market] ? 'ready, closed' : 'off'
-  console.log(`Commercial site listening on http://${host}:${port} (checkout US ${state('US')}, BR ${state('BR')}, payments ${process.env.COMMERCIAL_PAYMENTS_OPEN === 'true' ? 'open' : 'closed'}, waitlist ${process.env.COMMERCIAL_WAITLIST_OPEN === 'true' ? 'open' : 'closed'})`)
+  console.log(`Commercial site listening on http://${host}:${port} (checkout US ${state('US')}, BR ${state('BR')}, payments ${process.env.COMMERCIAL_PAYMENTS_OPEN === 'true' ? 'open' : 'closed'}${process.env.COMMERCIAL_PAYMENTS_TEST_ACCOUNTS ? ', test accounts set' : ''}, waitlist ${process.env.COMMERCIAL_WAITLIST_OPEN === 'true' ? 'open' : 'closed'})`)
   // Names only, never values: BR checkout stays off until every required InfinitePay setting is present
   const missingIp = missingInfinitePaySettings(infinitepay)
   if (missingIp.length) console.log(`InfinitePay checkout off, missing: ${missingIp.join(', ')}`)
