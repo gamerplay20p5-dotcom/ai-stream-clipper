@@ -14,6 +14,7 @@ sudo -n /usr/local/sbin/asc-ctl exec asc-api -- python3 -c "$(cat contas-de-clie
 | Script | O que faz | Escreve algo? |
 | --- | --- | --- |
 | `implantar-comercial.sh TAG` | Instala o código (`branch-pay.tgz`), compila a imagem comercial e recria só o `asc-commercial`. Prova que os outros contêineres mantiveram os mesmos processos | Código em `~/ai-stream-clipper` (com cópia anterior) e o contêiner comercial |
+| `compilar-comercial.sh TAG` | Instala o código e **só compila** a imagem; o contêiner em execução não é recriado | Código em `~/ai-stream-clipper` (com cópia anterior) e a imagem nova |
 | `validar-vinculo.sh` | Recria `api` e `commercial` e valida o vínculo HMAC nos dois sentidos, inclusive a recusa de um segredo errado | Recria os dois contêineres |
 | `api-para-comercial.py` | Chamada assinada da API para `/internal/billing/status`: o que está pronto ou aberto e as contagens do outbox | Não |
 | `validar-credenciais.mjs` | Formato e modo das chaves, conta Stripe, endpoint de webhook e seus eventos, preços, `payment_check` da InfinitePay | Não |
