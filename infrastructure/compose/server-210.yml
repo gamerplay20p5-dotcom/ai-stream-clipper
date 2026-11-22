@@ -167,7 +167,7 @@ services:
   # link and https origins are set; the waitlist stays CLOSED until COMMERCIAL_WAITLIST_OPEN=true (privacy/terms).
   # SQLite (waitlist, subscriptions, ledger, outbox, promotions) lives in the named volume asc_commercial.
   commercial:
-    image: ai-stream-clipper-commercial:${ASC_COMMERCIAL_TAG:-1.0.1}
+    image: ai-stream-clipper-commercial:${ASC_COMMERCIAL_TAG:-1.0.2}
     container_name: asc-commercial
     <<: *hardening
     environment:
