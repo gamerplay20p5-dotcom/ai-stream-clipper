@@ -183,8 +183,8 @@ Permite:
 | Playwright da landing (Chromium, Firefox e WebKit, com axe) | Local | 34 aprovados, 8 ignorados |
 | Dashboard: typecheck, i18n (0 faltando) e build | Local | Ok |
 | Capturas da página do cliente (390 e 1440, Creator e Basic) | Local | `docs/qa/publicacao/` |
-| `test_postgres_customer_publishing.py` (10 workers disputando as vagas; worker × limpeza) | **Pendente** | Não executado: sem PostgreSQL nesta máquina |
-| `test_postgres_shared_lives.py` (#24) | **Pendente** | Não executado |
+| `test_postgres_customer_publishing.py` (10 workers disputando as vagas; worker × limpeza) | PostgreSQL 16.4 real (.206) | Aprovado no commit `af810ed` |
+| `test_postgres_shared_lives.py` (#24) e migrações 0014→0019 | PostgreSQL 16.4 real (.206) | Aprovado: 11 testes de concorrência e migrações e 518 da suíte do backend, nenhum ignorado |
 | GitHub Actions | **Não rodou** | `startup_failure` por bloqueio da conta (ver `docs/INTEGRACAO_PRS.md`) |
 
 Cenários cobertos com APIs externas simuladas (nenhuma conta, token ou post real):

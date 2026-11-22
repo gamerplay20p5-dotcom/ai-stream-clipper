@@ -34,7 +34,7 @@ import sys
 import tarfile
 import tempfile
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"  # 1.2.1: ASC_PUBLIC_ORIGIN accepted by env-install (required by the v0.8.0 API)
 CONF_FILE = "/etc/asc/asc-ctl.conf"
 ENV_FILE = "/etc/asc/asc.env"
 LOG_FILE = "/var/log/asc-ctl.log"

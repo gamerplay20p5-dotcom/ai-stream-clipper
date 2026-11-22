@@ -6,6 +6,21 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.8.0", "date": "2026-11-21", "title": "Base para clientes: assinaturas, lives compartilhadas e publicação por cliente", "items": [
+        "Cada live é capturada uma única vez, mesmo quando vários clientes acompanham o mesmo canal; cada um recebe os próprios cortes, com o próprio estilo.",
+        "Contas de clientes com plano (Basic, Creator e Pro), horas, canais e lives simultâneas controlados pelo backend.",
+        "Clientes Creator e Pro podem publicar automaticamente nas próprias contas, dentro do limite diário do plano.",
+        "Novo destino: Reels em Páginas do Facebook.",
+        "Painel Clientes (só administradores): planos de cortesia, bloqueio de publicação e situação de cada cliente.",
+        "Os canais, regras e publicações que já existiam continuam funcionando como antes.",
+    ], "title_en": "Customer foundation: subscriptions, shared lives and per-customer publishing", "items_en": [
+        "Each live is captured only once, even when several customers follow the same channel; each one gets their own clips, in their own style.",
+        "Customer accounts with plans (Basic, Creator and Pro); hours, channels and simultaneous lives enforced by the backend.",
+        "Creator and Pro customers can publish automatically to their own accounts, within the plan's daily limit.",
+        "New destination: Reels on Facebook Pages.",
+        "Customers panel (admins only): courtesy plans, publishing block and each customer's status.",
+        "Existing channels, rules and publications keep working as before.",
+    ]},
     {"version": "0.7.7", "date": "2026-11-20", "title": "Senhas, acesso a cortes em revisão, seleção em massa e o banco da 212", "items": [
         "Acesso por streamer pode incluir os cortes ainda não aprovados: a pessoa vê cada corte assim que fica pronto, com o selo “Em revisão”; rejeitado, sai da biblioteca.",
         "Central de cortes: “Selecionar todos” no topo da fila, “selecionar todos os N deste filtro”, Shift+clique para marcar um intervalo e “Aprovar N” em lotes grandes.",
