@@ -16,12 +16,14 @@ const stripe = billing.secretKey ? new Stripe(billing.secretKey, { maxNetworkRet
 const infinitepay = infinitePaySettings()
 // Signed link to the main backend: checkout requests in, entitlement snapshots out
 const link = outboxSettings()
-const { app, markets, runRenewals, dispatch, outbox, promotions, close } = createApp({
+const { app, markets, ready, runRenewals, dispatch, outbox, promotions, close } = createApp({
   databasePath: resolve(root, process.env.COMMERCIAL_DB ?? 'data/waitlist.sqlite'),
   dist: resolve(root, 'dist'),
   trustProxy: process.env.COMMERCIAL_TRUST_PROXY,
   // The waitlist collects e-mails: open only with COMMERCIAL_WAITLIST_OPEN=true (after privacy policy and terms)
   waitlistOpen: process.env.COMMERCIAL_WAITLIST_OPEN === 'true',
+  // Payments open to the public only with COMMERCIAL_PAYMENTS_OPEN=true (after the integration was validated)
+  paymentsOpen: process.env.COMMERCIAL_PAYMENTS_OPEN === 'true',
   stripe,
   billing,
   infinitepay,
@@ -46,9 +48,10 @@ watch.unref()
 const port = Number(process.env.COMMERCIAL_PORT ?? 8790)
 const host = process.env.COMMERCIAL_HOST ?? '127.0.0.1'
 const server = app.listen(port, host, () => {
-  console.log(`Commercial site listening on http://${host}:${port} (checkout US ${markets.US ? 'on' : 'off'}, BR ${markets.BR ? 'on' : 'off'}, waitlist ${process.env.COMMERCIAL_WAITLIST_OPEN === 'true' ? 'open' : 'closed'})`)
+  const state = market => markets[market] ? 'on' : ready[market] ? 'ready, closed' : 'off'
+  console.log(`Commercial site listening on http://${host}:${port} (checkout US ${state('US')}, BR ${state('BR')}, payments ${process.env.COMMERCIAL_PAYMENTS_OPEN === 'true' ? 'open' : 'closed'}, waitlist ${process.env.COMMERCIAL_WAITLIST_OPEN === 'true' ? 'open' : 'closed'})`)
   // Names only, never values: BR checkout stays off until every required InfinitePay setting is present
-  if (!markets.BR) console.log(`InfinitePay checkout off, missing: ${missingInfinitePaySettings(infinitepay).join(', ')}`)
+  if (!ready.BR) console.log(`InfinitePay checkout off, missing: ${missingInfinitePaySettings(infinitepay).join(', ')}`)
   if (!link.secret || !link.mainUrl) console.log('Checkout off: set ASC_MAIN_API_URL and ASC_BILLING_SECRET (32+ chars) to link payments to accounts')
 })
 

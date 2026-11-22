@@ -167,7 +167,7 @@ services:
   # link and https origins are set; the waitlist stays CLOSED until COMMERCIAL_WAITLIST_OPEN=true (privacy/terms).
   # SQLite (waitlist, subscriptions, ledger, outbox, promotions) lives in the named volume asc_commercial.
   commercial:
-    image: ai-stream-clipper-commercial:${ASC_COMMERCIAL_TAG:-1.0.0}
+    image: ai-stream-clipper-commercial:${ASC_COMMERCIAL_TAG:-1.0.1}
     container_name: asc-commercial
     <<: *hardening
     environment:
@@ -178,6 +178,8 @@ services:
       COMMERCIAL_TRUST_PROXY: loopback, linklocal, uniquelocal
       COMMERCIAL_ORIGIN: ${COMMERCIAL_ORIGIN:-https://getclipper.howto.software}
       COMMERCIAL_WAITLIST_OPEN: ${COMMERCIAL_WAITLIST_OPEN:-false}
+      # No checkout for the public until COMMERCIAL_PAYMENTS_OPEN=true (webhooks and the signed link work anyway)
+      COMMERCIAL_PAYMENTS_OPEN: ${COMMERCIAL_PAYMENTS_OPEN:-false}
       ASC_APP_URL: ${ASC_PUBLIC_ORIGIN:-}
       ASC_MAIN_API_URL: https://api:8780
       ASC_BILLING_SECRET: ${ASC_BILLING_SECRET:-}
