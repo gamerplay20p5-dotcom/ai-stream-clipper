@@ -97,7 +97,7 @@ PYTHONPATH=backend python tests/fixtures/probe_vlm_contrast.py "$MODEL_DIR" ../f
 
 ## Replay local com VLM e Quality Gate
 
-`clipper.bench.replay` roda os mesmos trechos com a descoberta visual `off` e `on`. Usa os handlers de áudio, scoring e visão, inclusive a confirmação do VLM e o Quality Gate. Os dois modos usam o mesmo modelo e os padrões editoriais deste checkout. O banco SQLite, os segmentos copiados e os arquivos intermediários ficam em diretórios temporários. A comunicação com a API e o servidor de segmentos ocorre dentro do processo. O replay termina na decisão do gate, antes da renderização.
+`clipper.bench.replay` roda os mesmos trechos com a descoberta visual `off` e `on`. Usa os handlers de áudio, scoring e visão, inclusive a confirmação do VLM e o Quality Gate. Os dois modos compartilham os limiares e pesos editoriais do JSON importado. O banco SQLite, os segmentos copiados e os arquivos intermediários ficam em diretórios temporários. A comunicação com a API e o servidor de segmentos ocorre dentro do processo. O replay termina na decisão do gate, antes da renderização.
 
 Exemplo de manifesto `annotations.json`. Caminhos relativos partem da pasta do manifesto. Para `video`, os tempos são segundos desde o início do arquivo. Para `segments`, copie `file`, `start` e `duration` do índice de captura para um trecho contínuo da mesma execução e anote no relógio original da sessão. O replay copia esses segmentos byte a byte. Em arquivos de vídeo contínuo, usa a segmentação sem recodificação do capturador.
 
@@ -119,7 +119,19 @@ Use trechos curtos, FFmpeg e as dependências de áudio e OpenVINO do backend. P
 
 ```bash
 PYTHONPATH=backend python -m clipper.bench.replay ./annotations.json \
-  --models-dir "$MODEL_DIR" --model qwen3-vl-2b-int4 --device GPU --out ./comparacao.json
+  --settings ./editorial.json --models-dir "$MODEL_DIR" --device GPU --out ./comparacao.json
 ```
+
+### Configuração editorial (PT-BR)
+
+Passe em `--settings` um arquivo local com o JSON de `GET /api/settings`, sem credenciais. Use o export completo para reproduzir pesos, limites e os limiares do gate. O arquivo precisa incluir `min_score`. Um valor de `70` é preservado em ambos os modos. Sem o arquivo, o replay usa os padrões locais anteriores. Campos opcionais ausentes em um export usam o padrão do esquema deste checkout.
+
+O relatório identifica a origem em `settings_source`, grava a configuração efetiva em `settings` e lista as mudanças em `settings_differences`, com valor anterior, valor aplicado e motivo. O replay força VLM e Quality Gate ativos, desativa coleta de dataset e edição estrutural e usa `narrative_model=template`. Os modelos do export prevalecem quando `--model` e `--whisper` são omitidos. Um idioma explícito no manifesto prevalece para aquele vídeo e consta nas diferenças do vídeo.
+
+### Editorial configuration (EN)
+
+Pass a local, credential-free `GET /api/settings` JSON file with `--settings`. Use the full export to reproduce weights, limits and gate thresholds. The file must include `min_score`. A value of `70` applies to both modes. Without the file, replay uses its previous local defaults. Optional fields absent from an export take this checkout's schema defaults.
+
+The report records the source in `settings_source`, effective values in `settings`, and the previous value, applied value and reason in `settings_differences`. Replay enables the real VLM and Quality Gate, disables dataset collection and structural editing, and uses `narrative_model=template`. Exported models apply unless overridden by `--model` or `--whisper`. An explicit manifest language takes priority for that video and is listed in its differences.
 
 O JSON traz hipóteses, confirmação direcionada, decisão do gate, cobertura de `must_include`, hashes dos segmentos e contagens TP/FP/FN por etapa e modo. A comparação usa tolerância de 3 s por padrão e associa cada pico a no máximo uma anotação. `gate_ready` conta somente decisões `READY`. Uma rejeição editorial é um resultado válido. Falha de infraestrutura retorna código 2. Quando o worker registra fallback de visão, o JSON preserva a falha em `errors`.

@@ -16,7 +16,7 @@ from typing import Annotated
 
 import httpx
 from fastapi import FastAPI
-from pydantic import AliasChoices, BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, ValidationError, model_validator
 from sqlalchemy import select
 
 from .. import media, pipeline
@@ -29,7 +29,7 @@ from ..config import Settings, get_settings, reset_settings_cache
 from ..db import Base, init_engine, session_scope
 from ..models import AudioFeature, Clip, Streamer, StreamSession
 from ..security import sha256_file
-from ..settings_store import AISettings, save_ai_settings
+from ..settings_store import AISettings, ScoreWeights, save_ai_settings
 from ..workers import handlers
 from ..workers.capture import CaptureManager, _read_csv
 from ..workers.client import InternalClient
@@ -39,6 +39,7 @@ from ..workers.segment_store import LocalSegment, SegmentStore
 
 ORIGIN = "http://replay.invalid"
 WORKER = "local-replay"
+MODES = ("off", "on")
 JOB_HANDLERS = {"audio_analyze": handlers.handle_audio, "score": handlers.handle_score,
                 "vision_analyze": handlers.handle_vision}
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -61,7 +62,7 @@ class Case(BaseModel):
     video: Path | None = None
     segments: list[RecordedSegment] = Field(default_factory=list)
     events: list[Annotation]  # an explicit empty list is a negative control
-    language: str = "pt"
+    language: str | None = None
     game: str = ""
 
     @model_validator(mode="after")
@@ -86,6 +87,47 @@ def _local_path(root: Path, path: Path) -> Path:
     if not path.is_file():
         raise ValueError(f"expected a local file: {path}")
     return path
+
+
+def _editorial_settings(path: Path | None, model: str | None, whisper: str | None) -> tuple[AISettings, dict]:
+    base = AISettings()
+    if path is not None:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(raw, dict) or raw.keys() - AISettings.model_fields.keys():
+            raise ValueError("settings must be the editorial JSON object from GET /api/settings")
+        if "min_score" not in raw:
+            raise ValueError("editorial settings export must contain min_score")
+        weights = raw.get("weights")
+        if isinstance(weights, dict) and weights.keys() - ScoreWeights.model_fields.keys():
+            raise ValueError("settings contain unknown score weights")
+        try:
+            base = AISettings.model_validate(raw)
+        except ValidationError:
+            raise ValueError("invalid editorial settings values") from None
+
+    overrides = {
+        "vision_enabled": (True, "run the real VLM"),
+        "vision_provider": ("openvino_vlm", "run the real VLM"),
+        "director_enabled": (True, "run the director and Quality Gate"),
+        "gate_enabled": (True, "run the Quality Gate"),
+        "dataset_enabled": (False, "skip dataset collection during replay"),
+        "editor_mode": ("off", "replay ends at the Quality Gate"),
+        "narrative_model": ("template", "keep the VLM loaded without switching to a text model"),
+    }
+    if path is None:
+        overrides.update(multimodal_scoring=(True, "standalone replay default"),
+                         grounded_metadata=(True, "standalone replay default"),
+                         whisper_model=("tiny", "standalone replay default"))
+    if model is not None:
+        overrides["vision_model"] = (model, "explicit --model")
+    if whisper is not None:
+        overrides["whisper_model"] = (whisper, "explicit --whisper")
+    differences = {
+        field: {"from": getattr(base, field), "to": value, "reason": reason}
+        for field, (value, reason) in overrides.items() if getattr(base, field) != value
+    }
+    differences["visual_discovery"] = {"from": base.visual_discovery, "to": list(MODES), "reason": "A/B comparison"}
+    return base.model_copy(update={field: value for field, (value, _) in overrides.items()}), differences
 
 
 async def _prepare(case: Case, folder: Path, capture: CaptureManager) -> list[LocalSegment]:
@@ -179,14 +221,15 @@ async def _replay(case: Case, segments: list[LocalSegment], mode: str, settings:
                   store: SegmentStore, client: InternalClient, tolerance: float) -> dict:
     t0 = time.monotonic()
     offset = segments[0].start
+    language = case.language or ai.language
     with session_scope() as db:
         save_ai_settings(db, ai.model_copy(update={"visual_discovery": mode}))
         streamer = Streamer(platform="file", channel=token_hex(8), url="file://replay", display_name="Replay local",
-                            preferences={"language": case.language, "game": case.game})
+                            preferences={"language": language, "game": case.game})
         db.add(streamer)
         db.flush()
         session = StreamSession(streamer_id=streamer.id, scored_until=offset, analyzed_until=offset,
-                                base_profile={"language": case.language, "whisper_model": ai.whisper_model})
+                                base_profile={"language": language, "whisper_model": ai.whisper_model})
         db.add(session)
         db.flush()
         sid = session.id
@@ -225,10 +268,7 @@ async def _replay(case: Case, segments: list[LocalSegment], mode: str, settings:
             "jobs": jobs, "errors": errors, "metrics": {k: _compare(case.events, v, tolerance) for k, v in stages.items()}}
 
 
-async def _run(args, cases: list[Case], settings: Settings) -> dict:
-    ai = AISettings(vision_model=args.model, whisper_model=args.whisper, visual_discovery="off",
-                    multimodal_scoring=True, grounded_metadata=True, gate_enabled=True, director_enabled=True,
-                    dataset_enabled=False, editor_mode="off", narrative_model="template")
+async def _run(args, cases: list[Case], settings: Settings, ai: AISettings, differences: dict) -> dict:
     manager = get_manager(settings.openvino_device, settings.ai_allow_cpu_fallback)
     _, device = await asyncio.to_thread(manager.acquire, ai.vision_model)
     engine = init_engine(settings.database_url)
@@ -246,35 +286,40 @@ async def _run(args, cases: list[Case], settings: Settings) -> dict:
         for i, case in enumerate(cases):
             segments = await _prepare(case, settings.work_dir / f"input_{i}", capture)
             modes = {mode: await _replay(case, segments, mode, settings, ai, store, client, args.tolerance)
-                     for mode in ("off", "on")}
+                     for mode in MODES}
+            language_override = {}
+            if case.language and case.language != ai.language:
+                language_override["language"] = {"from": ai.language, "to": case.language, "reason": "manifest override"}
             rows.append({"video": case.video.name if case.video else case.segments[0].file.name,
                          "negative_control": not any(e.clip_worthy for e in case.events),
                          "events": [e.model_dump() for e in case.events],
                          "segments": [{"start": s.start, "duration": s.duration, "sha256": s.sha256} for s in segments],
-                         "modes": modes})
+                         "settings_differences": language_override, "modes": modes})
     finally:
         await client.aclose()
         engine.dispose()
         manager.unload()
     summary = {}
-    for mode in ("off", "on"):
+    for mode in MODES:
         summary[mode] = {
             stage: {key: sum(row["modes"][mode]["metrics"][stage][key] for row in rows) for key in ("tp", "fp", "fn")}
             for stage in rows[0]["modes"][mode]["metrics"]
         }
     return {"model": ai.vision_model, "device": device, "gate_version": GATE_VERSION,
             "settings": ai.model_dump(exclude={"visual_discovery"}), "tolerance_s": args.tolerance,
+            "settings_source": "export" if args.settings is not None else "defaults",
+            "settings_differences": differences,
             "summary": summary, "videos": rows}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("manifest", type=Path)
+    parser.add_argument("--settings", type=Path, help="local credential-free editorial JSON from GET /api/settings")
     parser.add_argument("--models-dir", type=Path, required=True)
-    parser.add_argument("--model", default=AISettings().vision_model,
-                        choices=AISettings.model_fields["vision_model"].annotation.__args__)
+    parser.add_argument("--model", choices=AISettings.model_fields["vision_model"].annotation.__args__)
     parser.add_argument("--device", choices=["CPU", "GPU"], default="GPU")
-    parser.add_argument("--whisper", default="tiny", help="cached Whisper model name or local checkpoint path")
+    parser.add_argument("--whisper", help="cached Whisper model name or local checkpoint path")
     parser.add_argument("--tolerance", type=float, default=3.0, help="matching window in seconds")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -288,10 +333,14 @@ def main(argv: list[str] | None = None) -> int:
                 seg.file = _local_path(source_root, seg.file)
         inputs = {args.manifest.resolve(), *(c.video for c in manifest.videos if c.video),
                   *(s.file for c in manifest.videos for s in c.segments)}
+        if args.settings is not None:
+            args.settings = _local_path(Path.cwd(), args.settings)
+            inputs.add(args.settings)
         if args.out.resolve() in inputs:
             raise ValueError("report path must differ from all inputs")
         if not 0 < args.tolerance < float("inf"):
             raise ValueError("tolerance must be positive and finite")
+        ai, differences = _editorial_settings(args.settings, args.model, args.whisper)
         with TemporaryDirectory(prefix="asc-replay-") as temp:
             root = Path(temp)
             # A standalone process uses only these local settings, even on a configured worker host.
@@ -306,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
             reset_settings_cache()
             settings = get_settings()
             settings.work_dir.mkdir()
-            report = asyncio.run(_run(args, manifest.videos, settings))
+            report = asyncio.run(_run(args, manifest.videos, settings, ai, differences))
         args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     except (OSError, RuntimeError, ValueError) as exc:
         parser.exit(2, f"replay: {exc}\n")
