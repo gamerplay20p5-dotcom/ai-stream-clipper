@@ -1,14 +1,14 @@
 {
   "name": "ai-stream-clipper-commercial",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.3",
   "type": "module",
   "engines": {
     "node": "^24.0.0"
   },
   "scripts": {
     "dev": "vite --port 5174 --strictPort",
-    "build": "tsc --noEmit && vite build && vite build --ssr src/prerender.tsx --outDir build/prerender && node build/prerender/prerender.js",
+    "build": "tsc --noEmit && vite build && vite build --ssr src/prerender.tsx --outDir build/prerender && node build/prerender/prerender.js && node scripts/build-legal.mjs",
     "start": "node --env-file-if-exists=.env server/index.js",
     "test": "node --test \"server/*.test.js\"",
     "test:browser": "playwright test",

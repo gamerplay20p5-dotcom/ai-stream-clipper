@@ -179,9 +179,11 @@ export function createBilling({ db, stripe, settings, outbox = null, promotions 
 
   function subscriptionRow(subscription, eventAt, email = '') {
     const item = subscription.items?.data?.[0]
-    const parsed = parseLookupKey(item?.price?.lookup_key) ?? parseLookupKey(lookupKeyFromMetadata(subscription.metadata))
-    if (!parsed) return null
     const account = String(subscription.metadata?.account_id ?? '')
+    // The Stripe account may be shared with other products: a subscription is ours only by our price lookup key,
+    // or by our checkout metadata (plan, market AND account id) when the price carries no lookup key
+    const parsed = parseLookupKey(item?.price?.lookup_key) ?? (ACCOUNT_ID.test(account) ? parseLookupKey(lookupKeyFromMetadata(subscription.metadata)) : null)
+    if (!parsed) return null
     return {
       id: subscription.id,
       customer: idOf(subscription.customer),
@@ -223,6 +225,15 @@ export function createBilling({ db, stripe, settings, outbox = null, promotions 
     return charge.customer ? latestForCustomer.get(idOf(charge.customer)) : null
   }
 
+  /** An invoice of one of our subscriptions: known here, or created by our checkout (metadata copied by Stripe). */
+  function ourInvoice(invoice, subscription) {
+    if (!subscription) return false
+    if (subscriptionById.get(subscription)) return true
+    const metadata = invoice.parent?.subscription_details?.metadata ?? invoice.subscription_details?.metadata ?? {}
+    return ACCOUNT_ID.test(String(metadata.account_id ?? '')) && Boolean(parseLookupKey(lookupKeyFromMetadata(metadata)))
+      || (invoice.lines?.data ?? []).some(line => parseLookupKey(line.price?.lookup_key))
+  }
+
   async function handleEvent(event) {
     const object = event.data.object
     switch (event.type) {
@@ -258,6 +269,8 @@ export function createBilling({ db, stripe, settings, outbox = null, promotions 
       case 'invoice.voided':
       case 'invoice.marked_uncollectible': {
         const subscription = idOf(object.parent?.subscription_details?.subscription ?? object.subscription)
+        // Invoices of other products sharing the Stripe account are not stored here
+        if (!ourInvoice(object, subscription)) return
         return transaction(() => {
           upsertInvoice.run({
             id: object.id,

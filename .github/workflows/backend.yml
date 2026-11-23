@@ -4,10 +4,10 @@ name: backend
 # Fast suite on every relevant PR/push; the end-to-end media pipeline (ffmpeg + whisper) only on main or on demand.
 on:
   pull_request:
-    paths: ["backend/**", "tests/**", "commercial/catalog.json", ".github/workflows/backend.yml"]
+    paths: ["backend/**", "tests/**", "commercial/**", "dashboard/package.json", ".github/workflows/backend.yml"]
   push:
     branches: [main]
-    paths: ["backend/**", "tests/**", "commercial/catalog.json", ".github/workflows/backend.yml"]
+    paths: ["backend/**", "tests/**", "commercial/**", "dashboard/package.json", ".github/workflows/backend.yml"]
   workflow_dispatch:
 
 permissions:
@@ -35,6 +35,13 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: backend/pyproject.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.13.0"
+          cache: npm
+          cache-dependency-path: commercial/package-lock.json
+      - name: Commercial dependencies for the local billing and SMTP tests
+        run: npm ci --prefix ../commercial --no-audit --no-fund
       - name: System packages (ffmpeg and caption fonts, as in the image)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-noto-core
       - name: Install

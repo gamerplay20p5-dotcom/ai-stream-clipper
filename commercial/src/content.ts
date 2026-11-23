@@ -73,6 +73,8 @@ export const content = {
       sending: 'Enviando…',
       success: 'Você está na lista',
       successDetail: 'Seu interesse foi registrado. Avisaremos por e-mail quando houver novos convites.',
+      closed: 'A lista de espera abre em breve',
+      closedDetail: 'Ela abre junto com a política de privacidade e os termos de uso. Até lá, nenhum dado é coletado nesta página.',
       errors: {
         invalid: 'Confira seus dados e tente novamente.',
         rate: 'Você fez várias tentativas. Aguarde alguns minutos e tente novamente.',
@@ -155,6 +157,8 @@ export const content = {
       sending: 'Submitting…',
       success: 'You’re on the list',
       successDetail: 'We’ve recorded your interest. We’ll email you when new invites become available.',
+      closed: 'The waitlist opens soon',
+      closedDetail: 'It opens together with the privacy policy and the terms of use. Until then, no data is collected on this page.',
       errors: {
         invalid: 'Check your information and try again.',
         rate: 'You’ve made several attempts. Wait a few minutes and try again.',

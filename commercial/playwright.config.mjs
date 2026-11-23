@@ -16,7 +16,8 @@ export default defineConfig({
   webServer: {
     command: 'node server/index.js',
     url: baseURL,
-    env: { COMMERCIAL_PORT: '8792', COMMERCIAL_DB: process.env.ASC_BROWSER_DB },
+    // The waitlist specs need it open; outside production the legal lock can be lifted for tests only
+    env: { COMMERCIAL_PORT: '8792', COMMERCIAL_DB: process.env.ASC_BROWSER_DB, COMMERCIAL_WAITLIST_OPEN: 'true', COMMERCIAL_LEGAL_TEST_PUBLISHED: 'true' },
   },
   projects: [
     { name: 'chromium', use: { browserName: 'chromium' } },

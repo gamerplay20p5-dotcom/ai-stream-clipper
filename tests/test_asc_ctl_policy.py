@@ -186,3 +186,58 @@ def test_tunnel_token_never_from_arguments():
         asc_ctl.cmd_tunnel_token_install(CONF, ["eyJhIjoiYiJ9" * 10])
     with pytest.raises(asc_ctl.Denied):
         asc_ctl.cmd_tunnel_token_install({**CONF, "SERVER": "201"}, [])
+
+
+def test_restore_check_only_on_212_with_a_backup_file(monkeypatch, tmp_path):
+    import pytest
+
+    with pytest.raises(asc_ctl.Denied, match="only on 212"):
+        asc_ctl.cmd_restore_check(CONF, ["asc.sql.gz"])
+    with pytest.raises(asc_ctl.Denied, match="usage"):
+        asc_ctl.cmd_restore_check(DB212, [])
+    monkeypatch.setattr(asc_ctl, "user_file", lambda conf, p: str(tmp_path / p))
+    with pytest.raises(asc_ctl.Denied, match=".sql.gz"):
+        asc_ctl.cmd_restore_check(DB212, ["notes.txt"])
+    assert "restore-check" in asc_ctl.COMMANDS
+
+
+def test_restore_check_removes_only_its_own_container(monkeypatch):
+    calls = []
+    monkeypatch.setattr(asc_ctl, "out", lambda cmd: calls.append(cmd) or "abc123\n")
+    monkeypatch.setattr(asc_ctl, "run", lambda cmd, **kw: calls.append(cmd) or 0)
+    asc_ctl._remove_restore_check()
+    listing, removal = calls
+    assert f"name=^{asc_ctl.RESTORE_CHECK_NAME}$" in listing and f"label={asc_ctl.RESTORE_CHECK_LABEL}" in listing
+    assert removal[-1] == "abc123" and "prune" not in " ".join(removal)
+
+
+def test_commercial_site_image_port_and_settings():
+    import pytest
+
+    assert asc_ctl.image_ref("commercial", "1.0.0") == "ai-stream-clipper-commercial:1.0.0"
+    assert asc_ctl.OWN_IMAGE_RE.match("ai-stream-clipper-commercial:1.0.0")
+    assert not asc_ctl.OWN_IMAGE_RE.match("node:24")
+    assert "8790" in asc_ctl.ALLOWED_PORTS
+    with pytest.raises(asc_ctl.Denied):
+        asc_ctl.image_ref("nginx", "1")
+    for key in ("STRIPE_SECRET_KEY", "INFINITEPAY_API_KEY", "ASC_BILLING_SECRET", "SMTP_PASS"):
+        assert key in asc_ctl.ENV_KEYS and key in asc_ctl.SECRET_KEYS, key
+    assert asc_ctl.LOOSE_VALUE_RE.match("HTS <no-reply@howto.software>")
+    for bad in ("a$b", "a`b", 'a"b', "a\\b", "a'b"):
+        assert not asc_ctl.LOOSE_VALUE_RE.match(bad), bad
+
+
+def test_commercial_service_passes_the_policy():
+    cfg = copy.deepcopy(GOOD)
+    cfg["volumes"]["asc_commercial"] = {"name": "asc_asc_commercial"}
+    cfg["services"]["commercial"] = {
+        "container_name": "asc-commercial", "image": "ai-stream-clipper-commercial:1.0.0", "cap_drop": ["ALL"],
+        "read_only": True, "security_opt": ["no-new-privileges:true"],
+        "ports": [{"mode": "ingress", "host_ip": "192.168.1.210", "target": 8790, "published": "8790", "protocol": "tcp"}],
+        "volumes": [{"type": "volume", "source": "asc_commercial", "target": "/data"},
+                    {"type": "bind", "source": "/etc/asc/tls/ca.crt", "target": "/tls/ca.crt", "read_only": True}],
+        "deploy": {"resources": {"limits": {"cpus": 1, "memory": "536870912"}}},
+    }
+    assert asc_ctl.check_policy(cfg, CONF) == []
+    cfg["services"]["commercial"]["ports"][0]["published"] = "8080"
+    assert asc_ctl.check_policy(cfg, CONF)

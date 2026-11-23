@@ -19,10 +19,15 @@ POISON = {"Host": "evil.example", "Origin": "https://evil.example", "X-Forwarded
 def mail(client, monkeypatch):  # client: starts the app (database) for the session
     from clipper import accounts
 
+    from clipper.config import reset_settings_cache
+
+    monkeypatch.setenv("ASC_SIGNUP_OPEN", "true")  # these tests exercise the sign-up links
+    reset_settings_cache()
     sent = []
     monkeypatch.setattr(accounts, "smtp_ready", lambda db: True)
     monkeypatch.setattr(accounts, "send_mail", lambda db, to, subject, text: sent.append((to, text)))
-    return sent
+    yield sent
+    reset_settings_cache()
 
 
 def _admin(app) -> TestClient:

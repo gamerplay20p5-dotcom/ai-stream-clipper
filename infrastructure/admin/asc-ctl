@@ -30,11 +30,12 @@ import posixpath
 import re
 import shutil
 import subprocess
+import time
 import sys
 import tarfile
 import tempfile
 
-VERSION = "1.2.1"  # 1.2.1: ASC_PUBLIC_ORIGIN accepted by env-install (required by the v0.8.0 API)
+VERSION = "1.3.1"  # 1.2.1: ASC_PUBLIC_ORIGIN; 1.2.2: restore-check; 1.3.0: commercial site (image, port 8790, settings); 1.3.1: COMMERCIAL_PAYMENTS_OPEN, _TEST_ACCOUNTS, COMMERCIAL_LEGAL_PUBLISHED, ASC_SIGNUP_OPEN, _ALLOWED_EMAILS, ASC_API_TAG
 CONF_FILE = "/etc/asc/asc-ctl.conf"
 ENV_FILE = "/etc/asc/asc.env"
 LOG_FILE = "/var/log/asc-ctl.log"
@@ -44,7 +45,7 @@ CA_DIR = "/etc/asc/ca"
 DATA_ROOT = "/opt/asc"
 DATA_DIRS = ("models", "test-media", "bench")
 CONTAINER_UID = 10001
-ALLOWED_PORTS = {"8780", "8781"}
+ALLOWED_PORTS = {"8780", "8781", "8790"}  # 8790: commercial site (210)
 DB_HOST_PORT = "55432"  # 212: other projects already use 5432/3306/1433/27017 there
 DB_CLIENTS = ("192.168.1.210",)  # hosts allowed to reach the asc database on 212
 PG_DIR = "/opt/asc/pg"  # 212: pg_hba.conf (root-owned, read-only in the container)
@@ -56,8 +57,8 @@ TUNNEL_TOKEN = "/etc/asc/tunnel/token"
 TUNNEL_UID = 65532  # "nonroot" user of the cloudflare/cloudflared image
 CLOUDFLARED_IMAGE_RE = re.compile(r"^(docker\.io/)?cloudflare/cloudflared:20[2-9][0-9]\.[0-9]{1,2}\.[0-9]{1,3}$")
 TUNNEL_TOKEN_RE = re.compile(r"^[A-Za-z0-9+/=_-]{60,4096}$")
-IMAGE_RE = re.compile(r"^(ai-stream-clipper(-vision)?:[A-Za-z0-9._-]{1,40}|postgres:16(\.[0-9]+)*(-bookworm)?)$")
-OWN_IMAGE_RE = re.compile(r"^(docker\.io/library/)?ai-stream-clipper(-vision)?:[A-Za-z0-9._-]{1,40}$")
+IMAGE_RE = re.compile(r"^(ai-stream-clipper(-vision|-commercial)?:[A-Za-z0-9._-]{1,40}|postgres:16(\.[0-9]+)*(-bookworm)?)$")
+OWN_IMAGE_RE = re.compile(r"^(docker\.io/library/)?ai-stream-clipper(-vision|-commercial)?:[A-Za-z0-9._-]{1,40}$")
 TAG_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,62}$")
@@ -69,9 +70,22 @@ ENV_KEYS = {
     "ASC_CONCURRENCY_AUDIO", "ASC_CONCURRENCY_RENDER", "ASC_FFMPEG_THREADS", "ASC_MAX_CONCURRENT_CAPTURES",
     "ASC_BUFFER_SECONDS", "ASC_MAX_SESSION_HOURS", "ASC_MAX_CAPTURE_DISK_GB", "ASC_ALLOW_FILE_SOURCES",
     "ASC_CAPTURE_QUALITY", "ASC_OIDC_ISSUER", "ASC_OIDC_CLIENT_ID", "ASC_CLOUDFLARED_TAG", "ASC_DB_PORT",
-    "ASC_PUBLIC_ORIGIN",
+    "ASC_PUBLIC_ORIGIN", "ASC_SIGNUP_OPEN", "ASC_SIGNUP_ALLOWED_EMAILS", "ASC_API_TAG",
+    # commercial site (210): billing link, payment providers and SMTP. Empty = that part stays off.
+    "ASC_COMMERCIAL_TAG", "ASC_BILLING_SECRET", "COMMERCIAL_ORIGIN", "COMMERCIAL_WAITLIST_OPEN", "COMMERCIAL_PAYMENTS_OPEN",
+    "COMMERCIAL_PAYMENTS_TEST_ACCOUNTS", "COMMERCIAL_LEGAL_PUBLISHED",
+    "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_AUTOMATIC_TAX",
+    "INFINITEPAY_HANDLE", "INFINITEPAY_API_KEY", "INFINITEPAY_WEBHOOK_TOKEN", "INFINITEPAY_WEBHOOK_TOKEN_PREVIOUS",
+    "INFINITEPAY_RENEW_DAYS_BEFORE", "INFINITEPAY_GRACE_DAYS",
+    "SMTP_HOST", "SMTP_PORT", "SMTP_SECURE", "SMTP_USER", "SMTP_PASS", "SMTP_FROM",
 }
-SECRET_KEYS = {"ASC_INTERNAL_SECRET", "ASC_JWT_SECRET", "ASC_DB_PASSWORD", "ASC_ADMIN_PASSWORD", "ASC_METRICS_TOKEN"}
+SECRET_KEYS = {"ASC_INTERNAL_SECRET", "ASC_JWT_SECRET", "ASC_DB_PASSWORD", "ASC_ADMIN_PASSWORD", "ASC_METRICS_TOKEN",
+               "ASC_BILLING_SECRET", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "INFINITEPAY_API_KEY",
+               "INFINITEPAY_WEBHOOK_TOKEN", "INFINITEPAY_WEBHOOK_TOKEN_PREVIOUS", "SMTP_PASS"}
+# Values with spaces or punctuation (an SMTP password, "HTS <no-reply@...>"): printable ASCII, never quotes,
+# backslash, backtick or "$" (Compose would interpolate it)
+LOOSE_VALUE_KEYS = {"SMTP_PASS", "SMTP_FROM"}
+LOOSE_VALUE_RE = re.compile(r"^[ !#%&()*+,\-./0-9:;<=>?@A-Z\[\]^_a-z{|}~]{0,256}$")
 COMPOSE_SUBCOMMANDS = {"config", "up", "down", "stop", "start", "restart", "ps", "logs", "pull", "images"}
 DOCKER = "/usr/bin/docker"
 SAFE_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
@@ -367,19 +381,22 @@ def cmd_exec(conf: dict, args: list[str]) -> int:
     return run([DOCKER, "exec", name] + args[2:])
 
 
+IMAGE_KINDS = {"app": "", "vision": "-vision", "commercial": "-commercial"}
+DOCKERFILES = {"app": "app.Dockerfile", "vision": "vision-openvino.Dockerfile", "commercial": "commercial.Dockerfile"}
+
+
 def image_ref(kind: str, tag: str) -> str:
-    if kind not in ("app", "vision") or not TAG_RE.match(tag):
-        raise Denied("image must be app|vision and tag [A-Za-z0-9._-]")
-    return f"ai-stream-clipper{'-vision' if kind == 'vision' else ''}:{tag}"
+    if kind not in IMAGE_KINDS or not TAG_RE.match(tag):
+        raise Denied("image must be app|vision|commercial and tag [A-Za-z0-9._-]")
+    return f"ai-stream-clipper{IMAGE_KINDS[kind]}:{tag}"
 
 
 def cmd_build(conf: dict, args: list[str]) -> int:
     if len(args) != 2:
-        raise Denied("usage: asc-ctl build app|vision TAG")
+        raise Denied("usage: asc-ctl build app|vision|commercial TAG")
     ref = image_ref(*args)
     r = repo(conf)
-    dockerfile = os.path.join(r, "infrastructure", "docker",
-                              "vision-openvino.Dockerfile" if args[0] == "vision" else "app.Dockerfile")
+    dockerfile = os.path.join(r, "infrastructure", "docker", DOCKERFILES[args[0]])
     cmd = [DOCKER, "build", "--pull", "-f", dockerfile, "-t", ref,
            "--label", "com.asc.project=ai-stream-clipper"]
     ov = conf.get("OPENVINO_IMAGE", "openvino/ubuntu24_runtime:2026.2.0")
@@ -468,7 +485,7 @@ def cmd_env_install(conf: dict, args: list[str]) -> int:
         k, val = k.strip(), val.strip()
         if k not in ENV_KEYS:
             raise Denied(f"line {n}: key {k} not allowed")
-        if not ENV_VALUE_RE.match(val):
+        if not (LOOSE_VALUE_RE if k in LOOSE_VALUE_KEYS else ENV_VALUE_RE).match(val):
             raise Denied(f"line {n}: value of {k} has forbidden characters")
         if k == "ASC_RENDER_GID" and val != str(conf.get("RENDER_GID", "")):
             raise Denied(f"ASC_RENDER_GID must be {conf.get('RENDER_GID')}")
@@ -722,6 +739,75 @@ def cmd_db_restore(conf: dict, args: list[str]) -> int:
     return rc
 
 
+RESTORE_CHECK_NAME = "asc-restore-check"
+RESTORE_CHECK_LABEL = "asc.restore-check=1"
+COUNT_ROWS_SQL = ("select table_name || '=' || (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I', "
+                  "table_name), false, true, '')))[1]::text from information_schema.tables where table_schema='public' "
+                  "and table_type='BASE TABLE' order by 1")
+
+
+def _remove_restore_check() -> None:
+    """Removes ONLY the throwaway restore container (exact name AND label); never anything else."""
+    ids = out([DOCKER, "ps", "-aq", "--filter", f"name=^{RESTORE_CHECK_NAME}$", "--filter", f"label={RESTORE_CHECK_LABEL}"]).split()
+    for cid in ids:
+        run([DOCKER, "rm", "-f", cid])
+
+
+def cmd_restore_check(conf: dict, args: list[str]) -> int:
+    """212 only: proves that a backup-db file restores. Loads it into a THROWAWAY PostgreSQL (same image as
+    asc-postgres, no network, no port, anonymous volume removed with it) and compares the row count of every table
+    with the live asc database (run it with the writers stopped: then both must be identical).
+    Prints RESTORE-CHECK OK / FAILED. Never touches asc-postgres data or any other container."""
+    if conf["SERVER"] != "212":
+        raise Denied("restore-check runs only on 212 (the database host)")
+    if len(args) != 1:
+        raise Denied("usage: asc-ctl restore-check FILE.sql.gz (a backup-db file inside the asc home)")
+    path = user_file(conf, args[0])
+    if not path.endswith(".sql.gz"):
+        raise Denied("expected a .sql.gz made by asc-ctl backup-db")
+    if subprocess.run(["gzip", "-t", path]).returncode != 0:
+        print("RESTORE-CHECK FAILED: gzip integrity")
+        return 1
+    image = out([DOCKER, "inspect", "-f", "{{.Config.Image}}", "asc-postgres"]).strip()
+    if not POSTGRES_IMAGE_RE.match(image):
+        raise Denied(f"unexpected asc-postgres image {image!r}")
+    live = out([DOCKER, "exec", "asc-postgres", "psql", "-U", "asc", "-d", "asc", "-tAc", COUNT_ROWS_SQL]).strip().splitlines()
+    _remove_restore_check()
+    run([DOCKER, "run", "-d", "--rm", "--pull", "never", "--name", RESTORE_CHECK_NAME, "--label", RESTORE_CHECK_LABEL,
+         "--network", "none", "--cpus", "2", "--memory", "4g", "--pids-limit", "512",
+         "--security-opt", "no-new-privileges", "-e", "POSTGRES_USER=asc", "-e", "POSTGRES_PASSWORD=restore-check",
+         "-e", "POSTGRES_DB=asc", image], check=True)
+    try:
+        for _ in range(90):
+            if subprocess.run([DOCKER, "exec", RESTORE_CHECK_NAME, "pg_isready", "-h", "127.0.0.1", "-U", "asc", "-q"]).returncode == 0:
+                break
+            time.sleep(2)
+        else:
+            print("RESTORE-CHECK FAILED: throwaway PostgreSQL did not start")
+            return 1
+        with open(path, "rb") as f:
+            p1 = subprocess.Popen(["gzip", "-dc"], stdin=f, stdout=subprocess.PIPE)
+            p2 = subprocess.Popen([DOCKER, "exec", "-i", RESTORE_CHECK_NAME, "psql", "-U", "asc", "-d", "asc",
+                                   "-v", "ON_ERROR_STOP=1", "-q", "--single-transaction"], stdin=p1.stdout,
+                                  stdout=subprocess.DEVNULL)
+            p1.stdout.close()
+            rc = p2.wait() or p1.wait()
+        if rc != 0:
+            print(f"RESTORE-CHECK FAILED: restore rc={rc}")
+            return 1
+        restored = out([DOCKER, "exec", RESTORE_CHECK_NAME, "psql", "-U", "asc", "-d", "asc", "-tAc",
+                        COUNT_ROWS_SQL]).strip().splitlines()
+    finally:
+        _remove_restore_check()
+    if restored != live:
+        diff = sorted(set(live) ^ set(restored))[:20]
+        print(f"RESTORE-CHECK FAILED: row counts differ (writers still running?): {diff}")
+        return 1
+    rows = sum(int(line.split("=", 1)[1] or 0) for line in restored if "=" in line)
+    print(f"RESTORE-CHECK OK file={path} tables={len(restored)} rows={rows}")
+    return 0
+
+
 def cmd_status(conf: dict, args: list[str]) -> int:
     """Read-only overview of the host (all containers, so other projects can be monitored)."""
     print(f"== {conf['SERVER']} {datetime.datetime.now().isoformat(timespec='seconds')}")
@@ -786,7 +872,7 @@ COMMANDS = {
     "image-save": cmd_image_save, "image-load": cmd_image_load, "image-rm": cmd_image_rm,
     "env-install": cmd_env_install, "env-show": cmd_env_show, "set-tag": cmd_set_tag, "tls-init": cmd_tls_init,
     "tls-install-ca": cmd_tls_install_ca, "init": cmd_init, "models": cmd_models, "gpu-validate": cmd_gpu_validate,
-    "test-media-add": cmd_test_media_add, "backup-db": cmd_backup_db, "db-restore": cmd_db_restore,
+    "test-media-add": cmd_test_media_add, "backup-db": cmd_backup_db, "db-restore": cmd_db_restore, "restore-check": cmd_restore_check,
     "tunnel-token-install": cmd_tunnel_token_install, "tunnel-token-remove": cmd_tunnel_token_remove,
 }
 
