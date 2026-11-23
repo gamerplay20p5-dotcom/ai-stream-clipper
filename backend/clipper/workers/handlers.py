@@ -14,7 +14,7 @@ from ..render.renderer import RenderSpec, render
 from ..render.subtitles import SubWord
 from ..scoring.engine import score_timeline
 from .client import InternalError
-from .runtime import JobContext, JobError, WorkerRuntime
+from .runtime import JobCancelled, JobContext, JobError, WorkerRuntime
 
 log = logging.getLogger(__name__)
 
@@ -69,11 +69,47 @@ async def handle_audio(ctx: JobContext) -> dict:
             await ctx.client.post(f"/internal/sessions/{sid}/analysis", {"segment_idx": idx, "skipped": True})
             return {"skipped": "segment evicted"}
         raise JobError(f"segment download failed: {exc}") from exc
+    visual_motion = []
+    visual_stats = {}
+    if p.get("discover_visual"):
+        t0 = time.monotonic()
+        try:
+            from ..analysis.visual_discovery import discover_visual
+
+            visual_motion = await asyncio.to_thread(discover_visual, seg, float(p["duration"]),
+                                                    p.get("webcam_region"))
+        except Exception:
+            log.exception("visual discovery unavailable for segment", extra={"session_id": sid, "segment_idx": idx})
+        visual_stats = {"visual_proposals": len(visual_motion), "visual_scan_s": round(time.monotonic() - t0, 3)}
+    ctx.check_cancel()
+    endpoint = f"/internal/sessions/{sid}/analysis"
+    try:
+        analysis = await _analyse_audio(ctx, seg)
+    except JobCancelled:
+        raise
+    except Exception:
+        ctx.check_cancel()
+        if not visual_motion or ctx.max_attempts is None or ctx.attempts < ctx.max_attempts:
+            raise
+        log.exception("audio retries exhausted; keeping visual observations",
+                      extra={"session_id": sid, "segment_idx": idx})
+        await ctx.client.post(endpoint, {"segment_idx": idx, "visual_motion": visual_motion})
+        return {"audio": "failed", **visual_stats}
+    if analysis is None:
+        await ctx.client.post(endpoint, {"segment_idx": idx, "skipped": not visual_motion,
+                                         "visual_motion": visual_motion})
+        flag = "audio" if visual_motion else "skipped"
+        return {flag: "no audio stream", **visual_stats}
+    body, stats = analysis
+    await ctx.client.post(endpoint, {"segment_idx": idx, **body, "visual_motion": visual_motion})
+    return {**stats, **visual_stats}
+
+
+async def _analyse_audio(ctx: JobContext, seg: Path) -> tuple[dict, dict] | None:
+    p = ctx.payload
     wav = ctx.workdir / "audio.wav"
-    has_audio = await media.extract_wav(seg, wav, threads=2)
-    if not has_audio:
-        await ctx.client.post(f"/internal/sessions/{sid}/analysis", {"segment_idx": idx, "skipped": True})
-        return {"skipped": "no audio stream"}
+    if not await media.extract_wav(seg, wav, threads=2):
+        return None
     samples, sr = await asyncio.to_thread(read_wav_mono, wav)
     feats = await asyncio.to_thread(compute_features, samples, sr)
     ctx.check_cancel()
@@ -88,7 +124,6 @@ async def handle_audio(ctx: JobContext) -> dict:
     words = [[w.start, w.end, w.word, w.probability] for w in tr.words]
     turns, spk_s = await asyncio.to_thread(_speech_turns, samples, words, s)
     body = {
-        "segment_idx": idx,
         "features": feats.as_dict(),
         "words": words,
         "speech_ratio": tr.speech_ratio,
@@ -97,8 +132,7 @@ async def handle_audio(ctx: JobContext) -> dict:
     }
     if turns is not None:
         body["speech_turns"] = turns
-    await ctx.client.post(f"/internal/sessions/{sid}/analysis", body)
-    return {"words": len(tr.words), "stt_seconds": round(stt, 2), "realtime_factor":
+    return body, {"words": len(tr.words), "stt_seconds": round(stt, 2), "realtime_factor":
             round(stt / max(0.1, feats.duration), 3), "model": transcriber.name,
             "yamnet_seconds": yamnet_s, "acoustic_model": "yamnet" if extra.get("yamnet") else "none",
             "speaker_turns": len(turns or []), "speaker_seconds": spk_s}
@@ -171,10 +205,12 @@ async def handle_vision(ctx: JobContext) -> dict:
     the worker falls back and reports why."""
     from ..ai import director, edit_plan, narrative
     from ..ai.manager import ModelUnavailable, get_manager
-    from ..ai.schemas import VisualAnalysis, VisualEvent
+    from ..ai.schemas import NarrativeResult, VisualAnalysis, VisualEvent
+    from ..ai.visual_evidence import corroborated_event, webcam_reaction
     from ..ai.vlm import FrameInput, VLMAnalyzer
     from ..analysis.vision import HeuristicVisionProvider, sample_frames
     from ..scoring.engine import weighted_total
+    from ..scoring.titles import grounded_metadata
     from ..settings_store import AISettings
 
     clip_id = int(ctx.payload["clip_id"])
@@ -191,6 +227,10 @@ async def handle_vision(ctx: JobContext) -> dict:
     timings["fetch_s"] = round(time.monotonic() - t_all, 2)
     s = ctx.settings
     settings = AISettings.model_validate(spec["settings"])
+    cand_d = spec["candidate"]
+    hypotheses = list(cand_d.get("visual_evidence") or [])
+    grounded = bool(spec.get("grounded_metadata") or hypotheses)
+    registered_webcam = spec.get("registered_webcam") if grounded else None
     w0, w1 = float(spec["window"][0]), float(spec["window"][1])
     info = await media.probe(src)
     src_dur = media.duration_of(info)
@@ -206,31 +246,36 @@ async def handle_vision(ctx: JobContext) -> dict:
                                      interval, 180 if spec.get("deep") else 90)
     for f in frames:  # sample_frames returns times relative to its start argument (= window start)
         f.t = round(f.t, 3)
-    heur = await asyncio.to_thread(HeuristicVisionProvider().analyze, frames, peak_rel, spec.get("transcript", ""))
+    heur = await asyncio.to_thread(HeuristicVisionProvider().analyze, frames, peak_rel, spec.get("transcript", ""),
+                                  webcam_region=registered_webcam)
     timings["heuristic_vision_s"] = round(time.monotonic() - t0, 2)
     heur_d = heur.as_dict()
 
     # 2. multimodal model
     model = ctx.payload.get("model")
+    routed_fallback = ctx.payload.get("vision_fallback")
     manager = get_manager(s.openvino_device, s.ai_allow_cpu_fallback)
     visual: VisualAnalysis | None = None
     fallback_reason = ""
     words_rel = [(w[0] - w0, w[1] - w0, w[2]) for w in spec["words"]]
     cues = _audio_cues(spec, w0)
-    if model and (not s.ai_models or model in s.ai_models):
+    if model and routed_fallback != "heuristic" and (not s.ai_models or model in s.ai_models):
         t0 = time.monotonic()
         try:
             analyzer = VLMAnalyzer(manager, model)
+            primary = max(hypotheses, key=lambda e: e["confidence"], default=None)
+            evidence_window = (primary["start"] - w0, primary["end"] - w0) if primary else None
             visual = await asyncio.to_thread(
                 analyzer.analyze, [FrameInput(f.t, f.image) for f in frames], peak_rel, span, (w0, w1), words_rel, cues,
                 _story_text(spec.get("story") or {}, w0), spec.get("max_frames"),
-                (float(spec["setup_t"]) - w0) if spec.get("setup_t") is not None else None)
+                (float(spec["setup_t"]) - w0) if spec.get("setup_t") is not None else None,
+                classify_event=grounded, evidence_window=evidence_window, cpu_only=routed_fallback == "CPU")
             timings["deep"] = 1.0 if spec.get("deep") else 0.0
         except ModelUnavailable as exc:
             fallback_reason = str(exc)[:300]
         timings["vlm_s"] = round(time.monotonic() - t0, 2)
     elif model:
-        fallback_reason = f"modelo {model} não habilitado neste worker"
+        fallback_reason = f"modelo {model} indisponível neste worker (backend, memória ou configuração)"
     else:
         fallback_reason = "provedor heurístico selecionado"
     if visual is None:
@@ -242,53 +287,64 @@ async def handle_vision(ctx: JobContext) -> dict:
             notes=[f"multimodal indisponível: {fallback_reason}"] if fallback_reason else [])
 
     # 3. director
-    cand_d = spec["candidate"]
     breakdown = dict(cand_d.get("breakdown") or {})
     breakdown["visual"] = round(heur.visual_score, 2)
-    base = weighted_total(breakdown, settings)
+    base = float(cand_d["score"]) if hypotheses else weighted_total(breakdown, settings)
     cand = director.Candidate(float(spec["start"]), float(spec["end"]), float(spec["peak"]), base, breakdown,
-                              list(cand_d.get("reasons") or []), list(cand_d.get("kinds") or []))
+                              list(cand_d.get("reasons") or []), list(cand_d.get("kinds") or []), hypotheses)
     ac = spec.get("acoustic") or {}
     track = director.AcousticTrack([(t, c) for t, c in ac.get("frames", [])], [(t, p) for t, p in ac.get("pitch", [])])
     motion = [(w0 + m[0], m[1]) for m in (heur.extra or {}).get("motion", [])]
+    faces = [{**f, "t": w0 + f["t"]} for f in (heur.extra or {}).get("face_track", [])]
+    reaction = webcam_reaction(faces, cand.peak) if registered_webcam else None
     hint = None
     sit = (spec.get("story") or {}).get("situation") or {}
     if sit.get("start") is not None and sit["start"] < float(spec["start"]) - 1.0:
         hint = (float(sit["start"]), f"{sit.get('kind', 'situação')}: {sit.get('summary', '')[:60]}")
     decision = director.decide(cand, spec["words"], track, visual, director.Limits(**spec["limits"]), motion=motion,
-                               context_hint=hint)
+                               context_hint=hint, webcam_reaction=reaction)
     if visual.fallback:
         decision.reasons.append("Análise multimodal indisponível: decisão com áudio + visão heurística")
 
     # 4. narrative (the text model consumes facts, never pixels)
     t0 = time.monotonic()
     clip_words = [w[2] for w in spec["words"] if decision.start_abs <= w[0] < decision.end_abs]
-    # the streamer's own speech first: other voices (radio, NPCs) are context, not the subject
-    sp = list(spec.get("word_speakers") or [])
-    sp = sp if len(sp) == len(spec["words"]) else [""] * len(spec["words"])
-    own = [w[2] for w, s in zip(spec["words"], sp) if decision.start_abs <= w[0] < decision.end_abs
-           and not s.startswith("other:")]
-    others = [w[2] for w, s in zip(spec["words"], sp) if decision.start_abs <= w[0] < decision.end_abs
-              and s.startswith("other:")]
-    narr = await asyncio.to_thread(
-        narrative.write, manager, ctx.payload.get("narrative_model") or settings.narrative_model,
-        vision_model=model if not visual.fallback else None, transcript=" ".join(own), visual=visual,
-        decision=decision, game=(spec.get("streamer") or {}).get("game", ""),
-        fallback_titles=list(spec.get("title_suggestions") or []), others=" ".join(others),
-        story=_story_text(spec.get("story") or {}, w0))
+    streamer = spec.get("streamer") or {}
+    if grounded:
+        meta = grounded_metadata(streamer, spec.get("metadata_language") or settings.language, visual,
+                                 start=decision.start_abs, peak=decision.peak_abs, end=decision.end_abs)
+        narr = NarrativeResult(provider="grounded-template", titles=meta["suggestions"],
+                               description=meta["description"], hashtags=meta["hashtags"])
+    else:
+        # The user's speech comes first. Other voices provide context.
+        sp = list(spec.get("word_speakers") or [])
+        sp = sp if len(sp) == len(spec["words"]) else [""] * len(spec["words"])
+        own = [w[2] for w, s in zip(spec["words"], sp) if decision.start_abs <= w[0] < decision.end_abs
+               and not s.startswith("other:")]
+        others = [w[2] for w, s in zip(spec["words"], sp) if decision.start_abs <= w[0] < decision.end_abs
+                  and s.startswith("other:")]
+        narr = await asyncio.to_thread(
+            narrative.write, manager, ctx.payload.get("narrative_model") or settings.narrative_model,
+            vision_model=model if not visual.fallback else None, transcript=" ".join(own), visual=visual,
+            decision=decision, game=streamer.get("game", ""),
+            fallback_titles=list(spec.get("title_suggestions") or []), others=" ".join(others),
+            story=_story_text(spec.get("story") or {}, w0), cpu_only=routed_fallback == "CPU")
     timings["narrative_s"] = round(time.monotonic() - t0, 2)
 
     # 5. edit plan
     first = not spec.get("analysis_runs")
     title = narr.titles[0] if (not narr.fallback and narr.titles and first) else spec.get("title", "")
     motion_cx = [(w0 + m[0], m[2]) for m in (heur.extra or {}).get("motion", [])]
-    faces = [{**f, "t": w0 + f["t"]} for f in (heur.extra or {}).get("face_track", [])]
     layout = spec.get("layout")
+    visual_event = corroborated_event(visual, cand.peak, decision.start_abs, decision.end_abs) if grounded else False
     plan = edit_plan.build(decision, template_key=settings.edit_template, title=title, transcript_words=clip_words,
                            visual=visual, motion_cx=motion_cx,
-                           webcam_region=spec.get("webcam_region") or heur.webcam_region, face_track=faces,
+                           webcam_region=spec.get("webcam_region") or heur.webcam_region,
+                           face_track=[{k: v for k, v in f.items() if k != "mouth"} for f in faces],
                            layout_override=None if layout in (None, "auto") else layout,
-                           normalize_audio=settings.normalize_audio, zoom_intensity=settings.zoom_intensity)
+                           normalize_audio=settings.normalize_audio, zoom_intensity=settings.zoom_intensity,
+                           visual_priority=bool(hypotheses) or visual_event,
+                           webcam_reaction=reaction if visual_event else None)
     plan.base_start_abs = decision.start_abs
     timings["total_s"] = round(time.monotonic() - t_all, 2)
     snap = manager.snapshot()
@@ -302,7 +358,7 @@ async def handle_vision(ctx: JobContext) -> dict:
                  "fallback_reason": fallback_reason, "timings": timings, "frames_sampled": len(frames),
                  "frames_to_model": 0 if visual.fallback else len(visual.frame_times),
                  "model_state": (snap.get("models") or {}).get(model or "", {}),
-                 "prompt_version": _prompt_version(), "director_version": _director_version(),
+                 "prompt_version": _prompt_version(grounded), "director_version": _director_version(),
                  "max_new_tokens": _max_tokens(model), "frames": list(visual.frame_times)[:16]},
     })
     return {"mode": decision.mode, "keep": decision.keep, "score": decision.score, "vision": visual.provider,
@@ -320,10 +376,10 @@ def _story_text(story: dict, w0: float) -> str:
     return " | ".join(lines)[:500]
 
 
-def _prompt_version() -> str:
-    from ..ai.vlm import PROMPT_VERSION
+def _prompt_version(grounded: bool = False) -> str:
+    from ..ai.vlm import EVENT_PROMPT_VERSION, PROMPT_VERSION
 
-    return PROMPT_VERSION
+    return EVENT_PROMPT_VERSION if grounded else PROMPT_VERSION
 
 
 def _director_version() -> str:
@@ -385,7 +441,7 @@ async def handle_render(ctx: JobContext) -> dict:
         layout=spec.get("layout", "auto"), webcam_region=spec.get("webcam_region"),
         show_title=bool(spec.get("show_title", True)), preset=spec.get("preset", "veryfast"),
         crf=int(spec.get("crf", 21)), fps=int(spec.get("fps", 30)), threads=s.ffmpeg_threads,
-        plan=spec.get("edit_plan"), captions=spec.get("captions"),
+        plan=spec.get("edit_plan"), captions=spec.get("captions"), encoder=s.render_encoder,
     )
     try:
         res = await render(rs, ctx.workdir / "render")

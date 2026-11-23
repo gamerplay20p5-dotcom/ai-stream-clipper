@@ -113,6 +113,7 @@ class JobContext:
     settings: Settings
     workdir: Path
     cancel: asyncio.Event = field(default_factory=asyncio.Event)
+    max_attempts: int | None = None
 
     def check_cancel(self) -> None:
         if self.cancel.is_set():
@@ -217,7 +218,7 @@ class WorkerRuntime:
                 continue
             j = jobs[0]
             ctx = JobContext(j["id"], j["type"], j["payload"], j["attempts"], self.client, self.settings,
-                             self.workdir / f"job_{j['id']}")
+                             self.workdir / f"job_{j['id']}", max_attempts=j.get("max_attempts"))
             t = asyncio.create_task(self._run_job(spec, ctx, sem))
             self._job_tasks.add(t)
             t.add_done_callback(self._job_tasks.discard)

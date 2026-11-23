@@ -16,6 +16,26 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 # ---------------------------------------------------------------------------
 
 
+class MotionHypothesis(BaseModel):
+    """Cheap observation on one segment. Times are offsets from the segment start."""
+
+    start: float = Field(ge=0, allow_inf_nan=False)
+    peak: float = Field(ge=0, allow_inf_nan=False)
+    end: float = Field(ge=0, allow_inf_nan=False)
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    signal: Literal["vertical_displacement", "trajectory_change", "rotation"]
+
+    @model_validator(mode="after")
+    def _ordered(self):
+        if not self.start <= self.peak <= self.end:
+            raise ValueError("motion times must be ordered start <= peak <= end")
+        return self
+
+
+EventKind = Literal["rollover", "collision", "fall", "police_chase", "escape", "failed_escape",
+                    "prank", "funny_interaction", "surprise", "unlikely_win", "unexpected_failure", "unknown"]
+
+
 class VisualEvent(BaseModel):
     t: float = Field(ge=0, description="seconds from the start of the analysed window")
     label: str = Field(max_length=160)
@@ -49,6 +69,7 @@ class VisualAnalysis(BaseModel):
     device: str = ""
     summary: str = Field("", max_length=600)  # what happened in the gameplay
     key_event: str = Field("", max_length=300)  # what deserves attention
+    event_kind: EventKind = "unknown"
     funny: float = Field(0, ge=0, le=10)
     unexpected: float = Field(0, ge=0, le=10)
     important: float = Field(0, ge=0, le=10)
@@ -169,6 +190,7 @@ class EditPlan(BaseModel):
     template: str = "padrao"
     layout: Literal["gameplay", "zoom", "split", "action"] = "gameplay"
     webcam_region: dict | None = None
+    webcam_height_pct: float | None = Field(None, ge=15, le=50)
     face_track: list[dict] = Field(default_factory=list)  # [{t, x, y, w, h}] clip-relative, normalised
     crop_keyframes: list[CropKeyframe] = Field(default_factory=list, max_length=24)
     zooms: list[ZoomMoment] = Field(default_factory=list, max_length=3)

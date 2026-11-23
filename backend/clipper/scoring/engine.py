@@ -16,11 +16,12 @@ import numpy as np
 
 from ..analysis import lexicon
 from ..settings_store import AISettings
-from .titles import suggest_metadata
+from .titles import grounded_metadata, suggest_metadata
 
 # Bump whenever detection/scoring logic changes: stored with every candidate and clip so
 # evaluations can be reproduced and compared across versions.
 SCORING_VERSION = "score-3.0"
+MULTIMODAL_SCORING_VERSION = "score-4.0"
 
 HOP = 0.25
 ABS_FLOOR_DB = -48.0  # ignore "spikes" in near-silence
@@ -61,6 +62,7 @@ class Candidate:
     description: str = ""
     hashtags: list[str] = field(default_factory=list)
     features: dict = field(default_factory=dict)  # observable signals (ranker / dataset)
+    visual_evidence: list[dict] = field(default_factory=list)
 
 
 ACOUSTIC_CATS = ("speech", "laughter", "scream", "shout", "game_impact", "gunfire", "vehicle", "music", "crowd")
@@ -136,23 +138,26 @@ def build_grid(features: list[dict], t_from: float, t_to: float) -> Grid:
 def rolling_baseline(x: np.ndarray, window: int, guard: int) -> tuple[np.ndarray, np.ndarray]:
     """Causal rolling median / robust spread (MAD) excluding the most recent ``guard`` bins."""
     n = len(x)
-    base = np.full(n, np.nan)
-    spread = np.full(n, np.nan)
     valid_all = x[~np.isnan(x)]
     g_med = float(np.median(valid_all)) if len(valid_all) else -60.0
     g_mad = float(np.median(np.abs(valid_all - g_med))) if len(valid_all) else 3.0
-    for i in range(n):
-        lo, hi = max(0, i - window), max(0, i - guard)
-        w = x[lo:hi]
-        w = w[~np.isnan(w)]
-        if len(w) >= 40:
-            med = float(np.median(w))
-            mad = float(np.median(np.abs(w - med)))
-        else:
-            med, mad = g_med, g_mad
-        base[i] = med
-        spread[i] = max(3.0, 1.4826 * mad)
-    return base, spread
+    base = np.full(n, g_med)
+    mad = np.full(n, g_mad)
+    width = window - guard
+    if len(valid_all) >= 40 and width >= 40:
+        windows = np.lib.stride_tricks.sliding_window_view(np.pad(x, (window, 0), constant_values=np.nan), width)
+        # Bound scratch memory for unusually long scoring windows.
+        batch = max(1, 65_536 // width)
+        for begin in range(0, n, batch):
+            rows = windows[begin:min(n, begin + batch)]
+            counts = np.count_nonzero(~np.isnan(rows), axis=1)
+            kept = np.flatnonzero(counts >= 40)
+            if kept.size:
+                values = rows[kept]
+                medians = np.nanmedian(values, axis=1)
+                base[begin + kept] = medians
+                mad[begin + kept] = np.nanmedian(np.abs(values - medians[:, None]), axis=1)
+    return base, np.maximum(3.0, 1.4826 * mad)
 
 
 # ---------------------------------------------------------------------------
@@ -177,11 +182,13 @@ def _runs(mask: np.ndarray, max_gap: int = 2) -> list[tuple[int, int]]:
     return runs
 
 
-def detect_events(grid: Grid, words: list[Word], region: tuple[float, float], sensitivity: float) -> list[Ev]:
+def detect_events(grid: Grid, words: list[Word], region: tuple[float, float], sensitivity: float,
+                  baseline: tuple[np.ndarray, np.ndarray] | None = None) -> list[Ev]:
     events: list[Ev] = []
     if grid.n == 0:
         return events
-    base, spread = rolling_baseline(grid.loud, int(BASE_WINDOW_S / HOP), int(BASE_GUARD_S / HOP))
+    base, spread = baseline if baseline is not None else rolling_baseline(
+        grid.loud, int(BASE_WINDOW_S / HOP), int(BASE_GUARD_S / HOP))
     z = (grid.loud - base) / spread
     zthr = 3.6 - 2.0 * sensitivity  # 3.6 (conservative) .. 1.6 (aggressive)
     loud_ok = np.nan_to_num(grid.loud, nan=-120) > ABS_FLOOR_DB
@@ -292,14 +299,12 @@ def detect_events(grid: Grid, words: list[Word], region: tuple[float, float], se
         starts = np.array([w.start for w in words])
         total_span = max(1.0, starts[-1] - starts[0])
         med_rate = len(words) / total_span
-        for i in range(len(words)):
-            t = words[i].start
-            if not (r0 <= t < r1):
-                continue
-            cnt = int(np.sum((starts >= t) & (starts < t + 3.0)))
-            rate = cnt / 3.0
-            if rate >= 3.5 and rate >= 1.8 * med_rate:
-                events.append(Ev(round(t, 2), 3.0, "speech_burst", round(rate, 2), {"wps": round(rate, 2)}))
+        # Scoring passes sorted words. Sort timestamps for other callers too.
+        ordered = np.sort(starts)
+        rates = (np.searchsorted(ordered, starts + 3.0) - np.searchsorted(ordered, starts)) / 3.0
+        bursts = (starts >= r0) & (starts < r1) & (rates >= max(3.5, 1.8 * med_rate))
+        for t, rate in zip(starts[bursts].tolist(), rates[bursts].tolist()):
+            events.append(Ev(round(t, 2), 3.0, "speech_burst", round(rate, 2), {"wps": round(rate, 2)}))
     # collapse duplicated speech bursts (one per 3 s)
     events.sort(key=lambda e: e.t)
     out: list[Ev] = []
@@ -318,6 +323,22 @@ def detect_events(grid: Grid, words: list[Word], region: tuple[float, float], se
 # ---------------------------------------------------------------------------
 
 ACOUSTIC = {"loudness_spike", "scream", "silence_break", "energy_burst", "bright_burst"}
+VISUAL_MOTION = "visual_motion"
+
+
+def _visual_events(features: list[dict], region: tuple[float, float], sensitivity: float) -> list[Ev]:
+    threshold = 0.63 + (0.5 - sensitivity) * 0.12
+    out = []
+    for feature in features:
+        offset = feature["start"]
+        for motion in (feature.get("extra") or {}).get(VISUAL_MOTION, []):
+            peak = round(offset + motion["peak"], 3)
+            if not (region[0] <= peak < region[1] and motion["confidence"] >= threshold):
+                continue
+            start, end = (round(offset + motion[k], 3) for k in ("start", "end"))
+            out.append(Ev(peak, end - peak, VISUAL_MOTION, motion["confidence"] * 10,
+                          {**motion, "start": start, "peak": peak, "end": end}))
+    return sorted(out, key=lambda e: e.t)
 
 
 def cluster(events: list[Ev]) -> list[list[Ev]]:
@@ -331,10 +352,33 @@ def cluster(events: list[Ev]) -> list[list[Ev]]:
 
 
 def _peak_of(group: list[Ev]) -> float:
+    visual = [e for e in group if e.kind == VISUAL_MOTION]
+    if visual:
+        return max(visual, key=lambda e: e.strength).t
     acoustic = [e for e in group if e.kind in ("loudness_spike", "scream")]
     if acoustic:
         return max(acoustic, key=lambda e: e.strength).t
     return max(group, key=lambda e: e.strength).t
+
+
+def _multimodal_groups(events: list[Ev], visual: list[Ev]) -> list[list[Ev]]:
+    audio = cluster(events)
+    groups = list(audio)
+    for e in visual:
+        nearest = min(audio, key=lambda g: abs(_audio_anchor(g) - e.t), default=None)
+        if nearest is not None and abs(_audio_anchor(nearest) - e.t) <= 3.0:
+            nearest.append(e)
+        elif len(groups) > len(audio) and e.data["start"] <= groups[-1][-1].data["end"] + 0.75:
+            groups[-1].append(e)
+        else:
+            groups.append([e])
+    # A visual hypothesis must not consume an overlapping window before a
+    # corroborated audio candidate has been evaluated.
+    return groups
+
+
+def _audio_anchor(group: list[Ev]) -> float:
+    return _peak_of([e for e in group if e.kind != VISUAL_MOTION])
 
 
 def _snap_start(words: list[Word], desired: float, lo: float) -> tuple[float, bool]:
@@ -428,11 +472,42 @@ def score_timeline(tl: dict) -> dict:
     words = [Word(float(w[0]), float(w[1]), str(w[2]), float(w[3]) if len(w) > 3 else 1.0)
              for w in tl.get("words", [])]
     words.sort(key=lambda w: w.start)
-    grid = build_grid(tl.get("features", []), t_from, t_to)
-    region = (scored_until, limit)
-    events = detect_events(grid, words, region, settings.sensitivity)
-    base, spread = rolling_baseline(grid.loud, int(BASE_WINDOW_S / HOP), int(BASE_GUARD_S / HOP)) if grid.n else (
-        np.array([]), np.array([]))
+    features = tl.get("features", [])
+    grid = build_grid(features, t_from, t_to)
+    active = settings.visual_discovery == "on"
+    visual = _visual_events(features, (scored_until, limit), settings.sensitivity) \
+        if settings.visual_discovery != "off" else []
+    if active and not final:
+        # Wait for the full configured aftermath, then advance the same watermark as audio.
+        limit = min((e.t for e in visual if e.data["end"] > limit), default=limit)
+        visual = [e for e in visual if e.t < limit]
+    if limit <= scored_until:
+        return {"events": [], "candidates": [], "rejected": [], "scored_until": scored_until}
+    baseline = rolling_baseline(grid.loud, int(BASE_WINDOW_S / HOP), int(BASE_GUARD_S / HOP))
+    events = detect_events(grid, words, (scored_until, limit), settings.sensitivity, baseline=baseline)
+    result = _select_candidates(tl, settings, grid, baseline, words, events, visual if active else [], data_start, t_to)
+    result.update(scored_until=round(limit, 3), scoring_version=MULTIMODAL_SCORING_VERSION
+                  if active or settings.use_grounded_metadata else SCORING_VERSION)
+    if active:
+        result["visual_discovery_active"] = True
+    if settings.use_grounded_metadata:
+        result["grounded_metadata_active"] = True
+    if settings.visual_discovery == "shadow":
+        experiment = _select_candidates(tl, settings, grid, baseline, words, events, visual, data_start, t_to) \
+            if visual else result
+        result["visual_shadow"] = {
+            "proposals": len(visual),
+            "baseline_candidates": len(result["candidates"]),
+            "multimodal_candidates": len(experiment["candidates"]),
+            "recent": [{"peak": c["peak"], "start": c["start"], "end": c["end"], "score": c["score"],
+                        "evidence": c["visual_evidence"]}
+                       for c in experiment["candidates"] if c["visual_evidence"]][-10:],
+        }
+    return result
+
+
+def _select_candidates(tl, settings, grid, baseline, words, events, visual, data_start, t_to) -> dict:
+    base, spread = baseline
 
     existing = list(tl.get("clips", []))
     candidates: list[Candidate] = []
@@ -447,10 +522,11 @@ def score_timeline(tl: dict) -> dict:
                            "features": cand.features, "transcript": cand.transcript[:1500]}
         rejected.append(r)
 
-    for group in cluster(events):
+    for group in _multimodal_groups(events, visual) if visual else cluster(events):
         kinds = {e.kind for e in group}
         cand = _build_candidate(group, grid, base, spread, words, settings, data_start, t_to, existing)
-        if not (kinds & ACOUSTIC) and sum(e.strength for e in group if e.kind in ("keyword", "laughter")) < 4.0:
+        if VISUAL_MOTION not in kinds and not (kinds & ACOUSTIC) and \
+                sum(e.strength for e in group if e.kind in ("keyword", "laughter")) < 4.0:
             reject(group, "text_only", cand=cand)  # ordinary conversation: words without acoustic reaction
             continue
         if cand is None:
@@ -459,35 +535,48 @@ def score_timeline(tl: dict) -> dict:
         if cand.score < settings.min_score:
             reject(group, "below_min_score", cand.score, cand)
             continue
-        if any(_overlap(cand.start, cand.end, c["start"], c["end"]) >= settings.dedup_overlap for c in existing):
+        if any(_duplicate_window(cand, c, settings.dedup_overlap) for c in existing):
             reject(group, "duplicate", cand.score, cand)
             continue
         if any(_jaccard(cand.transcript, c.get("transcript", "")) >= 0.6 for c in existing if c.get("transcript")):
             reject(group, "duplicate", cand.score, cand)
             continue
         recent = [c for c in existing if cand.peak - c.get("peak", c["start"]) < 3600]
-        if len(recent) >= settings.max_clips_per_hour and cand.score < min(100, settings.min_score + 20):
+        if len(recent) >= settings.max_clips_per_hour and (
+                cand.visual_evidence or cand.score < min(100, settings.min_score + 20)):
             reject(group, "rate_limit", cand.score, cand)
             continue
-        meta = suggest_metadata(cand.transcript, cand.kinds, tl.get("streamer") or {}, settings.language)
+        streamer = tl.get("streamer") or {}
+        meta = grounded_metadata(streamer, tl.get("metadata_language") or settings.language) \
+            if (settings.use_grounded_metadata or cand.visual_evidence) else \
+            suggest_metadata(cand.transcript, cand.kinds, streamer, settings.language)
         cand.title, cand.title_suggestions = meta["title"], meta["suggestions"]
         cand.description, cand.hashtags = meta["description"], meta["hashtags"]
         candidates.append(cand)
         existing.append({"start": cand.start, "end": cand.end, "peak": cand.peak, "transcript": cand.transcript,
-                         "kinds": cand.kinds})
+                         "kinds": cand.kinds, "visual_evidence": cand.visual_evidence})
 
     return {
-        "events": [asdict(e) for e in events],
+        "events": [asdict(e) for e in sorted(events + visual, key=lambda e: e.t)] if visual else
+        [asdict(e) for e in events],
         "candidates": [asdict(c) for c in candidates],
         "rejected": rejected,
         "min_score": settings.min_score,
-        "scored_until": round(limit, 3),
-        "scoring_version": SCORING_VERSION,
     }
+
+
+def _duplicate_window(candidate: Candidate, previous: dict, overlap: float) -> bool:
+    other = previous.get("visual_evidence")
+    if candidate.visual_evidence and other:
+        return any(abs(a["peak"] - b["peak"]) <= 2.0
+                   or min(a["end"], b["end"]) >= max(a["start"], b["start"])
+                   for a in candidate.visual_evidence for b in other)
+    return _overlap(candidate.start, candidate.end, previous["start"], previous["end"]) >= overlap
 
 
 def _build_candidate(group, grid, base, spread, words, settings: AISettings, data_start, t_to, existing):
     peak = _peak_of(group)
+    visual = [e.data for e in group if e.kind == VISUAL_MOTION]
     first = min(e.t for e in group)
     last = max(e.t + e.duration for e in group)
     lo, hi = data_start, t_to
@@ -498,6 +587,12 @@ def _build_candidate(group, grid, base, spread, words, settings: AISettings, dat
                       min(settle + 1.5, last + settings.post_context_seconds + 10.0))
     start, start_snapped = _snap_start(words, desired_start, lo)
     end, end_snapped = _snap_end(words, desired_end, hi)
+    if visual:
+        visual_start, visual_end = min(e["start"] for e in visual), max(e["end"] for e in visual)
+        if peak < lo or visual_end > hi + 0.01:
+            return None
+        start = max(lo, min(start, visual_start - settings.pre_context_seconds))
+        end = min(hi, max(end, visual_end + settings.post_context_seconds))
 
     # duration constraints
     if end - start < settings.min_clip_seconds:
@@ -509,7 +604,12 @@ def _build_candidate(group, grid, base, spread, words, settings: AISettings, dat
         truncated = True
         start = max(start, peak - settings.max_clip_seconds * 0.6)
         end = start + settings.max_clip_seconds
+        if visual:
+            end = min(hi, max(end, visual_end))
+            start = end - settings.max_clip_seconds
     if end - start < min(settings.min_clip_seconds, 6.0):
+        return None
+    if visual and (start > visual_start or end < visual_end):
         return None
 
     clip_words = [w for w in words if start <= w.start < end]
@@ -594,6 +694,20 @@ def _build_candidate(group, grid, base, spread, words, settings: AISettings, dat
     if intensity < 3 and reaction < 3 and humor < 3:
         total *= 0.6
         reasons.append("Penalidade: pouca reação/intensidade (provável conversa normal)")
+    if visual:
+        confidence = max(e["confidence"] for e in visual)
+        context_seconds = max(0.0, visual_start - start)
+        outcome_seconds = max(0.0, end - visual_end)
+        evidence_score = min(70.0, 100 * confidence)
+        if context_seconds < 1.5 or outcome_seconds < 1.0:
+            evidence_score = min(45.0, evidence_score)
+        if settings.multimodal_scoring:
+            # dBFS contributes less when the event has a temporal visual explanation.
+            total = max(0.0, total - 0.4 * float(breakdown["intensity"]))
+        breakdown["visual"] = round(10 * confidence, 2)
+        total = max(total, evidence_score)
+        reasons.insert(0, f"Hipótese visual entre {visual_start:.2f}s e {visual_end:.2f}s "
+                          f"(pico {peak:.2f}s, força {confidence:.0%})")
     if truncated:
         reasons.append("Momento longo: limitado à duração máxima")
     if not reasons:
@@ -624,6 +738,7 @@ def _build_candidate(group, grid, base, spread, words, settings: AISettings, dat
         start=round(start, 2), end=round(end, 2), peak=round(peak, 2), score=round(total, 1),
         breakdown=breakdown, reasons=reasons, transcript=transcript,
         kinds=sorted({e.kind for e in group}), features=features,
+        visual_evidence=visual,
     )
 
 

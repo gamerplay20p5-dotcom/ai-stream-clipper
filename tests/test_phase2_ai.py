@@ -249,6 +249,20 @@ def test_routing_prefers_capable_fast_workers_and_never_stalls():
     assert not vision_acceptor(w206, [w206, w210], now)(_job()) and vision_acceptor(w210, [w206, w210], now)(_job())
 
 
+def test_routing_uses_backend_and_free_memory_but_reuses_resident_models():
+    model = "qwen3-vl-2b-int4"
+    gpu = _worker("gpu", [model], latency=5.0)
+    cpu = _worker("cpu", [model], gpu=False, latency=3.0)
+    now = utcnow()
+    assert not vision_acceptor(cpu, [cpu, gpu], now)(_job())
+    gpu.metrics = {**gpu.metrics, "vram_free_bytes": 1024**3}
+    assert vision_acceptor(cpu, [cpu, gpu], now)(_job())
+    gpu.metrics["ai"].update(loaded=model, device="GPU")
+    assert not vision_acceptor(cpu, [cpu, gpu], now)(_job())
+    gpu.capabilities["inference_backends"] = ["other"]
+    assert vision_acceptor(cpu, [cpu, gpu], now)(_job())
+
+
 # ---------------------------------------------------------------------------- model manager
 
 
@@ -268,6 +282,22 @@ def test_model_manager_reports_missing_models(tmp_path, monkeypatch):
     finally:
         monkeypatch.delenv("ASC_MODELS_DIR")
         reset_settings_cache()
+
+
+def test_model_manager_cpu_route_releases_device_and_recovers_gpu(monkeypatch):
+    from clipper.ai import manager as models
+
+    monkeypatch.setattr(models, "_ov_devices", lambda: ["CPU", "GPU"])
+    monkeypatch.setattr(models, "is_installed", lambda _: True)
+    manager = models.ModelManager("GPU")
+    monkeypatch.setattr(manager, "_build", lambda _kind, _path, device: object())
+    model = "qwen3-vl-2b-int4"
+    gpu, device = manager.acquire(model)
+    assert device == "GPU"
+    cpu, device = manager.acquire(model, cpu_only=True)
+    assert device == "CPU" and cpu is not gpu
+    assert manager.acquire(model, cpu_only=True) == (cpu, "CPU")
+    assert manager.acquire(model)[1] == "GPU"
 
 
 def test_narrative_template_fallback():

@@ -52,7 +52,8 @@ def smooth_keyframes(points: list[tuple[float, float]], max_kf: int = 12, max_sp
 def build(decision: DirectorDecision, *, template_key: str = "padrao", title: str = "", transcript_words: list[str] | None = None,
           visual: VisualAnalysis | None = None, motion_cx: list[tuple[float, float]] | None = None,
           webcam_region: dict | None = None, face_track: list[dict] | None = None, layout_override: str | None = None,
-          caption_override: str | None = None, normalize_audio: bool = True, zoom_intensity: float = 1.0) -> EditPlan:
+          caption_override: str | None = None, normalize_audio: bool = True, zoom_intensity: float = 1.0,
+          visual_priority: bool = False, webcam_reaction: dict | None = None) -> EditPlan:
     """``motion_cx``: (t_abs, normalised x of the motion centroid); ``face_track`` entries use
     session offsets in ``t``. Output times are clip-relative."""
     tpl = TEMPLATES.get(template_key, TEMPLATES["padrao"])
@@ -63,12 +64,20 @@ def build(decision: DirectorDecision, *, template_key: str = "padrao", title: st
     # layout
     action = visual.action if visual is not None and not visual.fallback else 0.0
     kf: list[CropKeyframe] = []
+    webcam_height_pct = None
     if layout_override and layout_override != "auto":
         layout = layout_override
         rationale.append(f"Enquadramento escolhido manualmente: {layout}")
     elif webcam_region:
         layout = "split"
-        rationale.append("Webcam localizada: rosto em cima, gameplay embaixo")
+        if webcam_reaction:
+            webcam_height_pct = 42
+            rationale.append("Webcam em destaque pelo movimento observado após o acontecimento")
+        elif visual_priority:
+            webcam_height_pct = 27
+            rationale.append("Gameplay em destaque para preservar a ação e o desfecho")
+        else:
+            rationale.append("Webcam localizada: rosto em cima, gameplay embaixo")
     else:
         pts = [(t - s0, cx) for t, cx in (motion_cx or []) if 0 <= t - s0 <= dur]
         spread = float(np.std([p[1] for p in pts])) if len(pts) >= 4 else 1.0
@@ -102,6 +111,7 @@ def build(decision: DirectorDecision, *, template_key: str = "padrao", title: st
     tracks = [{**f, "t": round(f["t"] - s0, 2)} for f in (face_track or []) if 0 <= f["t"] - s0 <= dur]
     return EditPlan(
         template=tpl.key, layout=layout, webcam_region=webcam_region, face_track=tracks[:60], crop_keyframes=kf,
+        webcam_height_pct=webcam_height_pct,
         zooms=zooms, caption_style=caption_override or tpl.caption_style, emphasis_words=emphasis[:30],
         fade_in=tpl.fade_in, fade_out=tpl.fade_out, normalize_audio=normalize_audio,
         title=title if tpl.show_title else "", rationale=rationale,

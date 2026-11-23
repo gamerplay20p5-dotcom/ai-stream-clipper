@@ -39,6 +39,9 @@ class AISettings(BaseModel):
     max_clips_per_hour: int = Field(12, ge=1, le=120)
     dedup_overlap: float = Field(0.35, ge=0.0, le=1.0)
     # vision
+    visual_discovery: Literal["off", "shadow", "on"] = "off"
+    multimodal_scoring: bool = False
+    grounded_metadata: bool = False
     vision_enabled: bool = True
     # openvino_vlm = multimodal model (falls back to heuristics when no worker serves it)
     vision_provider: Literal["heuristic", "openvino_vlm"] = "openvino_vlm"
@@ -138,6 +141,10 @@ class AISettings(BaseModel):
     # auto-publish is a future module: always disabled in this build
     auto_publish: Literal[False] = False
     weights: ScoreWeights = Field(default_factory=ScoreWeights)
+
+    @property
+    def use_grounded_metadata(self) -> bool:
+        return self.grounded_metadata and self.visual_discovery != "shadow"
 
     @model_validator(mode="after")
     def _check_durations(self):

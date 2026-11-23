@@ -17,9 +17,11 @@ from . import queue
 from .ai import director as director_mod
 from .ai import edit_plan as edit_plan_mod
 from .ai.schemas import DirectorDecision, EditPlan, NarrativeResult, VisualAnalysis
+from .ai.visual_evidence import corroborated_event
 from .db import utcnow
 from .models import AudioFeature, Clip, Segment, StreamSession, Streamer, TranscriptWord
 from .scoring.engine import weighted_total
+from .scoring.titles import grounded_metadata
 from .settings_store import AISettings, load_ai_settings
 
 log = logging.getLogger(__name__)
@@ -41,6 +43,8 @@ def enqueue_analysis(db: Session, clip: Clip, settings: AISettings, priority: in
     clip.status = "analyzing"
     clip.vision_state = "pending"
     model = settings.vision_model if settings.vision_provider == "openvino_vlm" else None
+    if priority == 60 and (clip.provenance or {}).get("visual_discovery") and clip.score < settings.min_score + 10:
+        priority = 65  # weaker motion hypotheses wait behind the ordinary live analyses
     queue.enqueue(
         db, "vision_analyze",
         {"clip_id": clip.id, "session_id": clip.session_id, "provider": settings.vision_provider,
@@ -103,6 +107,16 @@ def _word_speakers(db: Session, session_id: int, a: float, b: float) -> list[str
                                              TranscriptWord.start < b).order_by(TranscriptWord.start)).all()]
 
 
+def _metadata_language(db: Session, clip: Clip, streamer: Streamer | None, settings: AISettings) -> str:
+    language = ((streamer.preferences or {}).get("language") if streamer else None) or settings.language
+    if language != "auto":
+        return language
+    return db.scalar(select(AudioFeature.language).where(
+        AudioFeature.session_id == clip.session_id, AudioFeature.start >= clip.start - 10,
+        AudioFeature.start <= clip.end, AudioFeature.language != "",
+    ).order_by(AudioFeature.start.desc()).limit(1)) or "pt"
+
+
 def _limits(db: Session, clip: Clip, settings: AISettings) -> dict:
     lo, hi = media_bounds(db, clip)
     streamer = db.get(Streamer, clip.streamer_id)
@@ -119,6 +133,8 @@ def _limits(db: Session, clip: Clip, settings: AISettings) -> dict:
 
 def ai_spec(db: Session, clip: Clip, source_location: dict) -> dict:
     """Everything the AI worker needs (no DB access on the worker side)."""
+    from .pipeline import streamer_info
+
     settings = load_ai_settings(db)
     base_start = clip.heuristic_start if clip.heuristic_start is not None else clip.start
     base_end = clip.heuristic_end if clip.heuristic_end is not None else clip.end
@@ -137,6 +153,11 @@ def ai_spec(db: Session, clip: Clip, source_location: dict) -> dict:
             w1 = min(hi, max(w1, float(sit.get("last") or base_end) + 5.0))
         w0 = max(w0, w1 - (settings.max_story_seconds + 40.0))
     streamer = db.get(Streamer, clip.streamer_id)
+    prov = clip.provenance or {}
+    visual_evidence = prov.get("visual_discovery") or []
+    grounded = bool(visual_evidence or prov.get("grounded_metadata"))
+    streamer_data = streamer_info(streamer) if streamer else {}
+    streamer_data["game"] = streamer_data.get("registered_game", "")
     return {
         **source_location,
         "clip_id": clip.id,
@@ -148,11 +169,13 @@ def ai_spec(db: Session, clip: Clip, source_location: dict) -> dict:
         "word_speakers": _word_speakers(db, clip.session_id, w0, w1),
         "acoustic": _acoustic(db, clip.session_id, w0, w1),
         "candidate": {"score": clip.score, "breakdown": clip.score_breakdown or {}, "reasons": clip.reasons or [],
-                      "kinds": clip.kinds or []},
+                      "kinds": clip.kinds or [], "visual_evidence": visual_evidence},
         "limits": _limits(db, clip, settings),
         "settings": settings.model_dump(),
-        "streamer": {"game": ((streamer.preferences or {}).get("game") if streamer else "") or "",
-                     "display_name": streamer.display_name if streamer else ""},
+        "streamer": streamer_data,
+        "grounded_metadata": grounded,
+        "metadata_language": _metadata_language(db, clip, streamer, settings) if grounded else settings.language,
+        "registered_webcam": ((streamer.preferences or {}).get("webcam_region") if streamer else None),
         "title": clip.title, "title_suggestions": clip.title_suggestions or [],
         "layout": clip.layout, "caption_style": clip.caption_style, "webcam_region": clip.webcam_region,
         "analysis_runs": clip.analysis_runs,
@@ -199,6 +222,7 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
                  "vision_fallback": bool(visual is None or visual.fallback)})
     clip.analysis_meta = meta
     prov = dict(clip.provenance or {})
+    grounded = bool(prov.get("visual_discovery") or prov.get("grounded_metadata"))
     prov["analysis"] = {k: meta.get(k) for k in ("vision_model", "vision_device", "vision_provider", "narrative_provider",
                                                   "prompt_version", "max_new_tokens", "frames", "fallback_reason",
                                                   "director_version") if k in meta}
@@ -230,7 +254,26 @@ def apply_analysis(db: Session, clip: Clip, payload: dict, *, worker: str = "") 
         _apply_playbook(db, clip, visual)
     else:
         clip.score = round(weighted_total(breakdown, settings), 1)
-    if narrative is not None and not narrative.fallback and narrative.titles and not clip.is_test:
+    if grounded and not clip.is_test:
+        from .pipeline import streamer_info
+
+        streamer = db.get(Streamer, clip.streamer_id)
+        metadata = grounded_metadata(
+            streamer_info(streamer) if streamer else {}, _metadata_language(db, clip, streamer, settings), visual,
+            start=clip.start, peak=clip.peak, end=clip.end)
+        current = (clip.provenance or {}).get("metadata") or {}
+        if first or clip.title == current.get("title"):
+            clip.title = metadata["title"]
+            clip.title_suggestions = metadata["suggestions"]
+            clip.edit_plan = {**clip.edit_plan, "title": clip.title if plan.title else ""}
+        if first or clip.description == current.get("description"):
+            clip.description = metadata["description"]
+        if first or clip.hashtags == current.get("hashtags"):
+            clip.hashtags = metadata["hashtags"]
+        clip.provenance = {**(clip.provenance or {}), "metadata": {
+            "title": metadata["title"], "description": metadata["description"], "hashtags": metadata["hashtags"],
+            "event": metadata["event"]}}
+    elif narrative is not None and not narrative.fallback and narrative.titles and not clip.is_test:
         clip.title_suggestions = list(dict.fromkeys(narrative.titles + list(clip.title_suggestions or [])))[:6]
         if first:
             clip.title = narrative.titles[0][:255]
@@ -359,11 +402,14 @@ def _apply_gate(db: Session, clip: Clip, decision: DirectorDecision, visual: Vis
         spans.append((clip.source_start, clip.source_start + clip.source_duration))
     lim = _limits(db, clip, settings)
     vis_ok = visual is not None and not visual.fallback
+    visual_signal = (clip.provenance or {}).get("visual_discovery")
+    salient = corroborated_event(visual, decision.peak_abs, decision.start_abs, decision.end_abs) if visual_signal \
+        else bool(vis_ok and visual_relevant(visual))
     res = qg.evaluate(
         judgement=judgement, start=decision.start_abs, end=decision.end_abs, peak=decision.peak_abs,
         keep=decision.keep, words=[(r[0], r[1]) for r in rows], media=spans, kinds=clip.kinds or [],
         word_probs=[r[2] for r in rows], speakers=[r[3] or "" for r in rows],
-        visual_ok=vis_ok, visual_events=bool(vis_ok and visual_relevant(visual)),
+        visual_ok=vis_ok, visual_events=salient,
         rework_runs=runs, history=g.get("history") or [],
         settings=qg.GateSettings(settings.gate_event_min, settings.gate_narrative_min, settings.gate_recovery_min,
                                  max_len=max(lim["max_len"], settings.max_story_seconds),
@@ -492,10 +538,14 @@ def _editorial_final(db: Session, clip: Clip, decision: DirectorDecision, visual
         if clip.situation_id:
             sib = db.query(Clip).filter(Clip.situation_id == clip.situation_id, Clip.id != clip.id,
                                         Clip.status.in_(("ready", "approved"))).count()
+        visual_proposal = bool((clip.provenance or {}).get("visual_discovery"))
+        verified = visual_proposal and corroborated_event(visual, decision.peak_abs, decision.start_abs,
+                                                          decision.end_abs)
         j = judge(start=decision.start_abs, end=decision.end_abs, peak=decision.peak_abs,
                   breakdown=clip.score_breakdown or {}, kinds=clip.kinds or [], story=ctx["situation"],
-                  visual=visual.model_dump() if visual is not None else None, director=decision.model_dump(),
-                  same_story_clips=sib, min_score=settings.min_score, craft=craft, fixes=fixes)
+                  visual=visual.model_dump() if visual and (verified or not visual_proposal) else None,
+                  director=decision.model_dump(), same_story_clips=sib, min_score=settings.min_score,
+                  craft=craft, fixes=fixes, visual_grounded=verified)
         clip.editorial_score, clip.confidence = j.final, j.confidence
         d = dict(clip.decision or {})
         d["editorial"] = j.as_dict()
@@ -514,7 +564,8 @@ def direct_without_vision(db: Session, clip: Clip, reason: str) -> None:
     ac = _acoustic(db, clip.session_id, w0, w1)
     words = _words(db, clip.session_id, w0, w1)
     cand = director_mod.Candidate(base_start, base_end, clip.peak, clip.score, clip.score_breakdown or {},
-                                  list(clip.reasons or []), list(clip.kinds or []))
+                                  list(clip.reasons or []), list(clip.kinds or []),
+                                  (clip.provenance or {}).get("visual_discovery") or [])
     track = director_mod.AcousticTrack([(t, c) for t, c in ac["frames"]], [(t, p) for t, p in ac["pitch"]])
     decision = director_mod.decide(cand, words, track, None, director_mod.Limits(**lim))
     decision.reasons.append(f"Análise visual indisponível ({reason[:90]})")

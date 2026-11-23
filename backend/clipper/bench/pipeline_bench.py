@@ -177,7 +177,8 @@ def run_video(video: Path, ann: dict, args, settings: AISettings) -> dict:
                 try:
                     words_rel = [(w[0] - w0, w[1] - w0, w[2]) for w in audio["words"] if w0 <= w[0] < w1]
                     visual = VLMAnalyzer(mgr, args.vlm).analyze([FrameInput(f.t, f.image) for f in frames],
-                                                                c["peak"] - w0, w1 - w0, (w0, w1), words_rel, [])
+                                                                c["peak"] - w0, w1 - w0, (w0, w1), words_rel, [],
+                                                                classify_event=args.classify_event)
                 except ModelUnavailable as exc:
                     vlm_err = str(exc)[:200]
                 timings["vlm_s"] += time.monotonic() - t1
@@ -198,7 +199,7 @@ def run_video(video: Path, ann: dict, args, settings: AISettings) -> dict:
             decisions.append({"decision": d.model_dump(include={"start_abs", "end_abs", "peak_abs", "score", "base_score",
                                                                 "keep", "mode", "adjustments"}),
                               "layout": plan.layout, "vlm_error": vlm_err,
-                              "visual": visual.model_dump(include={"summary", "key_event", "funny", "unexpected",
+                              "visual": visual.model_dump(include={"summary", "key_event", "event_kind", "funny", "unexpected",
                                                                    "action", "latency_s", "device"}) if visual else None})
             if d.keep:
                 kept.append({"start": d.start_abs, "end": d.end_abs, "peak": d.peak_abs, "score": d.score, "plan": plan})
@@ -219,8 +220,9 @@ def run_video(video: Path, ann: dict, args, settings: AISettings) -> dict:
             words = [SubWord(w[0], w[1], w[2]) for w in audio["words"]]
             rr = asyncio.run(render(RenderSpec(source=video, source_start=0.0, start=c["start"], end=c["end"],
                                                peak=c["peak"], words=words, plan=plan, preset=settings.export_preset,
-                                               crf=settings.export_crf, threads=4), Path(td)))
+                                               crf=settings.export_crf, threads=4, encoder=args.encoder), Path(td)))
             res["render"] = {"render_s": round(rr.seconds, 2), "clip_duration_s": round(rr.duration, 2),
+                             "bytes": rr.video.stat().st_size, "encoder_requested": args.encoder,
                              "applied": rr.applied, "audio": rr.audio, **rs.summary()}
     return res
 
@@ -230,9 +232,11 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--annotations", default="tests/fixtures/annotations.json")
     ap.add_argument("--whisper", default="tiny")
     ap.add_argument("--vlm", default="none")
+    ap.add_argument("--classify-event", action="store_true")
     ap.add_argument("--device", default="CPU")
     ap.add_argument("--models-dir", default="data/models")
     ap.add_argument("--render", action="store_true")
+    ap.add_argument("--encoder", choices=["libx264", "h264_qsv", "h264_nvenc"], default="libx264")
     ap.add_argument("--sensitivity", type=float, default=0.5)
     ap.add_argument("--min-score", type=float, default=55.0)
     ap.add_argument("--out", default="")

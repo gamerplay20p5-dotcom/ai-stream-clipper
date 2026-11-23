@@ -12,13 +12,14 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from typing import get_args
 
 import numpy as np
 
 from .jsonparse import extract_json, salvage_truncated
 from .manager import ModelManager, ModelUnavailable
 from .registry import MODELS
-from .schemas import NarrativeArc, VisualAnalysis, VisualEvent
+from .schemas import EventKind, NarrativeArc, VisualAnalysis, VisualEvent
 
 log = logging.getLogger(__name__)
 
@@ -54,18 +55,29 @@ _TN = rf"({_T}|null)"
 _B = "(true|false)"
 MAX_SUMMARY, MAX_KEY_EVENT, MAX_LABEL = 300, 160, 140  # well above what the prompt asks for
 _EV = rf'\{{"t": {_T}, "label": "{_CH}{{1,{MAX_LABEL}}}", "importance": {_N10}\}}'
-ANSWER_REGEX = (
+EVENT_KINDS = get_args(EventKind)
+_KIND = "|".join(EVENT_KINDS)
+EVENT_GUIDANCE = (
+    '\nPreencha "event_kind" com um destes valores: ' + ", ".join(EVENT_KINDS)
+    + '. Só classifique por mudanças observáveis entre os quadros de antes, durante e depois. '
+    'Use "unknown" para movimento comum, flashes, menus ou qualquer evento incerto. '
+    'Nunca identifique pessoas pelas imagens.'
+)
+_ANSWER_FIELDS_REGEX = (
     rf'\{{"summary": "{_CH}{{1,{MAX_SUMMARY}}}", "key_event": "{_CH}{{1,{MAX_KEY_EVENT}}}", '
     rf'"funny": {_N10}, "unexpected": {_N10}, "important": {_N10}, "action": {_N10}, '
     rf'"events": \[({_EV}(, {_EV}){{0,3}})?\], '
     rf'"setup_start": {_TN}, "climax": {_TN}, "resolution_end": {_TN}, "complete": {_B}, '
     rf'"preserve_start": {_T}, "preserve_end": {_T}, "reaction_linked": {_B}, '
-    rf'"confidence": (0(\.[0-9]{{1,2}})?|1(\.0)?)\}}'
+    rf'"confidence": (0(\.[0-9]{{1,2}})?|1(\.0)?)'
 )
+ANSWER_REGEX = _ANSWER_FIELDS_REGEX + r"\}"
+EVENT_ANSWER_REGEX = _ANSWER_FIELDS_REGEX + rf', "event_kind": "({_KIND})"\}}'
 
 import hashlib as _hashlib
 
 PROMPT_VERSION = "vlm-" + _hashlib.sha1((PROMPT + ANSWER_REGEX).encode()).hexdigest()[:10]
+EVENT_PROMPT_VERSION = "vlm-event-" + _hashlib.sha1((PROMPT + EVENT_GUIDANCE + EVENT_ANSWER_REGEX).encode()).hexdigest()[:10]
 
 REPAIR = "Sua resposta anterior não era um JSON válido. Responda novamente APENAS com o objeto JSON pedido."
 
@@ -76,13 +88,21 @@ class FrameInput:
     image: np.ndarray  # BGR uint8
 
 
-def select_frames(frames: list[FrameInput], peak_t: float, max_frames: int) -> list[FrameInput]:
+def select_frames(frames: list[FrameInput], peak_t: float, max_frames: int,
+                  anchors: tuple[float, ...] = ()) -> list[FrameInput]:
     """Keep the peak neighbourhood dense and the rest evenly spread, chronological order."""
     if len(frames) <= max_frames:
         return list(frames)
     by_peak = sorted(frames, key=lambda f: abs(f.t - peak_t))
-    near = by_peak[: max(2, max_frames // 2 - 1)]  # dense around the peak, the rest spread for context
-    rest = [f for f in frames if f not in near]
+    anchored = {}
+    for t in anchors[:max_frames]:
+        closest = min(frames, key=lambda f: abs(f.t - t))
+        anchored[id(closest)] = closest
+    near = list(anchored.values())
+    peak_slots = max(2, max_frames // 2 - 1)  # dense around the peak, the rest spread for context
+    near += [f for f in by_peak if id(f) not in anchored][:max(0, peak_slots - len(near))]
+    identifiers = {id(f) for f in near}
+    rest = [f for f in frames if id(f) not in identifiers]
     k = max_frames - len(near)
     if k > 0 and rest:
         idx = np.linspace(0, len(rest) - 1, k).round().astype(int)
@@ -185,9 +205,11 @@ def parse_answer(obj: dict, frame_times: list[float], span: float) -> tuple[dict
     ps, pe = ts(obj.get("preserve_start")), ts(obj.get("preserve_end"))
     preserve = (ps, pe) if ps is not None and pe is not None and pe > ps else None
     rl = obj.get("reaction_linked")
+    kind = obj.get("event_kind")
     return {
         "summary": dedupe_sentences(drop_cut_word(str(obj.get("summary") or ""), MAX_SUMMARY))[:600],
         "key_event": dedupe_sentences(drop_cut_word(str(obj.get("key_event") or ""), MAX_KEY_EVENT))[:300],
+        "event_kind": kind if kind in EVENT_KINDS else "unknown",
         "funny": _num(obj.get("funny")), "unexpected": _num(obj.get("unexpected")),
         "important": _num(obj.get("important")), "action": _num(obj.get("action")),
         "events": _dedupe_events(events),
@@ -226,7 +248,7 @@ class VLMAnalyzer:
 
     structured = True  # class-level switch; turned off for the process if the runtime rejects it
 
-    def _generate(self, pipe, prompt: str, tensors, constrained: bool = True) -> str:
+    def _generate(self, pipe, prompt: str, tensors, constrained: bool = True, classify_event: bool = False) -> str:
         import openvino_genai as ov_genai
 
         cfg = ov_genai.GenerationConfig()
@@ -235,7 +257,7 @@ class VLMAnalyzer:
         cfg.repetition_penalty = 1.05
         if constrained and VLMAnalyzer.structured and hasattr(ov_genai, "StructuredOutputConfig"):
             so = ov_genai.StructuredOutputConfig()
-            so.regex = ANSWER_REGEX
+            so.regex = EVENT_ANSWER_REGEX if classify_event else ANSWER_REGEX
             cfg.structured_output_config = so
             try:
                 out = pipe.generate(prompt, images=tensors, generation_config=cfg)
@@ -251,25 +273,28 @@ class VLMAnalyzer:
 
     def analyze(self, frames: list[FrameInput], peak_t: float, span: float, window_abs: tuple[float, float],
                 words: list[tuple[float, float, str]], audio_cues: list[str], story: str = "",
-                max_frames: int | None = None, setup_t: float | None = None) -> VisualAnalysis:
-        pipe, device = self.manager.acquire(self.key)
+                max_frames: int | None = None, setup_t: float | None = None, *,
+                classify_event: bool = False, evidence_window: tuple[float, float] | None = None,
+                cpu_only: bool = False) -> VisualAnalysis:
+        pipe, device = self.manager.acquire(self.key, cpu_only=True) if cpu_only else self.manager.acquire(self.key)
         st = self.manager.stat(self.key)
         budget = min(16, max_frames or self.spec.max_frames)
-        chosen = select_frames(frames, peak_t, budget)
-        if setup_t is not None and frames:  # deep review: always show where the situation begins
-            first = min(frames, key=lambda f: abs(f.t - setup_t))
-            if first not in chosen:
-                chosen = sorted(chosen[1:] + [first], key=lambda f: f.t) if len(chosen) >= budget else \
-                    sorted(chosen + [first], key=lambda f: f.t)
+        anchors = (peak_t, evidence_window[0] - 0.5, evidence_window[1] + 0.5) if evidence_window else ()
+        if setup_t is not None:
+            anchors += (setup_t,)
+        chosen = select_frames(frames, peak_t, budget, anchors)
         times = [round(f.t, 1) for f in chosen]
         prompt = PROMPT.format(n=len(chosen), span=span, times=", ".join(f"{t:.1f}s" for t in times),
                                transcript=_fmt_transcript(words), audio=", ".join(audio_cues) or "nenhum destaque",
                                story=story or "nenhuma situação registrada")
+        if classify_event:
+            prompt = prompt.replace('"confidence": 0-1}', '"confidence": 0-1, "event_kind": "unknown"}')
+            prompt += EVENT_GUIDANCE
         tensors = [_to_tensor(f.image, self.spec.image_side) for f in chosen]
         t0 = time.monotonic()
         salvaged = False
         try:
-            raw = self._generate(pipe, prompt, tensors)
+            raw = self._generate(pipe, prompt, tensors, classify_event=classify_event)
             obj = extract_json(raw)
             if obj is None or not _has_core(obj):
                 # the retry is unconstrained, so a grammar-specific failure cannot repeat itself
@@ -296,6 +321,7 @@ class VLMAnalyzer:
             raise ModelUnavailable(f"incomplete model answer: {raw[-300:]!r}")
         fields, notes = parse_answer(obj, times, span)
         if salvaged:
+            fields["event_kind"] = "unknown"
             notes.append("resposta do modelo truncada no limite de tokens; usados apenas os campos completos")
         st.record(latency, ok=True)
         return VisualAnalysis(

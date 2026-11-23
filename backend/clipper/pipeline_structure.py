@@ -75,10 +75,27 @@ def moment(db: Session, clip: Clip, settings) -> st.Moment:
         select(TranscriptWord.start, TranscriptWord.end, TranscriptWord.word).where(
             TranscriptWord.session_id == clip.session_id, TranscriptWord.start >= lo,
             TranscriptWord.start < clip.end + 15).order_by(TranscriptWord.start)).all()]
+    visual_context = [(max(clip.start, e["start"] - 3), min(clip.end, e["end"] + 2))
+                      for e in (clip.provenance or {}).get("visual_discovery") or []
+                      if e["end"] >= clip.start and e["start"] <= clip.end]
+    if visual_context:
+        from .ai.schemas import VisualAnalysis
+        from .ai.visual_evidence import corroborated_event
+
+        vis = (clip.analysis or {}).get("visual")
+        if vis:
+            visual = VisualAnalysis.model_validate(vis)
+            arc = visual.arc
+            if corroborated_event(visual, clip.peak, clip.start, clip.end) and arc.complete and \
+                    arc.setup_start is not None and arc.resolution_end is not None:
+                w0 = visual.window_abs[0]
+                a, b = w0 + arc.setup_start, w0 + arc.resolution_end
+                if clip.start <= a <= clip.peak <= b <= clip.end:
+                    visual_context.append((a, b))
     return st.Moment(start=clip.start, end=clip.end, peak=clip.peak, words=words,
                      reactions=reactions(db, clip.session_id, lo, clip.end + 15), story=story,
                      media=media_spans(db, clip), max_len=max(settings.max_clip_seconds, settings.max_story_seconds),
-                     min_gap=settings.editor_min_gap)
+                     min_gap=settings.editor_min_gap, visual_context=visual_context)
 
 
 def propose(db: Session, clip: Clip, settings, key: str = "auto", teaser: bool | None = None) -> dict:

@@ -166,6 +166,18 @@ def test_eligibility_gates(client):
         assert any("análise incompleta" in x for x in service.eligibility(db, clip, acct, auto=False, rights_confirmed=True))
 
 
+def test_visual_candidate_requires_approval_even_when_automatic_rule_does_not(client):
+    cid, aid, _ = _setup("visual-hold", status="ready")
+    with session_scope() as db:
+        clip, acct = db.get(Clip, cid), db.get(PublishAccount, aid)
+        clip.provenance = {"visual_discovery": [{"peak": 20}]}
+        rule = PublishRule(account_id=aid, mode="scheduled", min_score=70, require_approval=False, privacy="private",
+                           enabled=True)
+        assert "corte experimental exige aprovação humana" in service.eligibility(db, clip, acct, auto=True, rule=rule)
+        clip.status = "approved"
+        assert not service.eligibility(db, clip, acct, auto=True, rule=rule)
+
+
 def test_tiktok_is_manual_only(client, admin):
     with session_scope() as db:
         cid, aid, _ = _setup("tt", platform="tiktok")

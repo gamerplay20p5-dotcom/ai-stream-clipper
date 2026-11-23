@@ -150,6 +150,7 @@ class Moment:
     media: list[tuple[float, float]] = field(default_factory=list)
     max_len: float = 90.0
     min_gap: float = 0.9
+    visual_context: list[tuple[float, float]] = field(default_factory=list)
 
 
 def _outcome(m: Moment) -> float | None:
@@ -186,6 +187,8 @@ def _finish(key: str, segs: list[Seg], m: Moment, notes: list[str], teaser: bool
     for s in segs:
         if not covered(m.media, s.a, s.b):
             return Plan(key, LABELS[key], segs, False, "parte do trecho não está mais gravada")
+    if any(not covered([(s.a, s.b) for s in segs], a, b) for a, b in m.visual_context):
+        return Plan(key, LABELS[key], segs, False, "variante perderia o contexto ou o desfecho visual")
     total = sum(s.dur for s in segs)
     if total > m.max_len + 0.5:
         return Plan(key, LABELS[key], segs, False, f"ficaria com {total:.0f}s, acima do limite")
@@ -202,7 +205,7 @@ def _finish(key: str, segs: list[Seg], m: Moment, notes: list[str], teaser: bool
 
 
 def build(key: str, m: Moment, *, teaser: bool = False) -> Plan:
-    prot = protected_intervals(m.peak, m.end, m.reactions, _outcome(m))
+    prot = protected_intervals(m.peak, m.end, m.reactions, _outcome(m)) + m.visual_context
     notes: list[str] = []
     s = m.story or {}
     if key == "O":

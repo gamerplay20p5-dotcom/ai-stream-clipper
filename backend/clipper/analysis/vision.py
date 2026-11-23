@@ -48,6 +48,16 @@ class Frame:
     image: np.ndarray  # BGR
 
 
+def mouth_dark_fraction(gray_face: np.ndarray) -> float:
+    """Compare the lower centre of an already-localised face with its side regions."""
+    h, w = gray_face.shape
+    lower = gray_face[int(.63 * h):int(.91 * h)]
+    centre = lower[:, int(.27 * w):int(.73 * w)]
+    sides = np.concatenate((lower[:, int(.10 * w):int(.26 * w)].ravel(),
+                            lower[:, int(.74 * w):int(.90 * w)].ravel()))
+    return float(np.mean(centre < np.median(sides) - 20)) if centre.size and sides.size else 0.0
+
+
 class VisionProvider(Protocol):
     name: str
     requires_gpu: bool
@@ -98,7 +108,8 @@ class HeuristicVisionProvider:
         except AttributeError:
             log.warning("OpenCV build without CascadeClassifier: webcam detection disabled")
 
-    def analyze(self, frames: list[Frame], peak_t: float, transcript: str) -> VisionResult:
+    def analyze(self, frames: list[Frame], peak_t: float, transcript: str, *,
+                webcam_region: dict | None = None) -> VisionResult:
         cv2 = self._cv2
         if len(frames) < 2:
             return VisionResult(self.name, 5.0, frames_analyzed=len(frames), reasons=["Poucos quadros para análise"])
@@ -151,8 +162,8 @@ class HeuristicVisionProvider:
         if not reasons:
             reasons.append("Pouca variação visual")
         mpt = float(ts[int(np.argmax(motion_rate))]) if len(ts) else None
-        track = self.face_track(frames)
-        webcam = self._find_webcam(frames)
+        track = self.face_track(frames, 36 if webcam_region else 24, region=webcam_region)
+        webcam = webcam_region or self._find_webcam(frames)
         return VisionResult(
             provider=self.name,
             visual_score=round(min(10.0, score), 2),
@@ -167,20 +178,33 @@ class HeuristicVisionProvider:
                    "face_track": track},
         )
 
-    def face_track(self, frames: list[Frame], max_frames: int = 24) -> list[dict]:
+    def face_track(self, frames: list[Frame], max_frames: int = 24, *, region: dict | None = None) -> list[dict]:
         """Per-frame face boxes (normalised), temporally smoothed: the largest face whose
         centre stays close to the previous one is kept, jumps are rejected."""
         if self._face is None:
             return []
         cv2 = self._cv2
-        picks = frames[:: max(1, len(frames) // max_frames)][:max_frames]
+        picks = [frames[i] for i in np.linspace(0, len(frames) - 1, min(len(frames), max_frames), dtype=int)] \
+            if region else frames[:: max(1, len(frames) // max_frames)][:max_frames]
         out: list[dict] = []
         prev = None
         for f in picks:
-            g = cv2.cvtColor(f.image, cv2.COLOR_BGR2GRAY)
-            h, w = g.shape
-            faces = self._face.detectMultiScale(g, scaleFactor=1.15, minNeighbors=6, minSize=(max(24, h // 20),) * 2)
-            boxes = [(x / w, y / h, fw / w, fh / h) for (x, y, fw, fh) in faces]
+            h, w = f.image.shape[:2]
+            ox, oy = 0, 0
+            view = f.image
+            if region:
+                ox, oy = int(region["x"] * w), int(region["y"] * h)
+                right, bottom = int((region["x"] + region["w"]) * w), int((region["y"] + region["h"]) * h)
+                view = view[oy:bottom, ox:right]
+                if min(view.shape[:2]) < 24:
+                    continue
+            g = cv2.cvtColor(view, cv2.COLOR_BGR2GRAY)
+            faces = self._face.detectMultiScale(g, scaleFactor=1.15, minNeighbors=6,
+                                                minSize=(max(24, g.shape[0] // 20),) * 2)
+            boxes = [((ox + x) / w, (oy + y) / h, fw / w, fh / h) for (x, y, fw, fh) in faces]
+            if region and len(boxes) != 1:
+                prev = None
+                continue
             if prev is not None and boxes:
                 boxes.sort(key=lambda b: abs(b[0] + b[2] / 2 - prev[0] - prev[2] / 2) + abs(b[1] + b[3] / 2 - prev[1] - prev[3] / 2))
                 cand = boxes[0]
@@ -193,8 +217,12 @@ class HeuristicVisionProvider:
             if prev is not None:  # exponential smoothing
                 cand = tuple(0.6 * c + 0.4 * p for c, p in zip(cand, prev))
             prev = cand
-            out.append({"t": round(f.t, 2), "x": round(cand[0], 4), "y": round(cand[1], 4),
-                        "w": round(cand[2], 4), "h": round(cand[3], 4)})
+            record = {"t": round(f.t, 2), "x": round(cand[0], 4), "y": round(cand[1], 4),
+                      "w": round(cand[2], 4), "h": round(cand[3], 4)}
+            if region:
+                x, y, fw, fh = faces[0]
+                record["mouth"] = round(mouth_dark_fraction(g[y:y + fh, x:x + fw]), 3)
+            out.append(record)
         return out
 
     def _find_webcam(self, frames: list[Frame]) -> dict | None:

@@ -217,3 +217,82 @@ def test_full_pipeline_and_restart_resilience(stack: Stack, tmp_path: Path):
     jobs = c.get("/api/jobs").json()
     assert not [j for j in jobs if j["status"] == "dead"], [j for j in jobs if j["status"] == "dead"]
     print(f"\nE2E pipeline: first clip ready after {pipeline_seconds:.1f}s for a 40.9s source")
+
+
+def test_silent_visual_discovery_shadow_and_render(stack: Stack, tmp_path: Path):
+    from shutil import copyfile
+
+    from fixtures.make_visual_fixtures import write_scene
+
+    media_dir = tmp_path / "fixtures"
+    media_dir.mkdir()
+    original = media_dir / "silent-off.mp4"
+    write_scene(original, "rollover")
+    copyfile(original, media_dir / "silent-shadow.mp4")
+    copyfile(original, media_dir / "silent-on.mp4")
+    stack.env["ASC_TEST_MEDIA_DIR"] = str(media_dir)
+    stack.start("api", "api", "--host", "127.0.0.1", "--port", str(stack.api_port))
+    stack.wait_api()
+    c = _login(stack.api)
+    stack.start("worker", "worker", "--roles", "monitor,capture,audio,scoring,vision,render")
+
+    def complete_session(streamer_id):
+        sessions = c.get("/api/sessions").json()
+        session = next((s for s in sessions if s["streamer_id"] == streamer_id), None)
+        if session is None or session["status"] != "ended":
+            return None
+        detail = c.get(f"/api/sessions/{session['id']}").json()
+        return detail if detail["scored_until"] >= detail["covered_until"] - 0.1 else None
+
+    for mode in ("off", "shadow", "on"):
+        settings = c.put("/api/settings", json={"visual_discovery": mode, "multimodal_scoring": True,
+                                                "grounded_metadata": True, "vision_provider": "heuristic",
+                                                "gate_enabled": False, "editor_mode": "off",
+                                                "dataset_enabled": False, "export_preset": "ultrafast"})
+        assert settings.status_code == 200, settings.text
+        r = c.post("/api/streamers", json={"url": f"file://silent-{mode}.mp4", "display_name": f"Criador {mode}",
+                                         "preferences": {"game": "GTA V", "language": "pt"}})
+        assert r.status_code == 201, r.text
+        sid = r.json()["id"]
+        started = time.monotonic()
+
+        session = _wait(lambda: complete_session(sid), 75, f"silent source scored in {mode}", stack)
+        items = c.get("/api/clips").json()["items"]
+        if mode != "on":
+            assert not items
+            assert not [e for e in session["events"] if e["kind"] == "visual_motion"]
+            if mode == "shadow":
+                reports = c.get("/api/diagnostics").json()["streamers"]
+                shadow = next(report["scoring"]["visual_shadow"] for report in reports
+                              if (report.get("scoring") or {}).get("visual_shadow"))
+                assert shadow["proposals"] == shadow["multimodal_candidates"] == 1
+                assert shadow["baseline_candidates"] == 0 and shadow["recent"][0]["evidence"]
+            continue
+        events = [e for e in session["events"] if e["kind"] == "visual_motion"]
+        assert len(events) == 1 and abs(events[0]["t"] - 13.25) <= 1
+
+        def ready():
+            clips = c.get("/api/clips").json()["items"]
+            assert not [item for item in clips if item["status"] in ("failed", "rejected")], clips
+            return next((item for item in clips if item["status"] == "ready"), None)
+
+        clip = _wait(ready, 90, "a rendered silent candidate", stack)
+        assert clip["start"] <= 10 < 16 <= clip["end"]
+        assert clip["title"] == "Trecho da live em GTA V | Criador on"
+        assert clip["transcript"] == ""
+        video = c.get(f"/api/clips/{clip['id']}/download")
+        assert video.status_code == 200
+        result = tmp_path / "silent-short.mp4"
+        result.write_bytes(video.content)
+        info = media.probe_sync(result)
+        v = media.video_stream(info)
+        assert (v["width"], v["height"]) == (1080, 1920)
+        print(f"\nSilent E2E pipeline: first clip ready after {time.monotonic() - started:.1f}s for 24s of video")
+
+    write_scene(media_dir / "silent-distractors.mp4", "distractors")
+    r = c.post("/api/streamers", json={"url": "file://silent-distractors.mp4", "display_name": "Controle negativo"})
+    assert r.status_code == 201, r.text
+    sid = r.json()["id"]
+    session = _wait(lambda: complete_session(sid), 75, "distractor source scored", stack)
+    assert not [e for e in session["events"] if e["kind"] == "visual_motion"]
+    assert not [item for item in c.get("/api/clips").json()["items"] if item["streamer_id"] == sid]

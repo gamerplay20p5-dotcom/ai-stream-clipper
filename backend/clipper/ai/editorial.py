@@ -69,12 +69,21 @@ def _mmss(t: float) -> str:
 
 def judge(*, start: float, end: float, peak: float, breakdown: dict, kinds: list[str], story: dict | None = None,
           noise: list[str] | None = None, visual: dict | None = None, director: dict | None = None,
-          same_story_clips: int = 0, min_score: float = 55.0, craft=None, fixes: list | None = None) -> Judgement:
+          same_story_clips: int = 0, min_score: float = 55.0, craft=None, fixes: list | None = None,
+          visual_grounded: bool = False) -> Judgement:
     """``story``: situation dict (pipeline_story.story_context()['situation']); ``visual``: VisualAnalysis dict."""
     b = {k: (float(v) if isinstance(v, (int, float)) else None) for k, v in (breakdown or {}).items()}
     kinds = list(kinds or [])
     noise = list(noise or [])
     vis_ok = bool(visual) and not visual.get("fallback")
+    grounded = visual_grounded and vis_ok
+    visual_complete = False
+    if grounded:
+        arc = visual.get("arc") or {}
+        setup, outcome = arc.get("setup_start"), arc.get("resolution_end")
+        w0 = visual["window_abs"][0]
+        visual_complete = bool(arc.get("complete") and setup is not None and outcome is not None
+                               and start <= w0 + setup < peak < w0 + outcome <= end)
     s = story or None
     dur = max(1.0, end - start)
     c: dict[str, Criterion] = {}
@@ -94,18 +103,29 @@ def judge(*, start: float, end: float, peak: float, breakdown: dict, kinds: list
             + min(1.5, len(s.get("changes") or []) * 0.5)
     base = max([v for v in (b.get("audience"), story_strength) if v is not None], default=None)
     base, ev_v = vlm(base, "important", "Importância")
+    if grounded:
+        visible_interest = max(visual.get("action", 0), visual.get("unexpected", 0), visual.get("funny", 0))
+        base = max(base or 0, visible_interest * visual["confidence"])
+        ev_v = f"Acontecimento observado em quadros próximos de {_mmss(peak)}"
     c["interest"] = _c(base, f"situação: {s['summary'][:120]}" if s else "", ev_v,
                        "sinais acústicos e de fala" if b.get("audience") is not None else "")
     # 2 narrative clarity
     narr = b.get("narrative")
     if s:
         narr = (narr or 5.0) + (2.5 if s.get("complete") else (-1.0 if s.get("status") == "closed" else 0))
-    c["narrative"] = _c(narr, "começo, desenvolvimento e desfecho observados" if s and s.get("complete") else "")
+    if visual_complete:
+        narr = max(narr or 0, 7.5)
+    c["narrative"] = _c(narr, "começo, desenvolvimento e desfecho observados"
+                        if visual_complete or (s and s.get("complete")) else "")
     # 3 humor
     hum, ev_h = vlm(b.get("humor"), "funny", "Humor")
+    if grounded and not b.get("humor") and visual.get("funny", 0) < 3:
+        hum, ev_h = None, ""
     c["humor"] = _c(hum, "risadas detectadas" if "laughter" in kinds else "", ev_h)
     # 4 surprise
     sur, ev_s = vlm(b.get("surprise"), "unexpected", "Surpresa")
+    if grounded:
+        sur = max(sur or 0, visual["unexpected"] * visual["confidence"])
     c["surprise"] = _c(sur, "silêncio quebrado" if "silence_break" in kinds else "", ev_s)
     # 5 tension & development
     if s and s.get("kind") in STORY_KINDS_TENSE:
@@ -115,6 +135,8 @@ def judge(*, start: float, end: float, peak: float, breakdown: dict, kinds: list
         c["tension"] = _c(None)
     # 6 reaction
     rea = b.get("reaction")
+    if grounded and not rea:
+        rea = None
     if noise and rea is not None:
         rea = min(rea, 3.0)
     c["reaction"] = _c(rea, "reação de voz confirmada" if ("scream" in kinds or "laughter" in kinds) else "",
@@ -128,6 +150,8 @@ def judge(*, start: float, end: float, peak: float, breakdown: dict, kinds: list
         elif peak - s["start"] <= dur + 60:
             ctx = min(ctx if ctx is not None else 5, 4.0)
             need = f"a situação começa em {_mmss(s['start'])}, antes do início do corte ({_mmss(start)})"
+    if visual_complete:
+        ctx = max(ctx or 0, 7.5)
     c["context"] = _c(ctx, "o corte inclui o começo da situação" if s and s.get("start", 1e9) >= start - 2 else "",
                       need)
     # 8 visual quality (only with a valid visual analysis)
@@ -157,6 +181,9 @@ def judge(*, start: float, end: float, peak: float, breakdown: dict, kinds: list
     if s:
         res = 8.5 if s.get("outcome") in ("arrested", "escaped", "laughter") else (3.0 if s.get("status") == "closed"
                                                                                     else None)
+    elif visual_complete:
+        res = 8.0
+        c["payoff"] = _c(8.0, "o desfecho observado fica dentro do corte")
     elif vis_ok and visual.get("arc", {}).get("resolution_end") is not None:
         res = 6.5
     c["resolution"] = _c(res, f"desfecho: {s.get('outcome')}" if s and s.get("outcome") else "")

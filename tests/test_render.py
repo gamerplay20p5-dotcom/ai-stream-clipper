@@ -59,3 +59,20 @@ def test_structural_render_concatenates_segments_and_remaps_captions(tmp_path):
     starts = [float(m.group(1)) * 60 + float(m.group(2)) for m in
               re.finditer(r"Dialogue: 0,0:(\d\d):(\d\d\.\d\d),", ass)]
     assert starts and max(starts) <= 15.0
+
+
+def test_hardware_failure_retries_in_software(tmp_path, monkeypatch):
+    original = media.run
+
+    async def force_nvenc_failure(args, **kwargs):
+        if "h264_nvenc" in args:
+            raise media.MediaError("encoder unavailable")
+        return await original(args, **kwargs)
+
+    monkeypatch.setattr(media, "run", force_nvenc_failure)
+    spec = RenderSpec(FIXTURES / "gameplay_event.mp4", 0, 21, 24, 22, [], caption_style="none",
+                      preset="ultrafast", encoder="h264_nvenc")
+    res = asyncio.run(render(spec, tmp_path))
+    assert {"encoder_fallback:h264_nvenc", "encoder:libx264"} <= set(res.applied)
+    video = media.video_stream(media.probe_sync(res.video))
+    assert (video["codec_name"], video["pix_fmt"], video["width"], video["height"]) == ("h264", "yuv420p", 1080, 1920)
