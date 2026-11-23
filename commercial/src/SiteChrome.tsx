@@ -65,7 +65,10 @@ export function Header({ t, language, languageLabel, onLanguage, join }: HeaderP
   )
 }
 
-export function Footer({ t, join, independent }: { t: Editorial; join: string; independent: string }) {
+// Until the operator publishes the legal pages the footer says they are in preparation (the routes answer 404)
+export function Footer({ t, join, independent, legal = false, language = 'pt-BR' }: { t: Editorial; join: string; independent: string; legal?: boolean; language?: string }) {
+  const privacyHref = language === 'en' ? '/en/privacy' : '/privacidade'
+  const termsHref = language === 'en' ? '/en/terms' : '/termos'
   const { footer } = t
   return (
     <footer className="site-footer">
@@ -81,14 +84,23 @@ export function Footer({ t, join, independent }: { t: Editorial; join: string; i
         </nav>
         <div className="footer-col">
           <h2 id="footer-legal">{footer.legal}</h2>
-          <details className="legal-details">
-            <summary>{footer.privacy}</summary>
-            <p id="privacidade">{footer.pending}</p>
-          </details>
-          <details className="legal-details">
-            <summary>{footer.terms}</summary>
-            <p id="termos">{footer.pending}</p>
-          </details>
+          {legal ? (
+            <ul className="legal-links">
+              <li><a href={privacyHref}>{footer.privacy}</a></li>
+              <li><a href={termsHref}>{footer.terms}</a></li>
+            </ul>
+          ) : (
+            <>
+              <details className="legal-details">
+                <summary>{footer.privacy}</summary>
+                <p id="privacidade">{footer.pending}</p>
+              </details>
+              <details className="legal-details">
+                <summary>{footer.terms}</summary>
+                <p id="termos">{footer.pending}</p>
+              </details>
+            </>
+          )}
         </div>
       </div>
       <div className="shell footer-end">

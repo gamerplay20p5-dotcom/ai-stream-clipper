@@ -89,7 +89,7 @@ test('lookup keys round-trip only for catalog plans and markets', () => {
 
 test('no anonymous checkout: the public route is gone and markets stay closed without the account link', async t => {
   const ctx = await start(t, { link: {} })
-  assert.deepEqual(await (await fetch(`${ctx.base}/api/billing/config`)).json(), { markets: { BR: false, US: false }, appUrl: 'https://app.clipper.example' })
+  assert.deepEqual(await (await fetch(`${ctx.base}/api/billing/config`)).json(), { markets: { BR: false, US: false }, appUrl: 'https://app.clipper.example', waitlist: true, legal: true })
   assert.equal((await fetch(`${ctx.base}/api/checkout`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"plan":"pro","market":"US","language":"en"}' })).status, 404)
   assert.equal((await checkout(ctx.base, {})).status, 503, 'no secret configured: the signed route refuses')
 })
@@ -234,4 +234,24 @@ test('outbox: delivered in order, retried after failures and restarts, permanent
   assert.deepEqual(await later.dispatch(), { delivered: 0, failed: 2 })
   const stats = later.stats()
   assert.deepEqual([stats.pending, stats.rejected], [1, 1])
+})
+
+test('a Stripe account shared with other products: their events store nothing and send no snapshot', async t => {
+  const ctx = await start(t)
+  const foreign = { id: 'sub_other', object: 'subscription', customer: 'cus_other', status: 'active', cancel_at_period_end: false,
+    metadata: { plan: 'pro', market: 'US' }, items: { data: [{ current_period_start: START, current_period_end: END, price: { lookup_key: 'other_pro_monthly' } }] } }
+  ctx.stripe.subscriptions.retrieve = async id => (id === 'sub_other' ? foreign : subscription(id))
+  for (const [id, type, object] of [
+    ['evt_o1', 'customer.subscription.created', foreign],
+    ['evt_o2', 'checkout.session.completed', { id: 'cs_other', mode: 'subscription', subscription: 'sub_other', customer: 'cus_other', metadata: {} }],
+    ['evt_o3', 'invoice.paid', { id: 'in_other', customer: 'cus_other', parent: { subscription_details: { subscription: 'sub_other', metadata: { plan: 'pro' } } }, status: 'paid', amount_paid: 5000, currency: 'usd', lines: { data: [{ price: { lookup_key: 'other_pro_monthly' } }] } }],
+  ]) assert.equal((await deliver(ctx.base, event(id, type, object))).status, 200)
+  assert.deepEqual(ctx.read('SELECT subscription_id FROM subscriptions'), [])
+  assert.deepEqual(ctx.read('SELECT invoice_id FROM invoices'), [])
+  assert.deepEqual(snapshots(ctx), [])
+
+  // Our own invoice is kept even when it arrives before the subscription (metadata copied from our checkout)
+  const ours = { id: 'in_ours', customer: 'cus_1', parent: { subscription_details: { subscription: 'sub_new', metadata: { account_id: '42', plan: 'pro', market: 'US', language: 'en' } } }, status: 'paid', amount_paid: 8999, currency: 'usd' }
+  assert.equal((await deliver(ctx.base, event('evt_o4', 'invoice.paid', ours))).status, 200)
+  assert.deepEqual(ctx.read('SELECT invoice_id FROM invoices').map(r => r.invoice_id), ['in_ours'])
 })

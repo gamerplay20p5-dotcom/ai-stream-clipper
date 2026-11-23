@@ -7,8 +7,9 @@ import type { Market, PlanId } from './market'
  * There is no checkout on this page: subscribing happens in the dashboard, for a signed-in account with a
  * verified e-mail, and access only follows a payment confirmed by the provider.
  */
-export interface BillingConfig { markets: Record<Market, boolean>; appUrl: string }
-export const billingOff: BillingConfig = { markets: { BR: false, US: false }, appUrl: '' }
+export interface BillingConfig { markets: Record<Market, boolean>; appUrl: string; waitlist: boolean; legal: boolean }
+// Before the server answers, the form is shown (no flash for the common case); the server decides
+export const billingOff: BillingConfig = { markets: { BR: false, US: false }, appUrl: '', waitlist: true, legal: false }
 
 export function useBillingConfig() {
   const [config, setConfig] = useState<BillingConfig>(billingOff)
@@ -22,7 +23,7 @@ export function useBillingConfig() {
           const url = new URL(String(value.appUrl ?? ''))
           if (url.protocol === 'https:' || url.hostname === '127.0.0.1' || url.hostname === 'localhost') appUrl = url.origin
         } catch { /* not configured */ }
-        setConfig({ markets: { BR: value.markets?.BR === true, US: value.markets?.US === true }, appUrl })
+        setConfig({ markets: { BR: value.markets?.BR === true, US: value.markets?.US === true }, appUrl, waitlist: value.waitlist !== false, legal: value.legal === true })
       })
       .catch(() => {})
     return () => controller.abort()

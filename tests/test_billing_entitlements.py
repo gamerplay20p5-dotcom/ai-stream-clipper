@@ -28,6 +28,7 @@ def billing_env(monkeypatch):
 
     monkeypatch.setenv("ASC_BILLING_SECRET", BILLING_SECRET)
     monkeypatch.setenv("ASC_COMMERCIAL_URL", "http://commercial.test")
+    monkeypatch.setenv("ASC_SIGNUP_OPEN", "true")  # these tests exercise an open sign-up
     reset_settings_cache()
     yield
     reset_settings_cache()

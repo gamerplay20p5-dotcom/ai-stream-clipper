@@ -61,7 +61,7 @@ def auth_config(db: Session = Depends(get_db)):
     return {"oidc_enabled": bool(s.oidc_issuer and s.oidc_client_id), "oidc_issuer": s.oidc_issuer or None,
             "email_enabled": email, "password_min": accounts.MIN_LEN,
             # self sign-up needs e-mail (to prove ownership) and the billing link (to subscribe)
-            "signup_enabled": email and billing_link.configured()}
+            "signup_enabled": email and billing_link.configured() and s.signup_open}
 
 
 def _session_cookie(response: Response, user: User) -> None:
@@ -176,6 +176,11 @@ def signup(body: SignupIn, request: Request, db: Session = Depends(get_db)):
     if not (accounts.smtp_ready(db) and accounts.links_ready() and billing_link.configured()):
         raise HTTPException(503, "cadastro indisponível no momento")
     email = body.email.strip().lower()
+    s = get_settings()
+    allowed = {e.strip().lower() for e in (s.signup_allowed_emails or "").split(",") if e.strip()}
+    # Closed to the public: the same answer as when nothing is configured, so the allowlist is not revealed
+    if not (s.signup_open or email in allowed):
+        raise HTTPException(503, "cadastro indisponível no momento")
     if not _EMAIL.fullmatch(email) or len(email) > 254:
         raise HTTPException(422, "e-mail inválido")
     user = db.scalar(select(User).where(User.email == email))

@@ -44,9 +44,9 @@ export function App({ initial }: { initial: Preferences }) {
         <Features t={t} />
         <Pricing copy={copy} market={market} onMarket={next => updatePreferences(language, next)} onInterest={setInterest} billing={billing} language={language} />
         <Questions t={t.faq} />
-        <Waitlist copy={copy} language={language} market={market} interest={interest} onInterest={setInterest} marker={t.waitlistMarker} />
+        <Waitlist copy={copy} language={language} market={market} interest={interest} onInterest={setInterest} marker={t.waitlistMarker} open={billing.waitlist} />
       </main>
-      <Footer t={t} join={copy.join} independent={copy.footer.independent} />
+      <Footer t={t} join={copy.join} independent={copy.footer.independent} legal={billing.legal} language={language} />
     </>
   )
 }

@@ -2,6 +2,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Stripe from 'stripe'
 import { createApp } from './app.js'
+import { legalState } from './legal.js'
 import { billingSettings } from './billing.js'
 import { infinitePayClient, infinitePaySettings, missingInfinitePaySettings } from './infinitepay.js'
 import { createMailer, mailSettings } from './mailer.js'
@@ -16,10 +17,22 @@ const stripe = billing.secretKey ? new Stripe(billing.secretKey, { maxNetworkRet
 const infinitepay = infinitePaySettings()
 // Signed link to the main backend: checkout requests in, entitlement snapshots out
 const link = outboxSettings()
-const { app, markets, runRenewals, dispatch, outbox, promotions, close } = createApp({
+const dist = resolve(root, 'dist')
+// Terms and privacy: published only when the build found every company field AND COMMERCIAL_LEGAL_PUBLISHED=true
+// Browser tests only (never in the production image, which runs with NODE_ENV=production)
+const legalTestMode = process.env.NODE_ENV !== 'production' && process.env.COMMERCIAL_LEGAL_TEST_PUBLISHED === 'true'
+const legal = legalTestMode ? { published: true, reason: 'browser test mode' } : legalState(dist, process.env.COMMERCIAL_LEGAL_PUBLISHED === 'true')
+const { app, markets, ready, runRenewals, dispatch, outbox, promotions, close } = createApp({
   databasePath: resolve(root, process.env.COMMERCIAL_DB ?? 'data/waitlist.sqlite'),
-  dist: resolve(root, 'dist'),
+  dist,
+  legalPublished: legal.published,
   trustProxy: process.env.COMMERCIAL_TRUST_PROXY,
+  // The waitlist collects e-mails: open only with COMMERCIAL_WAITLIST_OPEN=true (after privacy policy and terms)
+  waitlistOpen: process.env.COMMERCIAL_WAITLIST_OPEN === 'true',
+  // Payments open to the public only with COMMERCIAL_PAYMENTS_OPEN=true (after the integration was validated)
+  paymentsOpen: process.env.COMMERCIAL_PAYMENTS_OPEN === 'true',
+  // Account ids allowed to buy while payments are closed (controlled real purchase), comma separated
+  testAccounts: (process.env.COMMERCIAL_PAYMENTS_TEST_ACCOUNTS ?? '').split(',').map(v => v.trim()).filter(Boolean),
   stripe,
   billing,
   infinitepay,
@@ -44,9 +57,13 @@ watch.unref()
 const port = Number(process.env.COMMERCIAL_PORT ?? 8790)
 const host = process.env.COMMERCIAL_HOST ?? '127.0.0.1'
 const server = app.listen(port, host, () => {
-  console.log(`Commercial site listening on http://${host}:${port} (checkout US ${markets.US ? 'on' : 'off'}, BR ${markets.BR ? 'on' : 'off'})`)
+  const state = market => markets[market] ? 'on' : ready[market] ? 'ready, closed' : 'off'
+  console.log(`Commercial site listening on http://${host}:${port} (checkout US ${state('US')}, BR ${state('BR')}, payments ${process.env.COMMERCIAL_PAYMENTS_OPEN === 'true' ? 'open' : 'closed'}${process.env.COMMERCIAL_PAYMENTS_TEST_ACCOUNTS ? ', test accounts set' : ''}, waitlist ${process.env.COMMERCIAL_WAITLIST_OPEN === 'true' ? 'open' : 'closed'})`)
   // Names only, never values: BR checkout stays off until every required InfinitePay setting is present
-  if (!markets.BR) console.log(`InfinitePay checkout off, missing: ${missingInfinitePaySettings(infinitepay).join(', ')}`)
+  const missingIp = missingInfinitePaySettings(infinitepay)
+  if (missingIp.length) console.log(`InfinitePay checkout off, missing: ${missingIp.join(', ')}`)
+  console.log(`Legal pages ${legal.published ? 'published' : 'not published'} (${legal.reason})`)
+  if (process.env.COMMERCIAL_WAITLIST_OPEN === 'true' && !legal.published) console.log('Waitlist stays closed until the legal pages are published')
   if (!link.secret || !link.mainUrl) console.log('Checkout off: set ASC_MAIN_API_URL and ASC_BILLING_SECRET (32+ chars) to link payments to accounts')
 })
 

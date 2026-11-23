@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # Canonical public address of the dashboard, used in every e-mailed link (invite, reset, sign-up).
     # Never derived from Host / Origin / X-Forwarded-Host. Required (https) in production.
     public_origin: str = ""
+    # Public self sign-up. OFF by default: configuring e-mail (SMTP) never opens it by itself. The operator turns it
+    # on (ASC_SIGNUP_OPEN=true) only after the terms of use and privacy policy are published.
+    signup_open: bool = False
+    # While closed, only these e-mails (comma separated) may sign up: controlled accounts for homologation
+    signup_allowed_emails: str = ""
     # TLS for the API (dashboard logins and worker traffic are never sent in clear text)
     tls_cert: Path | None = None  # server certificate (PEM) - enables HTTPS on `clipper api`
     tls_key: Path | None = None

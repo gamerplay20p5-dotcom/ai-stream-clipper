@@ -112,3 +112,16 @@ def sign_headers(method: str, path_qs: str, body: bytes = b"", worker: str = "te
     from clipper.security import sha256_bytes, sign_request
 
     return sign_request(os.environ["ASC_INTERNAL_SECRET"], worker, method, path_qs, sha256_bytes(body))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_login_throttle():
+    """The login throttle is per process: every test starts with a clean count (tests of the throttle itself make
+    their own attempts inside the test)."""
+    try:
+        from clipper.api import deps
+    except Exception:  # noqa: BLE001 - modules that never import the API
+        yield
+        return
+    deps._attempts.clear()
+    yield
