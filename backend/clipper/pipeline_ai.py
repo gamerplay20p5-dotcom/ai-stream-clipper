@@ -17,7 +17,7 @@ from . import queue
 from .ai import director as director_mod
 from .ai import edit_plan as edit_plan_mod
 from .ai.schemas import DirectorDecision, EditPlan, NarrativeResult, VisualAnalysis
-from .ai.visual_evidence import corroborated_event
+from .ai.visual_evidence import confirmed_event_kind, confirmed_occurrence, corroborated_event
 from .db import utcnow
 from .models import AudioFeature, Clip, Segment, StreamSession, Streamer, TranscriptWord
 from .scoring.engine import weighted_total
@@ -403,8 +403,7 @@ def _apply_gate(db: Session, clip: Clip, decision: DirectorDecision, visual: Vis
     lim = _limits(db, clip, settings)
     vis_ok = visual is not None and not visual.fallback
     visual_signal = (clip.provenance or {}).get("visual_discovery")
-    salient = corroborated_event(visual, decision.peak_abs, decision.start_abs, decision.end_abs) if visual_signal \
-        else bool(vis_ok and visual_relevant(visual))
+    salient = _visual_verified(visual, decision) if visual_signal else bool(vis_ok and visual_relevant(visual))
     res = qg.evaluate(
         judgement=judgement, start=decision.start_abs, end=decision.end_abs, peak=decision.peak_abs,
         keep=decision.keep, words=[(r[0], r[1]) for r in rows], media=spans, kinds=clip.kinds or [],
@@ -526,6 +525,13 @@ def _playbook_inputs(db: Session, clip: Clip, visual: VisualAnalysis | None):
         return None, []
 
 
+def _visual_verified(visual: VisualAnalysis | None, decision: DirectorDecision) -> bool:
+    """A visual hypothesis counts as evidence when the VLM's own event matches a shown frame near the peak, or the
+    targeted confirmation saw it at the detector's hypothesis, with context and outcome inside the clip."""
+    return corroborated_event(visual, decision.peak_abs, decision.start_abs, decision.end_abs) or \
+        confirmed_event_kind(visual, decision.peak_abs, decision.start_abs, decision.end_abs) != "unknown"
+
+
 def _editorial_final(db: Session, clip: Clip, decision: DirectorDecision, visual: VisualAnalysis | None,
                      settings: AISettings) -> None:
     try:
@@ -539,13 +545,16 @@ def _editorial_final(db: Session, clip: Clip, decision: DirectorDecision, visual
             sib = db.query(Clip).filter(Clip.situation_id == clip.situation_id, Clip.id != clip.id,
                                         Clip.status.in_(("ready", "approved"))).count()
         visual_proposal = bool((clip.provenance or {}).get("visual_discovery"))
-        verified = visual_proposal and corroborated_event(visual, decision.peak_abs, decision.start_abs,
-                                                          decision.end_abs)
+        verified = visual_proposal and _visual_verified(visual, decision)
+        span = None
+        if verified and confirmed_occurrence(visual, decision.start_abs, decision.end_abs):
+            h = visual.confirmation["hypothesis"]
+            span = (float(h["start"]), float(h["end"]))
         j = judge(start=decision.start_abs, end=decision.end_abs, peak=decision.peak_abs,
                   breakdown=clip.score_breakdown or {}, kinds=clip.kinds or [], story=ctx["situation"],
                   visual=visual.model_dump() if visual and (verified or not visual_proposal) else None,
                   director=decision.model_dump(), same_story_clips=sib, min_score=settings.min_score,
-                  craft=craft, fixes=fixes, visual_grounded=verified)
+                  craft=craft, fixes=fixes, visual_grounded=verified, evidence_span=span)
         clip.editorial_score, clip.confidence = j.final, j.confidence
         d = dict(clip.decision or {})
         d["editorial"] = j.as_dict()

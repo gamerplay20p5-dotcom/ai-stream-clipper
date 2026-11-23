@@ -114,6 +114,13 @@ class Settings(BaseSettings):
     yamnet_enabled: bool = True
     # Encoder on this render worker. Set a hardware backend only after a local smoke render.
     render_encoder: Literal["libx264", "h264_qsv", "h264_nvenc"] = "libx264"
+    # Visual discovery inside the audio worker: parallel scans (low-priority threads) and seconds per 10 s segment.
+    # When all slots are busy a segment is skipped (counted), never queued behind the audio analysis.
+    visual_discovery_slots: int = Field(2, ge=1, le=16)
+    visual_discovery_timeout_s: float = Field(6.0, ge=1.0, le=60.0)
+    # A hardware encode that has not finished in this time (or this many times the clip length) is stopped and the
+    # clip is rendered with libx264
+    hw_encoder_timeout_s: float = Field(90.0, ge=10.0, le=1800.0)
 
     @field_validator("ai_models", mode="before")
     @classmethod

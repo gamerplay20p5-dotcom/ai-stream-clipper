@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["streamers"])
 
 ALLOWED_PREF_KEYS = {"game", "min_score", "caption_style", "layout", "webcam_region", "language", "notes",
-                     "republish_allowed", "credit"}  # Phase 4: rights to republish + credit line
+                     "republish_allowed", "credit", "visual_discovery"}  # Phase 4: rights to republish + credit line
 
 
 class StreamerIn(BaseModel):
@@ -46,6 +46,9 @@ def _clean_prefs(prefs: dict) -> dict:
             raise HTTPException(422, "webcam_region must have numeric x,y,w,h in 0..1") from exc
     if "game" in out:
         out["game"] = str(out["game"])[:60]
+    # Per-channel pilot of the visual discovery (None = follow the global setting)
+    if "visual_discovery" in out and out["visual_discovery"] not in (None, "off", "shadow", "on"):
+        raise HTTPException(422, "visual_discovery must be off, shadow, on or null")
     return out
 
 

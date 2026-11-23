@@ -23,7 +23,7 @@ class MotionHypothesis(BaseModel):
     peak: float = Field(ge=0, allow_inf_nan=False)
     end: float = Field(ge=0, allow_inf_nan=False)
     confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
-    signal: Literal["vertical_displacement", "trajectory_change", "rotation"]
+    signal: Literal["vertical_displacement", "trajectory_change", "rotation", "abrupt_change"]
 
     @model_validator(mode="after")
     def _ordered(self):
@@ -32,7 +32,7 @@ class MotionHypothesis(BaseModel):
         return self
 
 
-EventKind = Literal["rollover", "collision", "fall", "police_chase", "escape", "failed_escape",
+EventKind = Literal["rollover", "collision", "fall", "explosion", "police_chase", "escape", "failed_escape",
                     "prank", "funny_interaction", "surprise", "unlikely_win", "unexpected_failure", "unknown"]
 
 
@@ -83,6 +83,9 @@ class VisualAnalysis(BaseModel):
     window_abs: tuple[float, float] = (0.0, 0.0)  # session offsets of the analysed window
     latency_s: float = 0.0
     fallback: bool = False  # True when the multimodal model was unavailable
+    # Targeted confirmation of a visual hypothesis (ai/visual_confirm.py): occurrence and kind from the VLM, timing
+    # from the motion detector. None when no confirmation ran.
+    confirmation: dict | None = None
     notes: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")

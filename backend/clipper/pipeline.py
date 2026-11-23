@@ -233,7 +233,7 @@ def register_segments(db: Session, session_id: int, worker_id: str, base_url: st
                 "sha256": row.sha256, "segment_url": f"{sess.segment_base_url}/segments/{session_id}/{idx}",
                 "language": profile.get("language", settings.language),
                 "whisper_model": profile.get("whisper_model", settings.whisper_model),
-                "discover_visual": settings.visual_discovery != "off",
+                "discover_visual": settings.for_channel(prefs).visual_discovery != "off",
                 "webcam_region": prefs.get("webcam_region"),
             },
             idempotency_key=f"audio:{session_id}:{idx}", priority=50, max_attempts=3,
@@ -411,6 +411,7 @@ def timeline(db: Session, session_id: int) -> dict:
         eff["min_score"] = float(prefs["min_score"])  # per-channel override
     if prefs.get("language"):
         eff["language"] = str(prefs["language"])
+    eff["visual_discovery"] = settings.for_channel(prefs).visual_discovery
     return {
         "session_id": session_id,
         "from": t_from,
@@ -435,7 +436,8 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
     sess = db.get(StreamSession, session_id)
     if sess is None:
         raise NotFound("session")
-    settings = load_ai_settings(db)
+    streamer = db.get(Streamer, sess.streamer_id)
+    settings = load_ai_settings(db).for_channel((streamer.preferences or {}) if streamer else {})
     if (result.get("visual_discovery_active") and settings.visual_discovery != "on") or (
             result.get("grounded_metadata_active") and not settings.use_grounded_metadata):
         raise Conflict("AI settings changed during scoring")

@@ -9,6 +9,7 @@ from .schemas import VisualAnalysis
 
 _OBSERVATIONS = {
     "rollover": ("capot", "rollover", "roll over", "overturn"),
+    "explosion": ("explod", "explos", "explosion", "blows up"),
     "collision": ("colis", "batid", "bate", "collision", "crash"),
     "fall": ("cai", "queda", "fall", "fell"),
     "police_chase": ("perseguicao policial", "policia persegue", "police chase", "chased by police"),
@@ -42,6 +43,32 @@ def corroborated_event(visual: VisualAnalysis | None, peak: float, start: float,
                 and min(abs(t - event.t) for t in shown) <= 0.6):
             return True
     return False
+
+
+def confirmed_occurrence(visual: VisualAnalysis | None, start: float, end: float,
+                         context_s: float = 1.5, outcome_s: float = 1.0) -> bool:
+    """The targeted confirmation saw an event at the detector's hypothesis, and the clip keeps context before it and
+    the outcome after it. Timing is the detector's (frames at 4 Hz), never a timestamp written by the VLM."""
+    if visual is None or visual.fallback or not visual.confirmation:
+        return False
+    c = visual.confirmation
+    h = c.get("hypothesis") or {}
+    if not c.get("occurred") or h.get("start") is None or h.get("end") is None:
+        return False
+    return start + context_s <= float(h["start"]) and float(h["end"]) + outcome_s <= end
+
+
+def confirmed_event_kind(visual: VisualAnalysis | None, peak: float, start: float, end: float) -> str:
+    """Kind of a validated event, or "unknown". Either the VLM's own event matches a shown frame near the peak
+    (corroborated_event), or the targeted confirmation saw it at the detector's hypothesis inside the clip."""
+    if visual is None:
+        return "unknown"
+    if corroborated_event(visual, peak, start, end):
+        return visual.event_kind
+    if confirmed_occurrence(visual, start, end):
+        kind = (visual.confirmation or {}).get("kind", "unknown")
+        return kind if kind in _OBSERVATIONS else "unknown"
+    return "unknown"
 
 
 def webcam_reaction(track: list[dict], peak: float) -> dict | None:

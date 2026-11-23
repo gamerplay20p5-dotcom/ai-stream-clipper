@@ -69,25 +69,17 @@ async def handle_audio(ctx: JobContext) -> dict:
             await ctx.client.post(f"/internal/sessions/{sid}/analysis", {"segment_idx": idx, "skipped": True})
             return {"skipped": "segment evicted"}
         raise JobError(f"segment download failed: {exc}") from exc
-    visual_motion = []
-    visual_stats = {}
-    if p.get("discover_visual"):
-        t0 = time.monotonic()
-        try:
-            from ..analysis.visual_discovery import discover_visual
-
-            visual_motion = await asyncio.to_thread(discover_visual, seg, float(p["duration"]),
-                                                    p.get("webcam_region"))
-        except Exception:
-            log.exception("visual discovery unavailable for segment", extra={"session_id": sid, "segment_idx": idx})
-        visual_stats = {"visual_proposals": len(visual_motion), "visual_scan_s": round(time.monotonic() - t0, 3)}
-    ctx.check_cancel()
+    # Visual discovery runs AT THE SAME TIME as the audio analysis (never in front of it), on its own pool
+    scan = asyncio.create_task(_discover(ctx, seg, sid, idx)) if p.get("discover_visual") else None
     endpoint = f"/internal/sessions/{sid}/analysis"
     try:
         analysis = await _analyse_audio(ctx, seg)
     except JobCancelled:
+        if scan is not None:
+            scan.cancel()
         raise
     except Exception:
+        visual_motion, visual_stats = await scan if scan is not None else ([], {})
         ctx.check_cancel()
         if not visual_motion or ctx.max_attempts is None or ctx.attempts < ctx.max_attempts:
             raise
@@ -95,6 +87,8 @@ async def handle_audio(ctx: JobContext) -> dict:
                       extra={"session_id": sid, "segment_idx": idx})
         await ctx.client.post(endpoint, {"segment_idx": idx, "visual_motion": visual_motion})
         return {"audio": "failed", **visual_stats}
+    visual_motion, visual_stats = await scan if scan is not None else ([], {})
+    ctx.check_cancel()
     if analysis is None:
         await ctx.client.post(endpoint, {"segment_idx": idx, "skipped": not visual_motion,
                                          "visual_motion": visual_motion})
@@ -103,6 +97,64 @@ async def handle_audio(ctx: JobContext) -> dict:
     body, stats = analysis
     await ctx.client.post(endpoint, {"segment_idx": idx, **body, "visual_motion": visual_motion})
     return {**stats, **visual_stats}
+
+
+class _DiscoveryPool:
+    """Visual scans of the audio worker: a few low-priority threads and a fixed number of slots.
+
+    Backpressure: when every slot is busy the segment is skipped (and counted) instead of waiting, so a burst of
+    segments never delays the audio analysis or the capture on the same host."""
+
+    def __init__(self, slots: int):
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.slots = slots
+        self.busy = 0
+        self.executor = ThreadPoolExecutor(max_workers=slots, thread_name_prefix="visual-scan",
+                                           initializer=_lower_thread_priority)
+
+
+def _lower_thread_priority() -> None:
+    """Linux schedules threads individually: nice +10 for the scan threads only (the audio threads keep theirs)."""
+    import os
+    import threading
+
+    try:
+        os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 10)
+    except (AttributeError, OSError):
+        pass
+
+
+_POOL: _DiscoveryPool | None = None
+
+
+async def _discover(ctx: JobContext, seg: Path, sid: int, idx: int) -> tuple[list[dict], dict]:
+    """Scan one segment within its slot and time budget. Never raises: failures are counted, the audio goes on."""
+    from functools import partial
+
+    from ..analysis.visual_discovery import DiscoveryTimeout, discover_visual
+
+    global _POOL
+    s, p = ctx.settings, ctx.payload
+    if _POOL is None:
+        _POOL = _DiscoveryPool(s.visual_discovery_slots)
+    if _POOL.busy >= _POOL.slots:
+        return [], {"visual_skipped": "busy"}
+    _POOL.busy += 1
+    t0 = time.monotonic()
+    try:
+        rows = await asyncio.get_running_loop().run_in_executor(
+            _POOL.executor, partial(discover_visual, seg, float(p["duration"]), p.get("webcam_region"),
+                                    timeout_s=s.visual_discovery_timeout_s))
+        return rows, {"visual_proposals": len(rows), "visual_scan_s": round(time.monotonic() - t0, 3)}
+    except DiscoveryTimeout:
+        log.warning("visual scan over budget; segment skipped", extra={"session_id": sid, "segment_idx": idx})
+        return [], {"visual_skipped": "timeout", "visual_scan_s": round(time.monotonic() - t0, 3)}
+    except Exception:
+        log.exception("visual discovery unavailable for segment", extra={"session_id": sid, "segment_idx": idx})
+        return [], {"visual_skipped": "error"}
+    finally:
+        _POOL.busy -= 1
 
 
 async def _analyse_audio(ctx: JobContext, seg: Path) -> tuple[dict, dict] | None:
@@ -206,7 +258,7 @@ async def handle_vision(ctx: JobContext) -> dict:
     from ..ai import director, edit_plan, narrative
     from ..ai.manager import ModelUnavailable, get_manager
     from ..ai.schemas import NarrativeResult, VisualAnalysis, VisualEvent
-    from ..ai.visual_evidence import corroborated_event, webcam_reaction
+    from ..ai.visual_evidence import confirmed_event_kind, webcam_reaction
     from ..ai.vlm import FrameInput, VLMAnalyzer
     from ..analysis.vision import HeuristicVisionProvider, sample_frames
     from ..scoring.engine import weighted_total
@@ -274,6 +326,17 @@ async def handle_vision(ctx: JobContext) -> dict:
         except ModelUnavailable as exc:
             fallback_reason = str(exc)[:300]
         timings["vlm_s"] = round(time.monotonic() - t0, 2)
+        if visual is not None and not visual.fallback and primary is not None:
+            # Second, targeted pass: did something happen at the detector's hypothesis, and what? (ai/visual_confirm.py)
+            t0 = time.monotonic()
+            try:
+                confirmation = await asyncio.to_thread(
+                    _confirm_hypothesis, manager, model, src, src_start, src_dur, primary, routed_fallback == "CPU")
+            except ModelUnavailable as exc:
+                confirmation = {"occurred": False, "kind": "unknown", "reason": f"modelo indisponível: {str(exc)[:120]}",
+                                "hypothesis": primary}
+            visual = visual.model_copy(update={"confirmation": confirmation})
+            timings["confirm_s"] = round(time.monotonic() - t0, 2)
     elif model:
         fallback_reason = f"modelo {model} indisponível neste worker (backend, memória ou configuração)"
     else:
@@ -336,7 +399,7 @@ async def handle_vision(ctx: JobContext) -> dict:
     title = narr.titles[0] if (not narr.fallback and narr.titles and first) else spec.get("title", "")
     motion_cx = [(w0 + m[0], m[2]) for m in (heur.extra or {}).get("motion", [])]
     layout = spec.get("layout")
-    visual_event = corroborated_event(visual, cand.peak, decision.start_abs, decision.end_abs) if grounded else False
+    visual_event = grounded and confirmed_event_kind(visual, cand.peak, decision.start_abs, decision.end_abs) != "unknown"
     plan = edit_plan.build(decision, template_key=settings.edit_template, title=title, transcript_words=clip_words,
                            visual=visual, motion_cx=motion_cx,
                            webcam_region=spec.get("webcam_region") or heur.webcam_region,
@@ -363,6 +426,29 @@ async def handle_vision(ctx: JobContext) -> dict:
     })
     return {"mode": decision.mode, "keep": decision.keep, "score": decision.score, "vision": visual.provider,
             "narrative": narr.provider, "timings": timings}
+
+
+def _confirm_hypothesis(manager, model: str, src: Path, src_start: float, src_dur: float | None, hypothesis: dict,
+                        cpu_only: bool) -> dict:
+    """Frames at the confirmation instants (read from the same source) and the two VLM questions. Runs in a thread."""
+    from ..ai.registry import MODELS
+    from ..ai.visual_confirm import confirm, frame_times
+    from ..analysis.vision import sample_frames
+
+    hi = src_start + src_dur if src_dur else float("inf")
+    times = frame_times(hypothesis, src_start, hi)
+    if times is None:
+        return {"occurred": False, "kind": "unknown", "reason": "mídia insuficiente em volta da hipótese",
+                "hypothesis": hypothesis}
+    frames = {}
+    for t in times:
+        got = sample_frames(src, t - src_start, t - src_start + 0.05, t - src_start, 1.0, 1)
+        if not got:
+            return {"occurred": False, "kind": "unknown", "reason": f"quadro indisponível em {t:.2f}s",
+                    "hypothesis": hypothesis}
+        frames[t] = got[0].image
+    pipe, _device = manager.acquire(model, cpu_only=True) if cpu_only else manager.acquire(model)
+    return confirm(pipe, MODELS[model].image_side, frames, hypothesis, times).as_dict()
 
 
 def _story_text(story: dict, w0: float) -> str:
@@ -442,6 +528,7 @@ async def handle_render(ctx: JobContext) -> dict:
         show_title=bool(spec.get("show_title", True)), preset=spec.get("preset", "veryfast"),
         crf=int(spec.get("crf", 21)), fps=int(spec.get("fps", 30)), threads=s.ffmpeg_threads,
         plan=spec.get("edit_plan"), captions=spec.get("captions"), encoder=s.render_encoder,
+        hw_timeout=s.hw_encoder_timeout_s,
     )
     try:
         res = await render(rs, ctx.workdir / "render")

@@ -70,7 +70,7 @@ def _mmss(t: float) -> str:
 def judge(*, start: float, end: float, peak: float, breakdown: dict, kinds: list[str], story: dict | None = None,
           noise: list[str] | None = None, visual: dict | None = None, director: dict | None = None,
           same_story_clips: int = 0, min_score: float = 55.0, craft=None, fixes: list | None = None,
-          visual_grounded: bool = False) -> Judgement:
+          visual_grounded: bool = False, evidence_span: tuple[float, float] | None = None) -> Judgement:
     """``story``: situation dict (pipeline_story.story_context()['situation']); ``visual``: VisualAnalysis dict."""
     b = {k: (float(v) if isinstance(v, (int, float)) else None) for k, v in (breakdown or {}).items()}
     kinds = list(kinds or [])
@@ -84,6 +84,9 @@ def judge(*, start: float, end: float, peak: float, breakdown: dict, kinds: list
         w0 = visual["window_abs"][0]
         visual_complete = bool(arc.get("complete") and setup is not None and outcome is not None
                                and start <= w0 + setup < peak < w0 + outcome <= end)
+        # Confirmed by the targeted pass: the detector's span with context before and outcome after it is enough
+        if evidence_span is not None and start + 1.5 <= evidence_span[0] and evidence_span[1] + 1.0 <= end:
+            visual_complete = True
     s = story or None
     dur = max(1.0, end - start)
     c: dict[str, Criterion] = {}
