@@ -690,6 +690,19 @@ def cmd_gpu_validate(conf: dict, args: list[str]) -> int:
 PR31_ROOT = Path("/home/asc/bench/pr31")
 PR31_STATE = Path("/var/lib/asc-ctl/pr31")
 PR31_DOCKER_CONFIG = PR31_STATE / "docker-cli"
+PR31_AUDIO = PR31_STATE / "audio"
+PR31_AUDIO_REVISION = "536b0662742c02347bc0e980a01041f333bce120"
+PR31_AUDIO_FILES = {
+    "config.json": "b55496ac7940a7ae47d2c01eab40edfd8701feec1229d9cce3b40014383fb828",
+    "model.bin": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671",
+    "tokenizer.json": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+    "vocabulary.txt": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+}
+PR31_AUDIO_VERSIONS = {
+    "faster-whisper": "1.2.1", "ctranslate2": "4.6.3", "av": "15.1.0", "onnxruntime": "1.23.2",
+    "coloredlogs": "15.0.1", "humanfriendly": "10.0", "flatbuffers": "25.9.23",
+    "protobuf": "6.33.5", "sympy": "1.14.0", "mpmath": "1.3.0",
+}
 PR31_MODELS = Path("/opt/asc/models")
 PR31_DEVICE = Path("/dev/dri/renderD128")
 PR31_LABEL = "com.asc.bench=pr31-201"
@@ -697,6 +710,7 @@ PR31_COMMIT = "33f3e00953c35dfcaf301a086aaf75b1743e31e0"
 # SHA256 of sorted UTF-8 relative path + NUL + raw SHA256 of each tracked backend/clipper file.
 PR31_PACKAGE_SHA = "9e012ef2adfd43f13c61972c330fce9a21ff30ba65d23e30d37f1c0a32dd3a46"
 PR31_TIMEOUT = 3600
+PR31_CHECK_TIMEOUT = 300
 GIB = 1024 ** 3
 MIB = 1024 ** 2
 CONTAINER_ID = re.compile(r"[a-f0-9]{64}")
@@ -704,10 +718,28 @@ BENCH_DOCKER_ENV = {"PATH": SAFE_PATH, "HOME": "/root", "LC_ALL": "C"}
 PR31_PYTHONPATH = "/pr31/backend"
 
 # Runs with the container UID on the pinned tree. No code from the input directory is imported.
-PR31_ENTRY = """
+PR31_ENTRY = f"AUDIO_VERSIONS = {PR31_AUDIO_VERSIONS!r}\n" + """
 import os
+import platform
+import sys
+import site
+from importlib import import_module, metadata
 from pathlib import Path
-from importlib.util import find_spec
+
+if sys.argv[1:] == ["--check"]:
+    os.dup2(1, 2)  # include loader errors in the check's bounded Docker log tail
+if sys.version_info[:2] != (3, 12) or platform.machine() != "x86_64":
+    raise SystemExit("the offline audio bundle requires Linux x86-64 and Python 3.12")
+# Keep the reviewed backend and standard library first. Never execute bundle .pth files.
+audio_site = Path("/pr31/audio/site")
+sys.path.insert(min(i for i, p in enumerate(sys.path) if p in site.getsitepackages()), str(audio_site))
+for distribution, expected in AUDIO_VERSIONS.items():
+    dist = metadata.distribution(distribution)
+    if dist.version != expected or Path(dist.locate_file("")).resolve() != audio_site:
+        raise SystemExit(f"unexpected offline audio package: {distribution} (expected {expected})")
+for name in ("av", "ctranslate2", "onnxruntime", "faster_whisper"):
+    if not Path(import_module(name).__file__).resolve().is_relative_to(audio_site):
+        raise SystemExit(f"offline audio module imported outside bundle: {name}")
 
 import clipper
 from clipper import media
@@ -723,8 +755,8 @@ if os.getenv("PYTHONPATH") != str(backend) or (
     raise SystemExit("PR #31 PYTHONPATH mismatch")
 editorial = Path("/inputs/editorial.json")
 cfg, _ = replay._editorial_settings(editorial, None, None)
-if cfg.min_score != 75:
-    raise SystemExit("editorial.min_score must be 75")
+if cfg.min_score != 75 or cfg.whisper_model != "small":
+    raise SystemExit("editorial settings must use min_score=75 and whisper_model=small")
 manifest = Path("/inputs/annotations.json")
 cases = replay.Manifest.model_validate_json(manifest.read_text())
 media_files = {Path("/inputs") / f for c in cases.videos for f in
@@ -733,13 +765,15 @@ for file in sorted(media_files):
     info = media.probe_sync(file)
     if media.video_stream(info) is None:
         raise SystemExit("a benchmark input has no video stream")
-    if media.audio_stream(info) is not None and cfg.whisper_model not in ("", "none", "off"):
-        if find_spec("faster_whisper") is None:
-            raise SystemExit("local image lacks faster-whisper for an input with audio")
 os.environ["ASC_MODELS_DIR"] = "/models"
 reset_settings_cache()
 if not is_installed(cfg.vision_model):
     raise SystemExit("configured VLM files missing from /models")
+if sys.argv[1:] == ["--check"]:
+    from faster_whisper import WhisperModel
+    WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=4, local_files_only=True)
+    print("PR #31 offline audio and input preflight OK", flush=True)
+    raise SystemExit(0)
 import openvino
 if not os.access("/dev/dri/renderD128", os.R_OK | os.W_OK) or "GPU" not in openvino.Core().available_devices:
     raise SystemExit("Intel GPU is not accessible to the replay user or OpenVINO")
@@ -831,6 +865,44 @@ def _bench_json(parent: int, names: tuple[str, ...], uid: int, size_limit: int =
 def _bench_score(config: dict) -> None:
     if type(config.get("min_score")) not in (int, float) or config["min_score"] != 75:
         raise Denied("the editorial export must contain numeric min_score=75")
+    if config.get("whisper_model") != "small":
+        raise Denied("the editorial export must contain whisper_model=small")
+
+
+def _bench_audio(deadline: float) -> None:
+    _bench_trusted_dir(PR31_AUDIO)
+
+    def inspect(path: Path) -> None:
+        st = path.lstat()
+        if time.monotonic() >= deadline:
+            raise Denied("offline audio validation exceeded the deadline")
+        if not (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)):
+            raise Denied("offline audio may contain only real directories and regular files")
+        if st.st_uid != 0 or st.st_mode & 0o022:
+            raise Denied("offline audio must be owned by root without group or other write access")
+        if stat.S_ISDIR(st.st_mode):
+            for child in path.iterdir():
+                inspect(child)
+
+    inspect(PR31_AUDIO)
+    if {p.name for p in PR31_AUDIO.iterdir()} != {"site", "hub"} or not (PR31_AUDIO / "site").is_dir():
+        raise Denied("offline audio requires fixed site and hub directories")
+    repo = PR31_AUDIO / "hub/models--Systran--faster-whisper-small"
+    revision = repo / "refs/main"
+    if revision.stat().st_size != len(PR31_AUDIO_REVISION) or revision.read_bytes() != PR31_AUDIO_REVISION.encode():
+        raise Denied("unexpected offline Whisper small revision")
+    snapshot = repo / "snapshots" / PR31_AUDIO_REVISION
+    if {p.name for p in snapshot.iterdir()} != PR31_AUDIO_FILES.keys():
+        raise Denied("incomplete or unexpected offline Whisper small snapshot")
+    for name, expected in PR31_AUDIO_FILES.items():
+        digest = hashlib.sha256()
+        with (snapshot / name).open("rb") as source:
+            while chunk := source.read(MIB):
+                if time.monotonic() >= deadline:
+                    raise Denied("offline audio validation exceeded the deadline")
+                digest.update(chunk)
+        if digest.hexdigest() != expected:
+            raise Denied(f"unexpected offline Whisper small file: {name}")
 
 
 def _bench_media_path(value: str) -> PurePosixPath:
@@ -944,6 +1016,7 @@ def _bench_stage(source: int, staging: Path, uid: int, deadline: float) -> None:
         (inputs / name).chmod(0o644)
     remaining = 4 * GIB
     t0 = time.monotonic()
+    nested_media = not _bench_present(source, "media")
     for entry in files:
         target = inputs
         for component in entry.parts[:-1]:
@@ -951,7 +1024,10 @@ def _bench_stage(source: int, staging: Path, uid: int, deadline: float) -> None:
             target.mkdir(exist_ok=True)
             target.chmod(0o755)
         target /= entry.name
-        with _bench_open_dir(source, entry.parts[:-1], input_uid=uid) as parent:
+        source_parts = entry.parts[:-1]
+        if nested_media and entry.parts[0] == "media":
+            source_parts = ("bench", *source_parts)
+        with _bench_open_dir(source, source_parts, input_uid=uid) as parent:
             with _bench_regular(parent, entry.name, uid, min(remaining, 2 * GIB)) as (f, size):
                 before = os.fstat(f.fileno())
                 with target.open("xb") as dst:
@@ -1074,25 +1150,29 @@ def _bench_image() -> tuple[str, str]:
     return image, worker
 
 
-def _bench_create(staging: Path, image: str, gid: str, name: str, seconds: int) -> list[str]:
+def _bench_create(staging: Path, image: str, gid: str, name: str, seconds: int, *, check: bool = False) -> list[str]:
     if not 1 <= seconds <= PR31_TIMEOUT - 5:
         raise Denied("benchmark deadline exhausted")
     args = ["create", "--pull", "never", "--name", name, "--label", PR31_LABEL, "--restart", "no", "--init",
-            "--user", f"{CONTAINER_UID}:{CONTAINER_UID}", "--group-add", gid, "--cap-drop", "ALL",
+            "--user", f"{CONTAINER_UID}:{CONTAINER_UID}", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges:true", "--network", "none", "--read-only",
             "--no-healthcheck", "--ipc", "private", "--cgroupns", "private",
             "--cpus", "4", "--cpu-shares", "64", "--memory", "12g", "--memory-swap", "12g", "--pids-limit", "256",
             "--log-driver", "local", "--log-opt", "max-size=2m", "--log-opt", "max-file=1",
             "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=6g,mode=1777",
-            "--device", f"{PR31_DEVICE}:{PR31_DEVICE}:rw", "--workdir", "/tmp",
+            "--workdir", "/tmp",
             "-e", f"PYTHONPATH={PR31_PYTHONPATH}", "-e", "HOME=/tmp", "-e", "TMPDIR=/tmp",
-            "-e", "HF_HUB_OFFLINE=1", "-e", "HF_HOME=/models/hf"]
-    for host, dest in ((staging / "backend", PR31_PYTHONPATH), (staging / "inputs", "/inputs"),
-                       (PR31_MODELS, "/models"), (staging / "result", "/result")):
+            "-e", "HF_HUB_OFFLINE=1", "-e", "HF_HOME=/models/hf", "-e", "HF_HUB_CACHE=/pr31/audio/hub"]
+    mounts = [(staging / "backend", PR31_PYTHONPATH), (staging / "inputs", "/inputs"),
+              (PR31_MODELS, "/models"), (PR31_AUDIO, "/pr31/audio")]
+    if not check:
+        args += ["--group-add", gid, "--device", f"{PR31_DEVICE}:{PR31_DEVICE}:rw"]
+        mounts.append((staging / "result", "/result"))
+    for host, dest in mounts:
         mount = f"type=bind,source={host},target={dest},bind-propagation=rprivate,bind-recursive=disabled"
         args += ["--mount", mount + (",readonly" if dest != "/result" else "")]
     return args + ["--entrypoint", "/usr/bin/timeout", image, "--kill-after=5s", f"{seconds}s",
-                   "/opt/asc/bin/python3", "-s", "-B", "-u", "-c", PR31_ENTRY]
+                   "/opt/asc/bin/python3", "-s", "-B", "-u", "-c", PR31_ENTRY] + (["--check"] if check else [])
 
 
 def _bench_watch(cid: str, peers: dict[str, str], nodes: set[int], deadline: float, record: dict) -> int:
@@ -1141,7 +1221,7 @@ def cmd_bench_pr31(conf: dict, args: list[str]) -> int:
     uid, gid, home = user_ids(conf)
     if conf["ASC_USER"] != "asc" or home != "/home/asc" or not uid:
         raise Denied("the configured asc account does not match /home/asc")
-    deadline = time.monotonic() + PR31_TIMEOUT
+    deadline = time.monotonic() + (PR31_CHECK_TIMEOUT if args else PR31_TIMEOUT)
     try:
         _bench_trusted_dir(PR31_DOCKER_CONFIG, create=True)
         if any(PR31_DOCKER_CONFIG.iterdir()):
@@ -1163,6 +1243,7 @@ def _bench_run(uid: int, gid: int, conf: dict, check: bool, deadline: float, sig
     render_gid, nodes = _bench_gpu(conf)
     _bench_no_contention(nodes, None)
     image, worker = _bench_image()
+    _bench_audio(deadline)
     if shutil.disk_usage(PR31_STATE).free < 8 * GIB:
         raise Denied("benchmark staging needs 8 GiB free including its disk reserve")
     with (_bench_open_dir(None, PR31_ROOT.parts[1:], input_uid=uid) as source,
@@ -1178,13 +1259,11 @@ def _bench_run(uid: int, gid: int, conf: dict, check: bool, deadline: float, sig
             if worker not in peers or any(not s.startswith(("running healthy ", "running none ")) for s in peers.values()):
                 raise Denied("the vision worker disappeared or a running peer is not healthy")
             _bench_no_contention(nodes, None)
-            if check:
-                print("PR #31 host and input preflight passed; no container started")
-                return 0
             result_dir = staging / "result"
-            result_dir.mkdir(mode=0o700)
-            os.chown(result_dir, CONTAINER_UID, CONTAINER_UID)
-            os.chmod(result_dir, 0o700)
+            if not check:
+                result_dir.mkdir(mode=0o700)
+                os.chown(result_dir, CONTAINER_UID, CONTAINER_UID)
+                os.chmod(result_dir, 0o700)
             token = uuid4().hex
             name = f"asc-bench-pr31-{token}"
             record = {"commit": PR31_COMMIT, "image_id": image, "container": name, "samples": 0, "result": "aborted"}
@@ -1193,7 +1272,7 @@ def _bench_run(uid: int, gid: int, conf: dict, check: bool, deadline: float, sig
             previous = signal.signal(signal.SIGTERM, signal.default_int_handler)
             try:
                 remaining = min(PR31_TIMEOUT, int(deadline - time.monotonic()))
-                created = _bench_docker(*_bench_create(staging, image, render_gid, name, remaining - 15))
+                created = _bench_docker(*_bench_create(staging, image, render_gid, name, remaining - 15, check=check))
                 if not CONTAINER_ID.fullmatch(created):
                     raise Denied("unexpected sandbox ID from Docker")
                 cid = created
@@ -1204,16 +1283,17 @@ def _bench_run(uid: int, gid: int, conf: dict, check: bool, deadline: float, sig
                 _bench_docker("start", cid)
                 code = _bench_watch(cid, peers, nodes, deadline, record)
                 record["exit_code"] = code
-                with _bench_open_dir(None, result_dir.parts[1:]) as result_fd:
-                    if _bench_present(result_fd, "comparison.json"):
-                        data = _bench_json(result_fd, ("comparison.json",), CONTAINER_UID, 16 * MIB)
-                        settings = data.get("settings")
-                        if not isinstance(settings, dict) or data.get("settings_source") != "export":
-                            raise Denied("benchmark report did not use the settings export")
-                        _bench_score(settings)
-                        _bench_publish(out_fd, f"{name}.json", data, uid, gid)
-                    elif code == 0:
-                        raise Denied("replay ended without a report")
+                if not check:
+                    with _bench_open_dir(None, result_dir.parts[1:]) as result_fd:
+                        if _bench_present(result_fd, "comparison.json"):
+                            data = _bench_json(result_fd, ("comparison.json",), CONTAINER_UID, 16 * MIB)
+                            settings = data.get("settings")
+                            if not isinstance(settings, dict) or data.get("settings_source") != "export":
+                                raise Denied("benchmark report did not use the settings export")
+                            _bench_score(settings)
+                            _bench_publish(out_fd, f"{name}.json", data, uid, gid)
+                        elif code == 0:
+                            raise Denied("replay ended without a report")
                 rc = 0 if code == 0 else 1
                 record["result"] = "completed" if rc == 0 else "replay failed"
             except (Denied, OSError, ValueError, RecursionError, KeyboardInterrupt) as exc:
@@ -1236,11 +1316,18 @@ def _bench_run(uid: int, gid: int, conf: dict, check: bool, deadline: float, sig
                             record["cleanup"] = "unverified; check sandbox ID"
                             print(f"PR #31 sandbox cleanup unverified: {cid}", file=sys.stderr)
                             rc = 1
-                    _bench_publish(out_fd, f"{name}.status.json", record, uid, gid)
+                    if not check:
+                        _bench_publish(out_fd, f"{name}.status.json", record, uid, gid)
                 finally:
                     signal.signal(signal.SIGTERM, previous)
                     signal.signal(signal.SIGINT, sigint)
-            print(f"status: {PR31_ROOT}/out/{name}.status.json")
+            if check:
+                if rc == 0:
+                    print("PR #31 offline audio and input preflight passed in the local vision image")
+                elif "exit_code" in record:
+                    print(f"PR #31 preflight exited {record['exit_code']}: {record.get('log_tail', '')}", file=sys.stderr)
+            else:
+                print(f"status: {PR31_ROOT}/out/{name}.status.json")
             return rc
 
 
