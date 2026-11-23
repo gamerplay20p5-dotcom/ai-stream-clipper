@@ -22,7 +22,8 @@ class InternalError(RuntimeError):
 
 
 class InternalClient:
-    def __init__(self, base_url: str, secret: str, worker_id: str, timeout: float = 60.0):
+    def __init__(self, base_url: str, secret: str, worker_id: str, timeout: float = 60.0,
+                 *, transport: httpx.AsyncBaseTransport | None = None):
         self.base_url = base_url.rstrip("/")
         self.secret = secret
         self.worker_id = worker_id
@@ -32,7 +33,7 @@ class InternalClient:
         # verify the API certificate against the project CA (pinned); system CAs otherwise
         verify: str | bool = str(ca) if ca else True
         self._http = httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=10.0), follow_redirects=False,
-                                       verify=verify)
+                                       verify=verify, transport=transport)
 
     async def aclose(self) -> None:
         await self._http.aclose()

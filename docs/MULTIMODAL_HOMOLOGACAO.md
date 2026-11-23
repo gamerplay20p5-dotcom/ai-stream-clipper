@@ -69,7 +69,7 @@ A diferença que sobra em relação ao áudio sozinho é disputa de CPU no noteb
 
 ## Plano de piloto (sem ativação até autorização)
 
-1. **Gameplay real autorizado.** Reunir de 3 a 5 trechos de lives com permissão do criador, cada um com um acontecimento silencioso anotado: capotamento, queda, explosão ou colisão, e o instante aproximado. Incluir trechos sem acontecimento como controle. Rodar localmente `tests/fixtures/probe_vlm_contrast.py <modelos> <pasta> GPU <saida.json>` (a pasta deve ter um `annotations.json` no formato de `make_realistic_fixtures.py`) e depois o ponta a ponta com o gate ativo.
+1. **Gameplay real autorizado.** Reunir de 3 a 5 trechos de lives com permissão do criador, com um acontecimento silencioso e o instante aproximado anotados. Incluir trechos sem acontecimento como controles. Rodar o [replay local](#replay-local-com-vlm-e-quality-gate) e revisar o JSON.
 2. **Critério para liberar.** Pelo menos um acontecimento silencioso confirmado pelo VLM real, com o corte contendo contexto e desfecho, aprovado pelo gate ativo, e nenhum falso positivo nos controles.
 3. **Piloto por canal.** Com o global em `off`, definir `visual_discovery: "shadow"` só no canal autorizado (`PATCH /api/streamers/{id}`), por 1 a 2 semanas. Acompanhar `visual_skipped` (busy/timeout), CPU da 206, latência do áudio e propostas por hora. Passar a `on` só nesse canal depois disso.
 4. **Rollback.** Remover a preferência do canal (ou `null`). Nada no banco precisa ser desfeito.
@@ -94,3 +94,32 @@ PYTHONPATH=backend python -m pytest tests/test_multimodal_fixes.py
 python tests/fixtures/make_realistic_fixtures.py ../fixtures-realistas
 PYTHONPATH=backend python tests/fixtures/probe_vlm_contrast.py "$MODEL_DIR" ../fixtures-realistas GPU ../contraste.json
 ```
+
+## Replay local com VLM e Quality Gate
+
+`clipper.bench.replay` roda os mesmos trechos com a descoberta visual `off` e `on`. Usa os handlers de áudio, scoring e visão, inclusive a confirmação do VLM e o Quality Gate. Os dois modos usam o mesmo modelo e os padrões editoriais deste checkout. O banco SQLite, os segmentos copiados e os arquivos intermediários ficam em diretórios temporários. A comunicação com a API e o servidor de segmentos ocorre dentro do processo. O replay termina na decisão do gate, antes da renderização.
+
+Exemplo de manifesto `annotations.json`. Caminhos relativos partem da pasta do manifesto. Para `video`, os tempos são segundos desde o início do arquivo. Para `segments`, copie `file`, `start` e `duration` do índice de captura para um trecho contínuo da mesma execução e anote no relógio original da sessão. O replay copia esses segmentos byte a byte. Em arquivos de vídeo contínuo, usa a segmentação sem recodificação do capturador.
+
+```json
+{
+  "videos": [
+    {"video": "capotamento.mp4", "game": "GTA V", "language": "pt",
+     "events": [{"t": 13.2, "label": "capotamento", "must_include": [10, 17]}]},
+    {"segments": [
+      {"file": "seg_000012.ts", "start": 120, "duration": 10},
+      {"file": "seg_000013.ts", "start": 130, "duration": 10}
+     ], "events": [{"t": 129.5, "label": "colisão", "must_include": [125, 134]}]},
+    {"video": "direcao-normal.mp4", "events": []}
+  ]
+}
+```
+
+Use trechos curtos, FFmpeg e as dependências de áudio e OpenVINO do backend. Para fonte com áudio, prepare o Whisper no cache local ou passe o caminho do checkpoint em `--whisper`. O VLM vem do diretório de modelos informado.
+
+```bash
+PYTHONPATH=backend python -m clipper.bench.replay ./annotations.json \
+  --models-dir "$MODEL_DIR" --model qwen3-vl-2b-int4 --device GPU --out ./comparacao.json
+```
+
+O JSON traz hipóteses, confirmação direcionada, decisão do gate, cobertura de `must_include`, hashes dos segmentos e contagens TP/FP/FN por etapa e modo. A comparação usa tolerância de 3 s por padrão e associa cada pico a no máximo uma anotação. `gate_ready` conta somente decisões `READY`. Uma rejeição editorial é um resultado válido. Falha de infraestrutura retorna código 2. Quando o worker registra fallback de visão, o JSON preserva a falha em `errors`.
