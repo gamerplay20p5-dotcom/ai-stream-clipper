@@ -40,6 +40,11 @@ class AISettings(BaseModel):
     dedup_overlap: float = Field(0.35, ge=0.0, le=1.0)
     # vision
     visual_discovery: Literal["off", "shadow", "on"] = "off"
+    # A visual hypothesis is INVESTIGATED (VLM + confirmation) from this score: separate from min_score, which stays the
+    # editorial bar. Publication is still decided by the Quality Gate after the VLM.
+    visual_investigate_min: float = Field(60.0, ge=0, le=100)
+    # Visual candidates per channel and hour (GPU backpressure), inside max_clips_per_hour
+    visual_max_per_hour: int = Field(6, ge=0, le=60)
     multimodal_scoring: bool = False
     grounded_metadata: bool = False
     vision_enabled: bool = True
@@ -141,6 +146,12 @@ class AISettings(BaseModel):
     # auto-publish is a future module: always disabled in this build
     auto_publish: Literal[False] = False
     weights: ScoreWeights = Field(default_factory=ScoreWeights)
+
+    def for_channel(self, preferences: dict | None) -> "AISettings":
+        """Effective settings for one channel: a channel can pilot the visual discovery while the global setting stays
+        off (or be excluded while it is on)."""
+        mode = (preferences or {}).get("visual_discovery")
+        return self.model_copy(update={"visual_discovery": mode}) if mode in ("off", "shadow", "on") else self
 
     @property
     def use_grounded_metadata(self) -> bool:

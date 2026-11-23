@@ -50,6 +50,7 @@ class RenderSpec:
     plan: dict | None = None  # EditPlan (clip-relative times)
     captions: dict | None = None  # CaptionOptions fields (Phase 5 E)
     encoder: str = "libx264"
+    hw_timeout: float = 90.0  # seconds before a hardware encode is abandoned for libx264
 
 
 @dataclass
@@ -61,6 +62,18 @@ class RenderResult:
     seconds: float
     audio: dict = field(default_factory=dict)
     applied: list[str] = field(default_factory=list)
+
+
+def _check_output(path: Path, duration: float) -> None:
+    """A hardware encode that "succeeded" must still produce a playable H.264 1080x1920 file of the right length."""
+    try:
+        info = media.probe_sync(path)
+        v = media.video_stream(info)
+        got = media.duration_of(info) or 0.0
+    except Exception as exc:  # noqa: BLE001 - any unreadable output means: re-encode in software
+        raise media.MediaError(f"hardware output unreadable: {exc}") from exc
+    if not v or v.get("codec_name") != "h264" or (v.get("width"), v.get("height")) != (W, H) or got < duration - 1.0:
+        raise media.MediaError(f"hardware output invalid ({v.get('codec_name') if v else None}, {got:.1f}s)")
 
 
 def resolve_layout(layout: str, webcam_region: dict | None) -> str:
@@ -410,8 +423,11 @@ async def render(spec: RenderSpec, workdir: Path) -> RenderResult:
     timeout = max(600, duration * 40)
     encoder = spec.encoder
     if encoder in hardware:
+        # A stuck hardware encoder is detected within a short budget instead of the full software timeout
+        hw_timeout = min(timeout, max(spec.hw_timeout, duration * 3))
         try:
-            await media.run(args + hardware[encoder] + output, cwd=workdir, timeout=timeout)
+            await media.run(args + hardware[encoder] + output, cwd=workdir, timeout=hw_timeout)
+            _check_output(workdir / out.name, duration)
         except media.MediaError as exc:
             log.warning("hardware encoder failed, retrying with libx264",
                         extra={"encoder": encoder, "err": str(exc)[:250]})

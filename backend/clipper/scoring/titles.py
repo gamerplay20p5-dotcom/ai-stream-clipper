@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from ..ai.schemas import VisualAnalysis
-from ..ai.visual_evidence import corroborated_event
+from ..ai.visual_evidence import confirmed_event_kind
 
 from ..analysis import lexicon
 
@@ -97,6 +97,7 @@ def suggest_metadata(transcript: str, kinds: list[str], streamer: dict, language
 
 _EVENT_NAMES = {
     "rollover": ("Capotamento", "Vehicle rollover", "capotamento", "rollover"),
+    "explosion": ("Explosão", "Explosion", "explosao", "explosion"),
     "collision": ("Colisão", "Collision", "colisao", "collision"),
     "fall": ("Queda", "Fall", "queda", "fall"),
     "police_chase": ("Perseguição policial", "Police chase", "perseguicao", "policechase"),
@@ -117,8 +118,8 @@ def grounded_metadata(streamer: dict, language: str, visual: VisualAnalysis | No
     name = " ".join(str(streamer.get("display_name") or streamer.get("channel") or "").split())[:65]
     game = " ".join(str(streamer.get("registered_game") or "").split())[:60]
     origin = {"twitch": "Twitch", "youtube": "YouTube"}.get(streamer.get("platform"))
-    confirmed = visual is not None and corroborated_event(visual, peak, start, end)
-    event = visual.event_kind if confirmed else "unknown"
+    event = confirmed_event_kind(visual, peak, start, end)
+    confirmed = event != "unknown"
     tag = ""
     if event in _EVENT_NAMES:
         pt, en, pt_tag, en_tag = _EVENT_NAMES[event]

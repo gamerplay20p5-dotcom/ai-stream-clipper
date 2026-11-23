@@ -532,7 +532,10 @@ def _select_candidates(tl, settings, grid, baseline, words, events, visual, data
         if cand is None:
             reject(group, "too_short")
             continue
-        if cand.score < settings.min_score:
+        visual_only = bool(cand.visual_evidence) and not (kinds & ACOUSTIC)
+        # A visual-only hypothesis is investigated from its own threshold; the editorial bar (min_score) applies later,
+        # in the Quality Gate, after the VLM. Acoustic candidates keep min_score here.
+        if cand.score < (settings.visual_investigate_min if visual_only else settings.min_score):
             reject(group, "below_min_score", cand.score, cand)
             continue
         if any(_duplicate_window(cand, c, settings.dedup_overlap) for c in existing):
@@ -542,6 +545,9 @@ def _select_candidates(tl, settings, grid, baseline, words, events, visual, data
             reject(group, "duplicate", cand.score, cand)
             continue
         recent = [c for c in existing if cand.peak - c.get("peak", c["start"]) < 3600]
+        if visual_only and len([c for c in recent if c.get("visual_evidence")]) >= settings.visual_max_per_hour:
+            reject(group, "rate_limit", cand.score, cand)
+            continue
         if len(recent) >= settings.max_clips_per_hour and (
                 cand.visual_evidence or cand.score < min(100, settings.min_score + 20)):
             reject(group, "rate_limit", cand.score, cand)

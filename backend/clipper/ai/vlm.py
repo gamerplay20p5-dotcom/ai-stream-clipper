@@ -197,6 +197,9 @@ def parse_answer(obj: dict, frame_times: list[float], span: float) -> tuple[dict
             notes.append(f"evento descartado (fora dos quadros analisados): {str(e)[:80]}")
             continue
         events.append(VisualEvent(t=t, label=label[:160], importance=_num(e.get("importance"), default=5)))
+    if _narrated(events, frame_times):
+        notes.append("eventos listados quadro a quadro a partir do primeiro quadro: instantes descartados como evidência")
+        events = []
     setup, climax, res = ts(obj.get("setup_start")), ts(obj.get("climax")), ts(obj.get("resolution_end"))
     pts = [p for p in (setup, climax, res) if p is not None]
     if pts != sorted(pts):
@@ -218,6 +221,16 @@ def parse_answer(obj: dict, frame_times: list[float], span: float) -> tuple[dict
         "reaction_linked": rl if isinstance(rl, bool) else None,
         "confidence": _num(obj.get("confidence"), 0, 1, 0.5),
     }, notes
+
+
+def _narrated(events: list[VisualEvent], frame_times: list[float]) -> bool:
+    """Small VLMs often list one "event" per shown frame, in order, from the first frame (t = 0.0, 7.0, 8.7 ...). Those
+    instants are a description of the frame sequence, not the moment of an event."""
+    if len(events) < 3 or len(frame_times) < 3:
+        return False
+    times = sorted(e.t for e in events)
+    shown = sorted(frame_times)[:len(times)]
+    return all(abs(a - b) <= 0.15 for a, b in zip(times, shown))
 
 
 def _dedupe_events(events: list[VisualEvent]) -> list[VisualEvent]:
