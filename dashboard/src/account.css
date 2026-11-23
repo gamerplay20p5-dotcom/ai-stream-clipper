@@ -1,24 +1,190 @@
-/* Subscriber area (/conta): same visual language as the library (flows.css) and the panel tokens */
-@layer components {
-  .account-main { @apply max-w-4xl; }
-  .account-card { @apply space-y-3 rounded-lg border border-suite-line bg-suite-panel p-5; }
-  .account-card-title { @apply text-lg font-semibold; }
-  .account-usage { @apply space-y-1.5; }
-  .account-bar { @apply h-2 overflow-hidden rounded-full bg-suite-raised; }
-  .account-bar > span { @apply block h-full rounded-full bg-take transition-[width] duration-300; }
-  .account-bar > span[data-full] { @apply bg-tally; }
-  .account-plans { @apply mt-4 grid gap-2 sm:grid-cols-3; }
-  .account-channels { @apply divide-y divide-suite-line; }
-  .account-channels > li { @apply flex items-center gap-3 py-3; }
-  .account-channels > li > div { @apply flex-1; }
-  .account-add { @apply space-y-1.5 pt-2; }
-  .account-table { @apply w-full text-left text-sm; }
-  .account-table th { @apply border-b border-suite-line pb-2 font-medium text-ink-muted; }
-  .account-table td { @apply border-b border-suite-line py-2; }
-  .segmented { @apply inline-flex gap-1 rounded-md border border-suite-line bg-suite-raised p-1; }
-  .segmented > button { @apply min-h-9 rounded px-3 text-xs font-semibold text-ink-muted; }
-  .segmented > button[aria-pressed="true"] { @apply bg-suite-panel text-ink ring-1 ring-take; }
+/* Subscriber area (/conta): the Clipper brand of the commercial site (customer-brand.css tokens), not the operator suite */
+@import "@fontsource-variable/space-grotesk";
+@import "./customer-brand.css";
+
+.customer-area {
+  min-height: 100dvh;
+  color: var(--ink-1);
+  background:
+    radial-gradient(ellipse 70% 40% at 85% -10%, rgb(129 86 255 / 16%), transparent 70%),
+    radial-gradient(ellipse 50% 30% at 0% 0%, rgb(255 79 98 / 10%), transparent 70%),
+    var(--night-1);
+}
+.customer-area :focus-visible { outline: 2px solid var(--coral-hi); outline-offset: 3px; }
+
+/* Top bar: compact, never wider than the screen (labels collapse to icons on small screens) */
+.acct-topbar { background: rgb(9 11 20 / 82%); border-bottom-color: var(--line-1); backdrop-filter: blur(10px); }
+.acct-nav { display: flex; min-width: 0; align-items: center; gap: 4px; }
+.acct-navlink { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; min-width: 40px; justify-content: center; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-1);
+  color: var(--ink-2); font-size: .875rem; font-weight: 600; background: none; transition: color var(--dur-2), background-color var(--dur-2), border-color var(--dur-2); }
+.acct-navlink:hover { color: var(--ink-1); background: rgb(255 255 255 / 5%); border-color: var(--line-1); }
+.acct-email { max-width: 220px; overflow: hidden; padding: 0 8px; color: var(--ink-3); font-size: .8rem; white-space: nowrap; text-overflow: ellipsis; }
+
+.acct-main { width: 100%; max-width: 1180px; margin: 0 auto; padding: 28px clamp(16px, 3vw, 32px) 56px; display: grid; gap: 20px; }
+.acct-main:focus { outline: none; }
+.acct-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 20px; }
+.acct-h1 { font: 700 clamp(1.75rem, 3vw, 2.35rem)/1.05 var(--font-display); letter-spacing: -.035em; }
+.acct-h2 { font: 700 clamp(1.35rem, 2.2vw, 1.7rem)/1.15 var(--font-display); letter-spacing: -.03em; }
+.acct-h3 { display: flex; align-items: center; gap: 8px; font: 650 1.05rem/1.25 var(--font-display); letter-spacing: -.01em; }
+.acct-h3 svg { color: var(--coral); }
+.acct-sub { margin-top: 6px; color: var(--ink-3); font-size: .95rem; }
+.acct-text { color: var(--ink-2); font-size: .94rem; line-height: 1.55; }
+.acct-help { color: var(--ink-3); font-size: .8rem; line-height: 1.45; }
+.acct-kicker { color: var(--ink-3); font-size: .8rem; font-weight: 600; }
+
+.acct-status { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--night-2); font-size: .82rem; font-weight: 650; }
+.acct-status i { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); }
+.acct-status[data-tone='active'] { border-color: rgb(123 224 165 / 40%); }
+.acct-status[data-tone='active'] i { background: #7be0a5; box-shadow: 0 0 0 4px rgb(123 224 165 / 15%); }
+.acct-status[data-tone='warning'] { border-color: rgb(255 176 87 / 45%); }
+.acct-status[data-tone='warning'] i { background: var(--sunset); box-shadow: 0 0 0 4px rgb(255 176 87 / 15%); }
+.acct-status[data-tone='ended'] i { background: var(--coral); }
+
+/* Cards and entrance (one short rise, nothing loops) */
+@keyframes acct-rise { from { opacity: 0; transform: translate3d(0, 12px, 0); } }
+.acct-card, .acct-summary, .acct-plans { animation: acct-rise var(--dur-4) var(--ease-out) both; }
+.acct-card { display: grid; gap: 14px; align-content: start; padding: clamp(18px, 2.2vw, 26px); border: 1px solid var(--line-1); border-radius: var(--radius-3);
+  background: linear-gradient(180deg, rgb(22 26 44 / 70%), rgb(12 15 28 / 90%)); box-shadow: var(--shadow-1); }
+.acct-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.acct-count { color: var(--ink-3); font: 600 .8rem/1 var(--font-mono); }
+.acct-columns { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+.acct-columns:empty { display: none; }
+
+/* Summary: plan, status and renewal facts */
+.acct-summary { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 20px 32px; align-items: end; padding: clamp(20px, 3vw, 32px);
+  border: 1px solid var(--line-2); border-radius: var(--radius-4); background: linear-gradient(120deg, rgb(255 255 255 / 4%), transparent 60%), var(--night-2); box-shadow: var(--shadow-2); }
+.acct-summary.acct-plan-creator { border-color: rgb(255 79 98 / 45%); background: linear-gradient(120deg, rgb(255 79 98 / 14%), transparent 55%), var(--night-2); }
+.acct-summary.acct-plan-pro { border-color: rgb(129 86 255 / 50%); background: linear-gradient(120deg, rgb(129 86 255 / 18%), transparent 55%), var(--night-2); }
+.acct-summary-main { display: grid; gap: 8px; }
+.acct-plan-title { font: 700 clamp(2.2rem, 4.5vw, 3.2rem)/1 var(--font-display); letter-spacing: -.045em; }
+.acct-facts { display: grid; gap: 10px; }
+.acct-facts div { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 10px; border-bottom: 1px solid var(--line-1); }
+.acct-facts div:last-child { border-bottom: 0; padding-bottom: 0; }
+.acct-facts dt { color: var(--ink-3); font-size: .85rem; }
+.acct-facts dd { margin: 0; color: var(--ink-1); font-size: .9rem; font-weight: 600; text-align: right; }
+
+/* Usage meters */
+.acct-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.acct-meter { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--line-1); border-radius: var(--radius-2); background: rgb(5 6 11 / 35%); }
+.acct-meter-label { color: var(--ink-3); font-size: .82rem; font-weight: 600; }
+.acct-meter-value { display: flex; align-items: baseline; gap: 6px; }
+.acct-meter-value b { font: 700 1.6rem/1 var(--font-display); letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.acct-meter-value span { color: var(--ink-3); font-size: .82rem; }
+.acct-bar { height: 6px; overflow: hidden; border-radius: 3px; background: var(--night-4); }
+.acct-bar > span { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--violet), var(--coral)); transform-origin: left; transition: transform 900ms var(--ease-out); }
+.acct-bar > span[data-full] { background: var(--sunset); }
+
+/* Plan picker */
+.acct-plans { display: grid; gap: 18px; }
+.acct-plans-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.acct-segmented { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line-2); border-radius: var(--radius-1); background: var(--night-0); }
+.acct-segmented button { min-width: 56px; min-height: 38px; padding: 0 12px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--ink-3); font-size: .8rem; font-weight: 700;
+  transition: color var(--dur-2), background-color var(--dur-2), border-color var(--dur-2); }
+.acct-segmented button:hover { color: var(--ink-1); }
+.acct-segmented button[aria-pressed='true'] { color: var(--ink-1); background: var(--night-3); border-color: rgb(255 79 98 / 60%); }
+.acct-method { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border: 1px solid var(--line-1); border-radius: var(--radius-2); background: rgb(5 6 11 / 35%); }
+.acct-method svg { flex: 0 0 auto; margin-top: 2px; color: var(--sunset); }
+.acct-method p { display: grid; gap: 2px; }
+.acct-method strong { font-size: .92rem; }
+.acct-method span { color: var(--ink-3); font-size: .86rem; line-height: 1.45; }
+
+.acct-plan-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.acct-plan { position: relative; display: grid; align-content: start; gap: 10px; width: 100%; padding: 22px 20px 20px; border: 1px solid var(--line-2); border-radius: var(--radius-3);
+  background: linear-gradient(180deg, rgb(22 26 44 / 80%), rgb(12 15 28 / 95%)); color: inherit; font: inherit; text-align: left; cursor: pointer;
+  transition: transform var(--dur-3) var(--ease-out), border-color var(--dur-2), box-shadow var(--dur-3) var(--ease-out); }
+.acct-plan:hover { transform: translateY(-3px); border-color: rgb(255 255 255 / 22%); }
+.acct-plan[aria-checked='true'] { border-color: var(--coral); box-shadow: 0 0 0 1px var(--coral), var(--glow-action); }
+.acct-plan-pro { background: linear-gradient(180deg, rgb(129 86 255 / 14%), rgb(12 15 28 / 95%) 45%); }
+.acct-plan-creator { background: linear-gradient(180deg, rgb(255 79 98 / 10%), rgb(12 15 28 / 95%) 45%); }
+.acct-plan-badge { position: absolute; top: 0; left: 20px; translate: 0 -50%; padding: 3px 10px; border-radius: 999px; background: var(--coral); color: var(--on-coral-small); font-size: .72rem; font-weight: 800; }
+.acct-plan-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.acct-plan-name { font: 700 1.35rem/1.1 var(--font-display); letter-spacing: -.03em; }
+.acct-plan-radio { display: grid; place-items: center; width: 22px; height: 22px; border: 1.5px solid var(--line-2); border-radius: 50%; color: transparent; transition: background-color var(--dur-2), border-color var(--dur-2), transform var(--dur-3) var(--ease-pop); }
+.acct-plan[aria-checked='true'] .acct-plan-radio { border-color: var(--coral); background: var(--coral); color: var(--on-coral-small); transform: scale(1.08); }
+.acct-plan-tagline { color: var(--ink-3); font-size: .86rem; }
+.acct-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-top: 4px; }
+.acct-price b { font: 700 clamp(1.7rem, 2.6vw, 2.1rem)/1 var(--font-display); letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.acct-price s { color: var(--ink-3); font-size: .95rem; }
+.acct-price span { color: var(--ink-3); font-size: .85rem; }
+.acct-price-note { color: var(--coral-hi); font-size: .8rem; font-weight: 600; }
+.acct-plan-features { display: grid; gap: 7px; margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line-1); }
+.acct-plan-features span { display: grid; grid-template-columns: 16px 1fr; gap: 8px; color: var(--ink-2); font-size: .85rem; line-height: 1.35; }
+.acct-plan-features svg { margin-top: 2px; color: var(--coral); }
+
+/* Checkout strip: coupon, the price that will be charged and the action */
+.acct-checkout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 12px 28px; align-items: start; padding: clamp(18px, 2.4vw, 26px);
+  border: 1px solid var(--line-2); border-radius: var(--radius-3); background: var(--night-2); }
+.acct-pay-panel { display: grid; gap: 12px; }
+.acct-coupon { display: grid; gap: 8px; }
+.acct-coupon label, .acct-add label { font-size: .85rem; font-weight: 650; }
+.acct-coupon-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.acct-coupon-row .acct-input { flex: 1 1 160px; }
+.acct-coupon-ok { display: flex; align-items: center; gap: 6px; color: #7be0a5; font-size: .85rem; font-weight: 600; animation: acct-rise var(--dur-3) var(--ease-out) both; }
+.acct-coupon-error { color: var(--coral-hi); font-size: .85rem; font-weight: 600; animation: acct-rise var(--dur-3) var(--ease-out) both; }
+.acct-summary-line { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 2px 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line-1); }
+.acct-summary-line span:first-child { color: var(--ink-2); font-size: .92rem; font-weight: 600; }
+.acct-summary-line b { font: 700 1.5rem/1 var(--font-display); letter-spacing: -.03em; }
+.acct-summary-line .acct-help { grid-column: 1 / -1; text-align: right; }
+
+/* Controls */
+.acct-input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: var(--radius-1); background: var(--night-0); color: var(--ink-1); font-size: .95rem; }
+.acct-input:hover { border-color: #4a5280; }
+.acct-input:focus-visible { border-color: var(--coral); outline: 2px solid rgb(255 79 98 / 35%); outline-offset: 1px; }
+#coupon, #recurring-code { font-family: var(--font-mono); text-transform: uppercase; }
+.acct-select { width: auto; min-height: 34px; padding-right: 28px; font-size: .82rem; }
+.acct-btn-primary, .acct-btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 46px; padding: 0 18px; border-radius: var(--radius-1);
+  font: 700 .95rem/1.2 var(--font-body); white-space: nowrap; transition: background-color var(--dur-2), border-color var(--dur-2), transform var(--dur-1), box-shadow var(--dur-2); }
+.acct-btn-primary { border: 1px solid transparent; background: var(--coral); color: var(--on-coral-small); box-shadow: inset 0 1px 0 rgb(255 255 255 / 20%), var(--glow-action); }
+.acct-btn-primary:hover:not(:disabled) { background: #ff6474; transform: translateY(-1px); }
+.acct-btn-secondary { border: 1px solid var(--line-2); background: transparent; color: var(--ink-1); }
+.acct-btn-secondary:hover:not(:disabled) { border-color: var(--coral); background: var(--coral-wash); }
+.acct-btn-primary:active, .acct-btn-secondary:active { transform: translateY(1px); }
+.acct-btn-primary:disabled, .acct-btn-secondary:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
+.acct-checkout .acct-btn-primary { width: 100%; min-height: 52px; font-size: 1.02rem; }
+@keyframes acct-spin { to { transform: rotate(360deg); } }
+.acct-spin { animation: acct-spin 900ms linear infinite; }
+
+/* Channels, renewal and history */
+.acct-channels { display: grid; }
+.acct-channels > li { display: flex; align-items: flex-start; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line-1); }
+.acct-channels > li:first-child { border-top: 0; padding-top: 0; }
+.acct-channel-dot { flex: 0 0 auto; width: 10px; height: 10px; margin-top: 6px; border-radius: 50%; background: var(--line-2); }
+.acct-channel-dot[data-live] { background: var(--coral); box-shadow: 0 0 0 4px var(--coral-wash); }
+.acct-channel-body { display: grid; flex: 1; min-width: 0; gap: 4px; }
+.acct-channel-name { overflow: hidden; font-size: .95rem; font-weight: 650; white-space: nowrap; text-overflow: ellipsis; }
+.acct-channel-name span { color: var(--ink-3); font-size: .78rem; font-weight: 500; }
+.acct-preset { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 4px; color: var(--ink-3); font-size: .78rem; }
+.acct-add { display: grid; gap: 8px; padding-top: 4px; }
+.acct-recurring { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line-1); }
+.acct-recurring-preview { display: grid; gap: 10px; justify-items: start; color: var(--ink-2); font-size: .9rem; }
+.acct-table-wrap { overflow-x: auto; }
+.acct-table { width: 100%; border-collapse: collapse; text-align: left; font-size: .9rem; }
+.acct-table th { padding: 0 12px 10px 0; border-bottom: 1px solid var(--line-1); color: var(--ink-3); font-weight: 600; }
+.acct-table td { padding: 12px 12px 12px 0; border-bottom: 1px solid var(--line-1); }
+.acct-table tr:last-child td { border-bottom: 0; }
+.acct-pay { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.acct-pay::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
+.acct-pay[data-status='paid']::before { background: #7be0a5; }
+.acct-pay[data-status='payment_failed']::before { background: var(--coral); }
+.acct-footer { display: flex; gap: 20px; padding-top: 8px; color: var(--ink-3); font-size: .8rem; }
+
+@media (max-width: 1080px) {
+  .acct-plan-grid { grid-template-columns: 1fr; }
+  .acct-plan-features { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 900px) {
+  .acct-columns, .acct-summary { grid-template-columns: 1fr; }
+  .acct-email { display: none; }
+  .acct-checkout { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .acct-navlink { padding: 0 10px; }
+  .acct-navlink span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .acct-plan-features { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .account-bar > span { transition: none; }
+  .acct-card, .acct-summary, .acct-plans, .acct-coupon-ok, .acct-coupon-error { animation: none; }
+  .acct-plan, .acct-bar > span, .acct-plan-radio { transition: none; }
+  .acct-plan:hover, .acct-btn-primary:hover:not(:disabled) { transform: none; }
 }
+#coupon::placeholder, #recurring-code::placeholder { text-transform: none; font-family: var(--font-body); }

@@ -9,6 +9,8 @@ WORKDIR /src
 COPY dashboard/package.json dashboard/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY dashboard/ ./
+# Plans and prices shown in the subscriber area come from the same catalog the commercial service sells from
+COPY commercial/catalog.json /commercial/catalog.json
 RUN npm run build
 
 # ---------- runtime ----------

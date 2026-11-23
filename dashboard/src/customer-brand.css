@@ -1,0 +1,47 @@
+/* Clipper brand tokens for the subscriber area (/conta), scoped so the HTS operator panel keeps its own look.
+   IDENTICAL values to commercial/src/tokens.css (tests/test_brand_tokens.py compares both files). */
+.customer-area {
+  /* Night */
+  --night-0: #05060b;
+  --night-1: #090b14;
+  --night-2: #0f1220;
+  --night-3: #161a2c;
+  --night-4: #1f2440;
+  --line-1: #23283f;
+  --line-2: #343a5c;
+  /* Light */
+  --ink-1: #f4f5fa;
+  --ink-2: #ccd0df;
+  --ink-3: #9ba1b9;
+  /* Action and accents */
+  --coral: #ff4f62;
+  --coral-hi: #ff8a97;
+  --coral-deep: #e23a4f;
+  --on-coral: #ffffff;
+  --on-coral-small: #1a0609;
+  --magenta: #e2418c;
+  --violet: #8156ff;
+  --sunset: #ffb057;
+  --coral-wash: rgb(255 79 98 / 12%);
+  --violet-wash: rgb(129 86 255 / 16%);
+  /* Type */
+  --font-display: 'Space Grotesk Variable', system-ui, sans-serif;
+  --font-body: 'Instrument Sans Variable', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'SF Mono', monospace;
+  /* Shape and depth */
+  --radius-1: 8px;
+  --radius-2: 12px;
+  --radius-3: 18px;
+  --radius-4: 26px;
+  --shadow-1: 0 1px 0 rgb(255 255 255 / 5%) inset, 0 18px 40px -28px rgb(0 0 0 / 90%);
+  --shadow-2: 0 1px 0 rgb(255 255 255 / 6%) inset, 0 40px 80px -40px rgb(0 0 0 / 95%);
+  --glow-action: 0 14px 34px -16px rgb(255 79 98 / 70%);
+  /* Motion: short for feedback, longer only for the hero sequence and section entrances */
+  --dur-1: 140ms;
+  --dur-2: 240ms;
+  --dur-3: 420ms;
+  --dur-4: 720ms;
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --ease-pop: cubic-bezier(.34, 1.36, .64, 1);
+}
