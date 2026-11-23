@@ -18,24 +18,30 @@ Policy (checked on the *resolved* compose config, which is then the exact file e
   * 212 (dedicated database host, shared with other projects): ONLY the asc PostgreSQL, published
     only on 192.168.1.212:55432, client access limited by its own pg_hba (the 210 API host)
   * every service declares CPU and memory limits
+  * bench-pr31 on 201 runs one separately labelled sandbox with pinned inputs and no network
 Never runs `docker system prune`, `down -v`, or anything on other projects.
 """
 
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import posixpath
 import re
 import shutil
+import stat
 import subprocess
 import time
 import sys
 import tarfile
 import tempfile
+from contextlib import contextmanager
+from pathlib import Path, PurePosixPath
+from uuid import uuid4
 
-VERSION = "1.3.1"  # 1.2.1: ASC_PUBLIC_ORIGIN; 1.2.2: restore-check; 1.3.0: commercial site (image, port 8790, settings); 1.3.1: COMMERCIAL_PAYMENTS_OPEN, _TEST_ACCOUNTS, COMMERCIAL_LEGAL_PUBLISHED, ASC_SIGNUP_OPEN, _ALLOWED_EMAILS, ASC_API_TAG
+VERSION = "1.4.0"  # 1.3.1: commercial settings; 1.4.0: isolated bench-pr31 on 201
 CONF_FILE = "/etc/asc/asc-ctl.conf"
 ENV_FILE = "/etc/asc/asc.env"
 LOG_FILE = "/var/log/asc-ctl.log"
@@ -678,6 +684,659 @@ def cmd_gpu_validate(conf: dict, args: list[str]) -> int:
     return rc
 
 
+# --------------------------------------------------------------------------- PR #31 replay on 201
+
+
+PR31_ROOT = Path("/home/asc/bench/pr31")
+PR31_STATE = Path("/var/lib/asc-ctl/pr31")
+PR31_DOCKER_CONFIG = PR31_STATE / "docker-cli"
+PR31_AUDIO = PR31_STATE / "audio"
+PR31_AUDIO_REVISION = "536b0662742c02347bc0e980a01041f333bce120"
+PR31_AUDIO_FILES = {
+    "config.json": "b55496ac7940a7ae47d2c01eab40edfd8701feec1229d9cce3b40014383fb828",
+    "model.bin": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671",
+    "tokenizer.json": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+    "vocabulary.txt": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+}
+PR31_AUDIO_VERSIONS = {
+    "faster-whisper": "1.2.1", "ctranslate2": "4.6.3", "av": "15.1.0", "onnxruntime": "1.23.2",
+    "coloredlogs": "15.0.1", "humanfriendly": "10.0", "flatbuffers": "25.9.23",
+    "protobuf": "6.33.5", "sympy": "1.14.0", "mpmath": "1.3.0",
+}
+PR31_MODELS = Path("/opt/asc/models")
+PR31_DEVICE = Path("/dev/dri/renderD128")
+PR31_LABEL = "com.asc.bench=pr31-201"
+PR31_COMMIT = "33f3e00953c35dfcaf301a086aaf75b1743e31e0"
+# SHA256 of sorted UTF-8 relative path + NUL + raw SHA256 of each tracked backend/clipper file.
+PR31_PACKAGE_SHA = "9e012ef2adfd43f13c61972c330fce9a21ff30ba65d23e30d37f1c0a32dd3a46"
+PR31_TIMEOUT = 3600
+PR31_CHECK_TIMEOUT = 300
+GIB = 1024 ** 3
+MIB = 1024 ** 2
+CONTAINER_ID = re.compile(r"[a-f0-9]{64}")
+BENCH_DOCKER_ENV = {"PATH": SAFE_PATH, "HOME": "/root", "LC_ALL": "C"}
+PR31_PYTHONPATH = "/pr31/backend"
+
+# Runs with the container UID on the pinned tree. No code from the input directory is imported.
+PR31_ENTRY = f"AUDIO_VERSIONS = {PR31_AUDIO_VERSIONS!r}\n" + """
+import os
+import platform
+import sys
+import site
+from importlib import import_module, metadata
+from pathlib import Path
+
+if sys.argv[1:] == ["--check"]:
+    os.dup2(1, 2)  # include loader errors in the check's bounded Docker log tail
+if sys.version_info[:2] != (3, 12) or platform.machine() != "x86_64":
+    raise SystemExit("the offline audio bundle requires Linux x86-64 and Python 3.12")
+# Keep the reviewed backend and standard library first. Never execute bundle .pth files.
+audio_site = Path("/pr31/audio/site")
+sys.path.insert(min(i for i, p in enumerate(sys.path) if p in site.getsitepackages()), str(audio_site))
+for distribution, expected in AUDIO_VERSIONS.items():
+    dist = metadata.distribution(distribution)
+    if dist.version != expected or Path(dist.locate_file("")).resolve() != audio_site:
+        raise SystemExit(f"unexpected offline audio package: {distribution} (expected {expected})")
+for name in ("av", "ctranslate2", "onnxruntime", "faster_whisper"):
+    if not Path(import_module(name).__file__).resolve().is_relative_to(audio_site):
+        raise SystemExit(f"offline audio module imported outside bundle: {name}")
+
+import clipper
+from clipper import media
+from clipper.ai.registry import is_installed
+from clipper.bench import replay
+from clipper.config import reset_settings_cache
+
+backend = Path("/pr31/backend")
+if os.getenv("PYTHONPATH") != str(backend) or (
+    Path(clipper.__file__).resolve() != backend / "clipper/__init__.py"
+    or Path(replay.__file__).resolve() != backend / "clipper/bench/replay.py"
+):
+    raise SystemExit("PR #31 PYTHONPATH mismatch")
+editorial = Path("/inputs/editorial.json")
+cfg, _ = replay._editorial_settings(editorial, None, None)
+if cfg.min_score != 75 or cfg.whisper_model != "small":
+    raise SystemExit("editorial settings must use min_score=75 and whisper_model=small")
+manifest = Path("/inputs/annotations.json")
+cases = replay.Manifest.model_validate_json(manifest.read_text())
+media_files = {Path("/inputs") / f for c in cases.videos for f in
+               ([c.video] if c.video else [s.file for s in c.segments])}
+for file in sorted(media_files):
+    info = media.probe_sync(file)
+    if media.video_stream(info) is None:
+        raise SystemExit("a benchmark input has no video stream")
+os.environ["ASC_MODELS_DIR"] = "/models"
+reset_settings_cache()
+if not is_installed(cfg.vision_model):
+    raise SystemExit("configured VLM files missing from /models")
+if sys.argv[1:] == ["--check"]:
+    from faster_whisper import WhisperModel
+    WhisperModel("small", device="cpu", compute_type="int8", cpu_threads=4, local_files_only=True)
+    print("PR #31 offline audio and input preflight OK", flush=True)
+    raise SystemExit(0)
+import openvino
+if not os.access("/dev/dri/renderD128", os.R_OK | os.W_OK) or "GPU" not in openvino.Core().available_devices:
+    raise SystemExit("Intel GPU is not accessible to the replay user or OpenVINO")
+print("PR #31 replay preflight OK", flush=True)
+raise SystemExit(replay.main([str(manifest), "--settings", str(editorial), "--models-dir", "/models",
+                               "--device", "GPU", "--out", "/result/comparison.json"]))
+"""
+
+
+def _bench_docker(*args: str, timeout: float = 8) -> str:
+    try:
+        result = subprocess.run([DOCKER, "--config", str(PR31_DOCKER_CONFIG),
+                                 "--host", "unix:///var/run/docker.sock", *args],
+                                env=BENCH_DOCKER_ENV, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=timeout, check=True)
+    except (subprocess.SubprocessError, OSError) as exc:
+        raise Denied(f"local Docker {args[0]} failed or timed out") from exc
+    return result.stdout.strip()
+
+
+def _bench_trusted_dir(path: Path, *, create: bool = False) -> None:
+    """Check canonical host paths with immutable root-owned ancestors before passing them to Docker."""
+    for part in (*reversed(path.parents), path):
+        if create and part in (PR31_STATE.parent, PR31_STATE, PR31_DOCKER_CONFIG):
+            part.mkdir(mode=0o700, exist_ok=True)
+        st = part.lstat()
+        needs_root = create or part != path
+        if not stat.S_ISDIR(st.st_mode) or (needs_root and (st.st_uid or st.st_mode & 0o022)):
+            raise Denied("benchmark mount path has an unsafe ancestor or is not a real directory")
+
+
+@contextmanager
+def _bench_open_dir(parent: int | None, parts: tuple[str, ...], *, input_uid: int | None = None):
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.dup(parent) if parent is not None else os.open("/", flags)
+    try:
+        for name in parts:
+            nxt = os.open(name, flags, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+            if input_uid is not None:
+                st = os.fstat(fd)
+                if not ((st.st_uid == input_uid and st.st_mode & 0o500 == 0o500) or
+                        (st.st_uid == 0 and st.st_mode & 0o005 == 0o005)):
+                    raise Denied("benchmark input directory must be accessible to asc")
+        yield fd
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _bench_regular(parent: int, name: str, uid: int, size_limit: int):
+    # O_PATH pins the inode without opening a FIFO or device before checking its type.
+    fd = os.open(name, os.O_PATH | os.O_NOFOLLOW, dir_fd=parent)
+    try:
+        st = os.fstat(fd)
+        readable = (st.st_uid == uid and st.st_mode & stat.S_IRUSR) or (
+            st.st_uid == 0 and st.st_mode & stat.S_IROTH)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or not readable or st.st_size > size_limit:
+            raise Denied("benchmark input must be a readable, bounded regular file without hard links")
+        with open(f"/proc/self/fd/{fd}", "rb") as source:
+            yield source, st.st_size
+    finally:
+        os.close(fd)
+
+
+def _bench_present(parent: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _bench_json(parent: int, names: tuple[str, ...], uid: int, size_limit: int = MIB) -> dict:
+    present = [name for name in names if _bench_present(parent, name)]
+    if len(present) != 1:
+        raise Denied(f"prepare exactly one of {', '.join(names)}")
+    with _bench_regular(parent, present[0], uid, size_limit) as (source, _):
+        raw = source.read(size_limit + 1)
+    if len(raw) > size_limit:
+        raise Denied("benchmark JSON exceeds its size limit")
+    value = json.loads(raw.decode("utf-8-sig"))
+    if not isinstance(value, dict):
+        raise Denied("benchmark JSON must be an object")
+    return value
+
+
+def _bench_score(config: dict) -> None:
+    if type(config.get("min_score")) not in (int, float) or config["min_score"] != 75:
+        raise Denied("the editorial export must contain numeric min_score=75")
+    if config.get("whisper_model") != "small":
+        raise Denied("the editorial export must contain whisper_model=small")
+
+
+def _bench_audio(deadline: float) -> None:
+    _bench_trusted_dir(PR31_AUDIO)
+
+    def inspect(path: Path) -> None:
+        st = path.lstat()
+        if time.monotonic() >= deadline:
+            raise Denied("offline audio validation exceeded the deadline")
+        if not (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)):
+            raise Denied("offline audio may contain only real directories and regular files")
+        if st.st_uid != 0 or st.st_mode & 0o022:
+            raise Denied("offline audio must be owned by root without group or other write access")
+        if stat.S_ISDIR(st.st_mode):
+            for child in path.iterdir():
+                inspect(child)
+
+    inspect(PR31_AUDIO)
+    if {p.name for p in PR31_AUDIO.iterdir()} != {"site", "hub"} or not (PR31_AUDIO / "site").is_dir():
+        raise Denied("offline audio requires fixed site and hub directories")
+    repo = PR31_AUDIO / "hub/models--Systran--faster-whisper-small"
+    revision = repo / "refs/main"
+    if revision.stat().st_size != len(PR31_AUDIO_REVISION) or revision.read_bytes() != PR31_AUDIO_REVISION.encode():
+        raise Denied("unexpected offline Whisper small revision")
+    snapshot = repo / "snapshots" / PR31_AUDIO_REVISION
+    if {p.name for p in snapshot.iterdir()} != PR31_AUDIO_FILES.keys():
+        raise Denied("incomplete or unexpected offline Whisper small snapshot")
+    for name, expected in PR31_AUDIO_FILES.items():
+        digest = hashlib.sha256()
+        with (snapshot / name).open("rb") as source:
+            while chunk := source.read(MIB):
+                if time.monotonic() >= deadline:
+                    raise Denied("offline audio validation exceeded the deadline")
+                digest.update(chunk)
+        if digest.hexdigest() != expected:
+            raise Denied(f"unexpected offline Whisper small file: {name}")
+
+
+def _bench_media_path(value: str) -> PurePosixPath:
+    if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
+        raise Denied("invalid benchmark media path")
+    path = PurePosixPath(value)
+    if path.is_absolute():
+        try:
+            path = path.relative_to(PurePosixPath(PR31_ROOT.as_posix()))
+        except ValueError:
+            raise Denied("media must be below /home/asc/bench/pr31") from None
+    if (not path.parts or len(path.parts) > 6 or
+            any(p in (".", "..") or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", p) for p in path.parts) or
+            path.parts[0] in {"src", "checkout", "code", "backend", "models", "out"} or
+            path.suffix.lower() not in {".ts", ".mp4", ".mkv", ".mov", ".webm"}):
+        raise Denied("media must be a video file inside the prepared input tree")
+    return path
+
+
+def _bench_manifest(manifest: dict) -> list[PurePosixPath]:
+    videos = manifest.get("videos")
+    if not isinstance(videos, list) or not 1 <= len(videos) <= 32:
+        raise Denied("manifest must contain between 1 and 32 videos")
+    paths = set()
+    for case in videos:
+        if not isinstance(case, dict) or bool(case.get("video")) == bool(case.get("segments")):
+            raise Denied("each manifest case needs exactly one video or segment list")
+        if case.get("video"):
+            path = _bench_media_path(case["video"])
+            paths.add(path)
+            case["video"] = path.as_posix()
+            continue
+        segments = case["segments"]
+        if not isinstance(segments, list) or len(segments) > 64:
+            raise Denied("invalid manifest segment list")
+        for segment in segments:
+            if not isinstance(segment, dict):
+                raise Denied("invalid manifest segment")
+            path = _bench_media_path(segment.get("file"))
+            if path.suffix.lower() != ".ts":
+                raise Denied("archived segments must be .ts")
+            paths.add(path)
+            segment["file"] = path.as_posix()
+    if len(paths) > 64:
+        raise Denied("manifest exceeds 64 distinct media files")
+    return sorted(paths)
+
+
+def _bench_package(source: int, dest: Path, uid: int, deadline: float) -> None:
+    options = [(prefix, "backend", "clipper") for prefix in ("src", "checkout", "code")
+               if _bench_present(source, prefix)]
+    if _bench_present(source, "backend"):
+        options.append(("backend", "clipper"))
+    if len(options) != 1:
+        raise Denied("prepare exactly one PR #31 backend checkout")
+    hashes = {}
+    remaining = 32 * MIB
+    entries = 0
+
+    def snapshot(fd: int, output: Path, depth: int = 0) -> None:
+        nonlocal remaining, entries
+        if depth > 8:
+            raise Denied("unexpected directory in the PR #31 package")
+        output.mkdir()
+        output.chmod(0o755)
+        with os.scandir(fd) as children:
+            for entry in children:
+                name = entry.name
+                if name == "__pycache__":
+                    continue
+                entries += 1
+                if entries > 512 or time.monotonic() >= deadline:
+                    raise Denied("PR #31 package exceeds replay limits")
+                child = output / name
+                if entry.is_dir(follow_symlinks=False):
+                    with _bench_open_dir(fd, (name,), input_uid=uid) as sub:
+                        snapshot(sub, child, depth + 1)
+                else:
+                    with _bench_regular(fd, name, uid, remaining) as (f, _):
+                        data = f.read(remaining + 1)
+                    if len(data) > remaining:
+                        raise Denied("PR #31 package exceeds replay limits")
+                    remaining -= len(data)
+                    child.write_bytes(data)
+                    child.chmod(0o644)
+                    hashes[child.relative_to(dest).as_posix()] = hashlib.sha256(data).digest()
+
+    with _bench_open_dir(source, options[0], input_uid=uid) as package:
+        snapshot(package, dest)
+    digest = hashlib.sha256()
+    for name, signature in sorted(hashes.items()):
+        digest.update(name.encode("utf-8") + b"\x00" + signature)
+    if digest.hexdigest() != PR31_PACKAGE_SHA:
+        raise Denied(f"backend must match the reviewed PR #31 commit {PR31_COMMIT}")
+
+
+def _bench_stage(source: int, staging: Path, uid: int, deadline: float) -> None:
+    editorial = _bench_json(source, ("editorial.json", "settings.json", "editorial-75.json", "settings-75.json"), uid)
+    _bench_score(editorial)
+    manifest = _bench_json(source, ("annotations.json", "manifest.json"), uid)
+    files = _bench_manifest(manifest)
+    backend = staging / "backend"
+    backend.mkdir()
+    backend.chmod(0o755)
+    _bench_package(source, backend / "clipper", uid, deadline)
+    inputs = staging / "inputs"
+    inputs.mkdir()
+    inputs.chmod(0o755)
+    for name, data in (("editorial.json", editorial), ("annotations.json", manifest)):
+        (inputs / name).write_text(json.dumps(data, allow_nan=False), encoding="utf-8")
+        (inputs / name).chmod(0o644)
+    remaining = 4 * GIB
+    t0 = time.monotonic()
+    nested_media = not _bench_present(source, "media")
+    for entry in files:
+        target = inputs
+        for component in entry.parts[:-1]:
+            target /= component
+            target.mkdir(exist_ok=True)
+            target.chmod(0o755)
+        target /= entry.name
+        source_parts = entry.parts[:-1]
+        if nested_media and entry.parts[0] == "media":
+            source_parts = ("bench", *source_parts)
+        with _bench_open_dir(source, source_parts, input_uid=uid) as parent:
+            with _bench_regular(parent, entry.name, uid, min(remaining, 2 * GIB)) as (f, size):
+                before = os.fstat(f.fileno())
+                with target.open("xb") as dst:
+                    left = size
+                    while left:
+                        data = f.read(min(left, MIB))
+                        if not data or time.monotonic() >= deadline:
+                            raise Denied("media changed or staging exceeded the replay deadline")
+                        dst.write(data)
+                        remaining -= len(data)
+                        left -= len(data)
+                        delay = (4 * GIB - remaining) / (32 * MIB) - (time.monotonic() - t0)
+                        if delay > 0:
+                            time.sleep(delay)
+                    if f.read(1) or os.fstat(f.fileno()).st_mtime_ns != before.st_mtime_ns:
+                        raise Denied("media changed during staging")
+        target.chmod(0o644)
+
+
+def _bench_gpu(conf: dict) -> tuple[str, set[int]]:
+    dev = PR31_DEVICE.lstat()
+    gid = conf.get("RENDER_GID", "")
+    if (not stat.S_ISCHR(dev.st_mode) or not gid.isdecimal() or int(gid) != dev.st_gid or
+            int(gid) == 0 or (dev.st_mode & 0o060) != 0o060):
+        raise Denied("render device or group permissions do not match the 201 configuration")
+    sys_device = Path("/sys/dev/char") / f"{os.major(dev.st_rdev)}:{os.minor(dev.st_rdev)}" / "device"
+    if (sys_device / "vendor").read_text().strip() != "0x8086":
+        raise Denied("the configured render device is not Intel")
+    nodes = {dev.st_rdev}
+    for node in (sys_device / "drm").iterdir():
+        if re.fullmatch(r"(?:card|renderD)[0-9]+", node.name):
+            peer = (PR31_DEVICE.parent / node.name).lstat()
+            if stat.S_ISCHR(peer.st_mode):
+                nodes.add(peer.st_rdev)
+    return gid, nodes
+
+
+def _bench_gpu_clients(nodes: set[int]) -> dict[int, str]:
+    """Match device numbers, including GPU device nodes created in Docker mount namespaces."""
+    clients = {}
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdecimal():
+            continue
+        try:
+            for fd in (proc / "fd").iterdir():
+                try:
+                    st = fd.stat()
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISCHR(st.st_mode) and st.st_rdev in nodes:
+                    clients[int(proc.name)] = os.readlink(proc / "ns/pid")
+                    break
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    return clients
+
+
+def _bench_capacity(*, starting: bool) -> None:
+    cpus = len(os.sched_getaffinity(0))
+    meminfo = Path("/proc/meminfo").read_text()
+    available = re.search(r"^MemAvailable:\s+(\d+)\s+kB$", meminfo, re.M)
+    if cpus < 6 or not available or int(available[1]) * 1024 < (16 if starting else 4) * GIB:
+        raise Denied("insufficient host CPU or available memory for the benchmark reserve")
+    if os.getloadavg()[0] > cpus - (4 if starting else 0):
+        raise Denied("host load no longer leaves enough capacity for other services")
+
+
+def _bench_host_address() -> None:
+    result = subprocess.run(["/usr/sbin/ip", "-j", "-4", "address", "show"],
+                            env=BENCH_DOCKER_ENV, capture_output=True, text=True, timeout=5, check=True)
+    if not any(row.get("local") == "192.168.1.201" for link in json.loads(result.stdout)
+               for row in link.get("addr_info", [])):
+        raise Denied("the 201 LAN address is not assigned to this host")
+
+
+BENCH_PEER = '{{.Id}} {{.State.Status}} {{with index .State "Health"}}{{.Status}}{{else}}none{{end}} {{.RestartCount}}'
+
+
+def _bench_peers(ids: list[str]) -> dict[str, str]:
+    if not all(CONTAINER_ID.fullmatch(cid) for cid in ids):
+        raise Denied("unexpected container ID in monitor")
+    if not ids:
+        return {}
+    lines = _bench_docker("inspect", "--type", "container", "-f", BENCH_PEER, *ids).splitlines()
+    states = {}
+    for line in lines:
+        cid, status, health, restarts = line.split()
+        states[cid] = f"{status} {health} {restarts}"
+    if states.keys() != set(ids):
+        raise Denied("Docker did not report every monitored peer")
+    return states
+
+
+def _bench_no_contention(nodes: set[int], namespace: str | None) -> int:
+    clients = _bench_gpu_clients(nodes)
+    if any(ns != namespace for ns in clients.values()):
+        raise Denied("the shared GPU has an external client")
+    return len(clients)
+
+
+def _bench_image() -> tuple[str, str]:
+    info = json.loads(_bench_docker("info", "--format", "{{json .}}"))
+    if (info.get("OSType") != "linux" or info.get("CgroupDriver") not in ("systemd", "cgroupfs") or
+            not all(info.get(k) is True for k in ("MemoryLimit", "SwapLimit", "CpuCfsQuota", "PidsLimit")) or
+            not any(s.startswith("name=seccomp") and "unconfined" not in s for s in info.get("SecurityOptions") or [])):
+        raise Denied("local Docker must enforce CPU, memory, swap, PID and seccomp limits")
+    if _bench_docker("ps", "-aq", "--filter", f"label={PR31_LABEL}"):
+        raise Denied("a PR #31 sandbox already exists; inspect it before another run")
+    fmt = ('{{.Id}} {{.Image}} {{.Config.Image}} {{.State.Status}} {{index .Config.Labels "com.docker.compose.project"}} '
+           '{{index .Config.Labels "com.docker.compose.service"}}')
+    worker, image, tag, status, project, service = _bench_docker("inspect", "--type", "container", "-f", fmt,
+                                                                "asc-worker-vision").split()
+    if (not re.fullmatch(r"sha256:[a-f0-9]{64}", image) or
+            not re.fullmatch(r"(?:docker\.io/library/)?ai-stream-clipper-vision:[A-Za-z0-9._-]{1,40}", tag) or
+            not CONTAINER_ID.fullmatch(worker) or (status, project, service) != ("running", "asc", "worker-vision")):
+        raise Denied("unexpected image, state or labels on the existing vision worker")
+    volumes = json.loads(_bench_docker("image", "inspect", "-f", "{{json .Config.Volumes}}", image))
+    if volumes:
+        raise Denied("vision image declares implicit volumes outside the benchmark mount list")
+    return image, worker
+
+
+def _bench_create(staging: Path, image: str, gid: str, name: str, seconds: int, *, check: bool = False) -> list[str]:
+    if not 1 <= seconds <= PR31_TIMEOUT - 5:
+        raise Denied("benchmark deadline exhausted")
+    args = ["create", "--pull", "never", "--name", name, "--label", PR31_LABEL, "--restart", "no", "--init",
+            "--user", f"{CONTAINER_UID}:{CONTAINER_UID}", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges:true", "--network", "none", "--read-only",
+            "--no-healthcheck", "--ipc", "private", "--cgroupns", "private",
+            "--cpus", "4", "--cpu-shares", "64", "--memory", "12g", "--memory-swap", "12g", "--pids-limit", "256",
+            "--log-driver", "local", "--log-opt", "max-size=2m", "--log-opt", "max-file=1",
+            "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=6g,mode=1777",
+            "--workdir", "/tmp",
+            "-e", f"PYTHONPATH={PR31_PYTHONPATH}", "-e", "HOME=/tmp", "-e", "TMPDIR=/tmp",
+            "-e", "HF_HUB_OFFLINE=1", "-e", "HF_HOME=/models/hf", "-e", "HF_HUB_CACHE=/pr31/audio/hub"]
+    mounts = [(staging / "backend", PR31_PYTHONPATH), (staging / "inputs", "/inputs"),
+              (PR31_MODELS, "/models"), (PR31_AUDIO, "/pr31/audio")]
+    if not check:
+        args += ["--group-add", gid, "--device", f"{PR31_DEVICE}:{PR31_DEVICE}:rw"]
+        mounts.append((staging / "result", "/result"))
+    for host, dest in mounts:
+        mount = f"type=bind,source={host},target={dest},bind-propagation=rprivate,bind-recursive=disabled"
+        args += ["--mount", mount + (",readonly" if dest != "/result" else "")]
+    return args + ["--entrypoint", "/usr/bin/timeout", image, "--kill-after=5s", f"{seconds}s",
+                   "/opt/asc/bin/python3", "-s", "-B", "-u", "-c", PR31_ENTRY] + (["--check"] if check else [])
+
+
+def _bench_watch(cid: str, peers: dict[str, str], nodes: set[int] | None, deadline: float, record: dict) -> int:
+    while time.monotonic() < deadline:
+        status, pid, rc = _bench_docker("inspect", "--type", "container", "-f",
+                                        "{{.State.Status}} {{.State.Pid}} {{.State.ExitCode}}", cid).split()
+        if _bench_peers(list(peers)) != peers:
+            raise Denied("a peer container changed state, health or restart count")
+        _bench_capacity(starting=False)
+        if shutil.disk_usage(PR31_STATE).free < 4 * GIB:
+            raise Denied("free staging disk space fell below the host reserve")
+        if nodes is not None:
+            namespace = None
+            if pid.isdecimal() and int(pid):
+                try:
+                    namespace = os.readlink(f"/proc/{pid}/ns/pid")
+                except FileNotFoundError:
+                    pass  # the replay may have exited between Docker inspect and this read
+            count = _bench_no_contention(nodes, namespace)
+            record["peak_gpu_clients"] = max(record.get("peak_gpu_clients", 0), count)
+        record["samples"] += 1
+        if status in ("exited", "dead"):
+            return int(rc)
+        if status != "running":
+            raise Denied("benchmark container is no longer running")
+        time.sleep(min(2, max(0, deadline - time.monotonic())))
+    raise Denied("benchmark reached its time limit")
+
+
+def _bench_publish(out_fd: int, name: str, data: dict, uid: int, gid: int) -> None:
+    raw = json.dumps(data, ensure_ascii=True, indent=2, allow_nan=False) + "\n"
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=out_fd)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(raw)
+        f.flush()
+        os.fchown(f.fileno(), uid, gid)
+
+
+def cmd_bench_pr31(conf: dict, args: list[str]) -> int:
+    if conf["SERVER"] != "201" or conf["LAN_IP"] != "192.168.1.201":
+        raise Denied("bench-pr31 is restricted to the 201")
+    if args not in ([], ["--check"]):
+        raise Denied("usage: asc-ctl bench-pr31 [--check] (fixed inputs, no path arguments)")
+    import fcntl
+    import signal
+
+    uid, gid, home = user_ids(conf)
+    if conf["ASC_USER"] != "asc" or home != "/home/asc" or not uid:
+        raise Denied("the configured asc account does not match /home/asc")
+    deadline = time.monotonic() + (PR31_CHECK_TIMEOUT if args else PR31_TIMEOUT)
+    try:
+        _bench_trusted_dir(PR31_DOCKER_CONFIG, create=True)
+        if any(PR31_DOCKER_CONFIG.iterdir()):
+            raise Denied("benchmark Docker CLI config directory must be empty")
+        with (PR31_STATE / "lock").open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise Denied("another PR #31 benchmark is running") from None
+            return _bench_run(uid, gid, conf, args == ["--check"], deadline, signal)
+    except (OSError, ValueError, KeyError, RecursionError, subprocess.SubprocessError) as exc:
+        raise Denied(f"benchmark paths, permissions or telemetry failed validation ({type(exc).__name__})") from exc
+
+
+def _bench_run(uid: int, gid: int, conf: dict, check: bool, deadline: float, signal) -> int:
+    _bench_host_address()
+    _bench_capacity(starting=True)
+    _bench_trusted_dir(PR31_MODELS)
+    render_gid, gpu_nodes = _bench_gpu(conf)
+    # A CPU-only check has no GPU device. Keep the device and permission preflight for both modes.
+    nodes = None if check else gpu_nodes
+    if nodes is not None:
+        _bench_no_contention(nodes, None)
+    image, worker = _bench_image()
+    _bench_audio(deadline)
+    if shutil.disk_usage(PR31_STATE).free < 8 * GIB:
+        raise Denied("benchmark staging needs 8 GiB free including its disk reserve")
+    with (_bench_open_dir(None, PR31_ROOT.parts[1:], input_uid=uid) as source,
+          _bench_open_dir(source, ("out",), input_uid=uid) as out_fd):
+        st, fs = os.fstat(out_fd), os.fstatvfs(out_fd)
+        if st.st_uid != uid or (st.st_mode & 0o300) != 0o300 or fs.f_bavail * fs.f_frsize < 512 * MIB:
+            raise Denied("out must be owned and writable by asc with at least 512 MiB free")
+        with tempfile.TemporaryDirectory(prefix="run-", dir=PR31_STATE) as tmp:
+            staging = Path(tmp)
+            _bench_stage(source, staging, uid, deadline)
+            _bench_capacity(starting=True)
+            peers = _bench_peers(_bench_docker("ps", "--no-trunc", "-q").splitlines())
+            if worker not in peers or any(not s.startswith(("running healthy ", "running none ")) for s in peers.values()):
+                raise Denied("the vision worker disappeared or a running peer is not healthy")
+            if nodes is not None:
+                _bench_no_contention(nodes, None)
+            result_dir = staging / "result"
+            if not check:
+                result_dir.mkdir(mode=0o700)
+                os.chown(result_dir, CONTAINER_UID, CONTAINER_UID)
+                os.chmod(result_dir, 0o700)
+            token = uuid4().hex
+            name = f"asc-bench-pr31-{token}"
+            record = {"commit": PR31_COMMIT, "image_id": image, "container": name, "samples": 0, "result": "aborted"}
+            cid = None
+            rc = 1
+            previous = signal.signal(signal.SIGTERM, signal.default_int_handler)
+            try:
+                remaining = min(PR31_TIMEOUT, int(deadline - time.monotonic()))
+                created = _bench_docker(*_bench_create(staging, image, render_gid, name, remaining - 15, check=check))
+                if not CONTAINER_ID.fullmatch(created):
+                    raise Denied("unexpected sandbox ID from Docker")
+                cid = created
+                record["container_id"] = cid
+                if time.monotonic() >= deadline - 10 or _bench_peers(list(peers)) != peers:
+                    raise Denied("deadline or peer state changed before start")
+                if nodes is not None:
+                    _bench_no_contention(nodes, None)
+                _bench_docker("start", cid)
+                code = _bench_watch(cid, peers, nodes, deadline, record)
+                record["exit_code"] = code
+                if not check:
+                    with _bench_open_dir(None, result_dir.parts[1:]) as result_fd:
+                        if _bench_present(result_fd, "comparison.json"):
+                            data = _bench_json(result_fd, ("comparison.json",), CONTAINER_UID, 16 * MIB)
+                            settings = data.get("settings")
+                            if not isinstance(settings, dict) or data.get("settings_source") != "export":
+                                raise Denied("benchmark report did not use the settings export")
+                            _bench_score(settings)
+                            _bench_publish(out_fd, f"{name}.json", data, uid, gid)
+                        elif code == 0:
+                            raise Denied("replay ended without a report")
+                rc = 0 if code == 0 else 1
+                record["result"] = "completed" if rc == 0 else "replay failed"
+            except (Denied, OSError, ValueError, RecursionError, KeyboardInterrupt) as exc:
+                record["reason"] = str(exc) if isinstance(exc, Denied) else type(exc).__name__
+                print(f"PR #31 benchmark stopped: {record['reason']}", file=sys.stderr)
+            finally:
+                # Shield cleanup from a second signal, and address only the ID returned by our create.
+                sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                try:
+                    if cid:
+                        if rc and "exit_code" in record:
+                            try:
+                                record["log_tail"] = _bench_docker("logs", "--tail", "40", cid, timeout=3)[-8000:]
+                            except Denied:
+                                pass
+                        try:
+                            _bench_docker("rm", "-f", "-v", cid, timeout=10)
+                        except Denied:
+                            record["cleanup"] = "unverified; check sandbox ID"
+                            print(f"PR #31 sandbox cleanup unverified: {cid}", file=sys.stderr)
+                            rc = 1
+                    if not check:
+                        _bench_publish(out_fd, f"{name}.status.json", record, uid, gid)
+                finally:
+                    signal.signal(signal.SIGTERM, previous)
+                    signal.signal(signal.SIGINT, sigint)
+            if check:
+                if rc == 0:
+                    print("PR #31 offline audio and input preflight passed in the local vision image")
+                elif "exit_code" in record:
+                    print(f"PR #31 preflight exited {record['exit_code']}: {record.get('log_tail', '')}", file=sys.stderr)
+            else:
+                print(f"status: {PR31_ROOT}/out/{name}.status.json")
+            return rc
+
+
 def cmd_test_media_add(conf: dict, args: list[str]) -> int:
     if len(args) != 1:
         raise Denied("usage: asc-ctl test-media-add FILE.mp4")
@@ -873,6 +1532,7 @@ COMMANDS = {
     "env-install": cmd_env_install, "env-show": cmd_env_show, "set-tag": cmd_set_tag, "tls-init": cmd_tls_init,
     "tls-install-ca": cmd_tls_install_ca, "init": cmd_init, "models": cmd_models, "gpu-validate": cmd_gpu_validate,
     "test-media-add": cmd_test_media_add, "backup-db": cmd_backup_db, "db-restore": cmd_db_restore, "restore-check": cmd_restore_check,
+    "bench-pr31": cmd_bench_pr31,
     "tunnel-token-install": cmd_tunnel_token_install, "tunnel-token-remove": cmd_tunnel_token_remove,
 }
 
