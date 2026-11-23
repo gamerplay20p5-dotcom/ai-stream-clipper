@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from .. import pipeline, pipeline_ai, queue, routing, storage
+from ..ai.schemas import MotionHypothesis
 from ..config import get_settings
 from ..db import get_db, utcnow
 from ..models import Clip, Job, Worker
@@ -107,7 +108,17 @@ def claim(body: ClaimIn, worker: str = Depends(worker_auth), db: Session = Depen
                        lease_seconds=pipeline.lease_seconds(), global_limits=pipeline.global_limits(db),
                        accept=accept)
     db.commit()
-    return [{"id": j.id, "type": j.type, "payload": j.payload, "attempts": j.attempts} for j in jobs]
+    claimed = []
+    for j in jobs:
+        payload = dict(j.payload or {})
+        if j.type == "vision_analyze" and (model := payload.get("model")):
+            if not routing.can_serve(w, model):
+                payload["vision_fallback"] = "heuristic"
+            elif (w.capabilities or {}).get("gpu") and not routing.gpu_fits(w, model):
+                payload["vision_fallback"] = "CPU"
+        claimed.append({"id": j.id, "type": j.type, "payload": payload, "attempts": j.attempts,
+                        "max_attempts": j.max_attempts})
+    return claimed
 
 
 @router.post("/jobs/{jid}/heartbeat")
@@ -288,6 +299,7 @@ class AnalysisIn(BaseModel):
     language: str = ""
     skipped: bool = False
     extra: dict = Field(default_factory=dict)  # Phase 2: yamnet categories + pitch
+    visual_motion: list[MotionHypothesis] = Field(default_factory=list, max_length=4)
     speech_turns: list[dict] | None = None  # Phase 5 E: [{start, end, text, emb: [[256] x 1 or 3]}]
 
 

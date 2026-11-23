@@ -35,12 +35,28 @@ def latency(w: Worker, model: str) -> float:
 def fits(w: Worker, model: str) -> bool:
     caps = w.capabilities or {}
     spec = MODELS.get(model)
-    if spec is None:
+    if spec is None or spec.backend not in (caps.get("inference_backends", ["openvino"]) or []):
         return False
-    if caps.get("gpu"):
-        vram = float(caps.get("vram_total_gb") or 0)
-        return vram == 0 or vram >= spec.min_vram_gb or bool(caps.get("cpu_fallback"))
+    if caps.get("gpu") and caps.get("ai_device") != "CPU":
+        return gpu_fits(w, model) or bool(caps.get("cpu_fallback"))
     return True  # CPU inference: RAM is checked by the worker's container limit
+
+
+def gpu_fits(w: Worker, model: str) -> bool:
+    caps, metrics = w.capabilities or {}, w.metrics or {}
+    if not caps.get("gpu") or caps.get("ai_device") == "CPU":
+        return False
+    ai = metrics.get("ai") or {}
+    if ai.get("loaded") == model and str(ai.get("device") or "").startswith("GPU"):
+        return True
+    minimum = MODELS[model].min_vram_gb
+    total = float(caps.get("vram_total_gb") or 0)
+    free = metrics.get("vram_free_bytes")  # optional device-wide measurement
+    return (not total or total >= minimum) and (free is None or free >= minimum * 1024**3)
+
+
+def can_serve(w: Worker, model: str) -> bool:
+    return model in served_models(w) and fits(w, model)
 
 
 def is_idle(w: Worker) -> bool:
@@ -58,16 +74,18 @@ def vision_acceptor(worker: Worker, online: list[Worker], now: datetime,
         model = (job.payload or {}).get("model")
         if not model:
             return True
-        holders = [w for w in vision_workers if model in served_models(w) and fits(w, model)]
+        holders = [w for w in vision_workers if can_serve(w, model)]
         if not holders:
             return True  # nobody can run the model -> heuristic fallback anywhere
         if worker.id not in {w.id for w in holders}:
             return False
         idle = [w for w in holders if is_idle(w) or w.id == worker.id]
-        best = min(idle, key=lambda w: latency(w, model))
+        best = min(idle, key=lambda w: (not gpu_fits(w, model), latency(w, model), w.id))
         if best.id == worker.id:
             return True
         waited = (now - job.created_at).total_seconds()
+        if gpu_fits(best, model) and not gpu_fits(worker, model):
+            return waited > patience_s
         return latency(worker, model) <= 1.5 * latency(best, model) or waited > patience_s
 
     return accept

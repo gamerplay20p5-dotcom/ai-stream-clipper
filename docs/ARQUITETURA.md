@@ -26,6 +26,8 @@ Nenhum worker acessa o banco ou o sistema de arquivos de outra máquina.
 
 ## Fluxo de dados
 
+A descoberta visual anterior ao scoring, sua comparação em shadow e os comandos de homologação estão em [Descoberta multimodal](MULTIMODAL.md).
+
 1. **Monitor** (206) consulta `/internal/monitor/targets`, verifica a live com streamlink e reporta. Ao detectar live, a API cria a sessão e o job `capture` na mesma transação.
 2. **Captura** (206): `streamlink --stdout | ffmpeg -f segment -c copy` gera segmentos MPEG-TS de 10 s. Os tempos vêm da lista CSV do próprio FFmpeg. Cada segmento é registrado com hash, e a API cria um job `audio_analyze` por segmento. Há reconexão com backoff, limite de duração por sessão, buffer circular (padrão 30 min) e um teto de disco. Segmentos ainda necessários (análise pendente, ou corte cuja fonte ainda não foi salva) só são apagados com o teto de disco atingido.
 3. **Áudio** (206): extrai PCM 16 kHz, calcula loudness, centróide espectral e fluxo a cada 0,25 s, e transcreve com faster-whisper (Silero VAD embutido) com timestamps por palavra.

@@ -51,6 +51,7 @@ class _Loaded:
     device: str
     pipe: object
     kind: str
+    cpu_only: bool = False
 
 
 def _ov_devices() -> list[str]:
@@ -110,8 +111,10 @@ class ModelManager:
                 self._loaded = None
                 gc.collect()
 
-    def _devices_to_try(self) -> list[str]:
+    def _devices_to_try(self, *, cpu_only: bool = False) -> list[str]:
         devices = _ov_devices()
+        if cpu_only:
+            return ["CPU"] if "CPU" in devices else []
         order = []
         if self.preferred_device in devices:
             order.append(self.preferred_device)
@@ -119,7 +122,7 @@ class ModelManager:
             order.append("CPU")
         return order
 
-    def acquire(self, key: str):
+    def acquire(self, key: str, *, cpu_only: bool = False):
         """Return ``(pipeline, device)`` for ``key``, loading it (and unloading any other
         model) if needed. Raises :class:`ModelUnavailable` with a human-readable reason."""
         spec = MODELS.get(key)
@@ -127,15 +130,17 @@ class ModelManager:
             raise ModelUnavailable(f"unknown model {key}")
         st = self.stat(key)
         with self._lock:
-            if self._loaded is not None and self._loaded.key == key:
-                return self._loaded.pipe, self._loaded.device
+            loaded = self._loaded
+            if loaded is not None and loaded.key == key:
+                if (cpu_only and loaded.device == "CPU") or (not cpu_only and not loaded.cpu_only):
+                    return loaded.pipe, loaded.device
             if not is_installed(key):
                 st.state = "missing"
                 st.last_error = f"model files not found in {model_path(key)}"
                 raise ModelUnavailable(st.last_error)
             self.unload()
             errors = []
-            for device in self._devices_to_try():
+            for device in self._devices_to_try(cpu_only=cpu_only):
                 st.state = "loading"
                 t0 = time.monotonic()
                 try:
@@ -149,7 +154,7 @@ class ModelManager:
                 st.device = device
                 st.state = "ready"
                 st.fell_back_to_cpu = device == "CPU" and self.preferred_device != "CPU"
-                self._loaded = _Loaded(key, device, pipe, spec.kind)
+                self._loaded = _Loaded(key, device, pipe, spec.kind, cpu_only and self.preferred_device != "CPU")
                 log.info("model loaded", extra={"model": key, "device": device, "seconds": st.load_seconds})
                 return pipe, device
             st.state = "failed"

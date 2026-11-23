@@ -136,7 +136,8 @@ def session_report(db: Session, s: Streamer, roles: dict[str, list[str]], settin
                     "candidates": len(real), "rejected_by_reason": counts,
                     "rejected_by_director": len(rejected_clips),
                     "best_rejected_score": stats.get("best_rejected_score"),
-                    "recent_rejected": (stats.get("recent_rejected") or [])[-8:]},
+                    "recent_rejected": (stats.get("recent_rejected") or [])[-8:],
+                    "visual_shadow": stats.get("visual_shadow")},
         "jobs": {t: dict(v) for t, v in by.items()},
         "oldest_queued_s": {t: round(v) for t, v in oldest_queued.items()},
         "failures": [{"id": j.id, "type": j.type, "error": (j.last_error or "")[-300:], "attempts": j.attempts}

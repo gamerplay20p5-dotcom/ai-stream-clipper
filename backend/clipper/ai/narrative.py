@@ -72,7 +72,7 @@ def template_result(fallback_titles: list[str], reasons: list[str]) -> Narrative
 
 def write(manager: ModelManager | None, backend: str, *, vision_model: str | None, transcript: str,
           visual: VisualAnalysis | None, decision: DirectorDecision, game: str,
-          fallback_titles: list[str], others: str = "", story: str = "") -> NarrativeResult:
+          fallback_titles: list[str], others: str = "", story: str = "", cpu_only: bool = False) -> NarrativeResult:
     if backend in ("", "none", "template") or manager is None:
         return template_result(fallback_titles, decision.reasons)
     key = vision_model if backend == "same_as_vision" else backend
@@ -82,7 +82,7 @@ def write(manager: ModelManager | None, backend: str, *, vision_model: str | Non
     try:
         import openvino_genai as ov_genai
 
-        pipe, device = manager.acquire(key)
+        pipe, device = manager.acquire(key, cpu_only=cpu_only)
         t0 = time.monotonic()  # generation latency only (load time is tracked by the manager)
         cfg = ov_genai.GenerationConfig()
         cfg.max_new_tokens = 320

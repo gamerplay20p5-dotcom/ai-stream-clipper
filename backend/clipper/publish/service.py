@@ -271,6 +271,9 @@ def eligibility(db: Session, clip: Clip, acct: PublishAccount, *, auto: bool, ru
         p.append("a conta não está conectada/autorizada")
     if clip.is_test and auto:
         p.append("cortes de TESTE MANUAL nunca são publicados automaticamente")
+    if auto and clip.status != "approved" and (
+            (clip.provenance or {}).get("visual_discovery") or (clip.provenance or {}).get("grounded_metadata")):
+        p.append("corte experimental exige aprovação humana")
     if clip.status == "rejected":
         p.append("corte rejeitado")
     elif clip.status not in ("ready", "approved"):

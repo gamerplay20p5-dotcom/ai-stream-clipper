@@ -205,6 +205,8 @@ def run_retrospectives(db: Session, settings) -> int:
                             .order_by(Candidate.score.desc()).limit(20)):
             if len(picks) >= budget or c.start is None or c.end is None:
                 break
+            if "visual_motion" in (c.kinds or []):
+                continue  # proposals without enough evidence already went through the multimodal scorer
             if any(min(c.end, p[1]) - max(c.start, p[0]) > 0 for p in picks) or not available(c.start, c.end):
                 continue
             picks.append((c.start, c.end, c.peak, f"Revisão pós-live: quase atingiu a nota ({c.score:.0f})",

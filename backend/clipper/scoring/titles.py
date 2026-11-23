@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import re
 
+from ..ai.schemas import VisualAnalysis
+from ..ai.visual_evidence import corroborated_event
+
 from ..analysis import lexicon
 
 _TEMPLATES = {
@@ -90,3 +93,55 @@ def suggest_metadata(transcript: str, kinds: list[str], streamer: dict, language
         "description": desc + "\n\n" + " ".join(tags),
         "hashtags": tags,
     }
+
+
+_EVENT_NAMES = {
+    "rollover": ("Capotamento", "Vehicle rollover", "capotamento", "rollover"),
+    "collision": ("Colisão", "Collision", "colisao", "collision"),
+    "fall": ("Queda", "Fall", "queda", "fall"),
+    "police_chase": ("Perseguição policial", "Police chase", "perseguicao", "policechase"),
+    "escape": ("Fuga bem-sucedida", "Successful escape", "fuga", "escape"),
+    "failed_escape": ("Fuga que deu errado", "Failed escape", "fuga", "escape"),
+    "prank": ("Trollagem", "Prank", "trollagem", "prank"),
+    "funny_interaction": ("Interação engraçada", "Funny interaction", "humor", "funny"),
+    "surprise": ("Acontecimento inesperado", "Unexpected event", "", ""),
+    "unlikely_win": ("Vitória improvável", "Unlikely win", "vitoria", "win"),
+    "unexpected_failure": ("Falha inesperada", "Unexpected failure", "falha", "fail"),
+}
+
+
+def grounded_metadata(streamer: dict, language: str, visual: VisualAnalysis | None = None,
+                      *, start: float = 0, peak: float = 0, end: float = 0) -> dict:
+    """Use registered channel data and closed event vocabulary. Keep the actor unspecified."""
+    english = (language or "").lower().startswith("en")
+    name = " ".join(str(streamer.get("display_name") or streamer.get("channel") or "").split())[:65]
+    game = " ".join(str(streamer.get("registered_game") or "").split())[:60]
+    origin = {"twitch": "Twitch", "youtube": "YouTube"}.get(streamer.get("platform"))
+    confirmed = visual is not None and corroborated_event(visual, peak, start, end)
+    event = visual.event_kind if confirmed else "unknown"
+    tag = ""
+    if event in _EVENT_NAMES:
+        pt, en, pt_tag, en_tag = _EVENT_NAMES[event]
+        label, tag = (en, en_tag) if english else (pt, pt_tag)
+    else:
+        label = "Stream highlight" if english else "Trecho da live"
+    lead = f"{label} {'in' if english else 'em'} {game}" if game else label
+    primary = f"{lead} | {name}" if name else lead
+    if len(primary) > 100:
+        primary = f"{label} | {name}" if name else lead
+    suggestions = [primary, f"{name} | {lead}" if name else lead, f"{label} | {game}" if game else label]
+    suggestions = list(dict.fromkeys(s for s in suggestions if len(s) <= 100))[:3]
+    source = (f"{name}'s stream" if english else f"live de {name}") if name else (
+        "the stream" if english else "a live")
+    origin_text = (f" ({origin})" if origin else "")
+    if confirmed:
+        description = f"{lead} during {source}{origin_text}." if english else (
+            f"{lead} durante a {source}{origin_text}." if name else f"{lead} durante {source}{origin_text}.")
+    else:
+        description = f"Clip from {source}{origin_text}." if english else (
+            f"Trecho da {source}{origin_text}." if name else f"Trecho de uma live{origin_text}.")
+    raw_tags = [game, name, tag]
+    tags = ["#" + t for raw in raw_tags if (t := re.sub(r"[^\w]", "", raw, flags=re.UNICODE)[:30])]
+    tags = list(dict.fromkeys(tags))
+    return {"title": suggestions[0], "suggestions": suggestions, "description": description,
+            "hashtags": tags, "event": event}

@@ -10,7 +10,7 @@ import ipaddress
 import socket
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator
@@ -112,6 +112,8 @@ class Settings(BaseSettings):
     # models this worker is allowed to serve (comma list); empty = every installed model
     ai_models: Annotated[list[str], NoDecode] = Field(default_factory=list)
     yamnet_enabled: bool = True
+    # Encoder on this render worker. Set a hardware backend only after a local smoke render.
+    render_encoder: Literal["libx264", "h264_qsv", "h264_nvenc"] = "libx264"
 
     @field_validator("ai_models", mode="before")
     @classmethod

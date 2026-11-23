@@ -12,7 +12,8 @@ from ..db import utcnow
 _DECISION_KEYS = ("sensitivity", "min_score", "pre_context_seconds", "post_context_seconds", "max_clips_per_hour",
                   "dedup_overlap", "min_clip_seconds", "max_clip_seconds", "vision_enabled", "vision_provider",
                   "vision_model", "narrative_model", "director_enabled", "analysis_context_seconds", "weights",
-                  "memory_window_seconds", "merge_gap_seconds")
+                  "memory_window_seconds", "merge_gap_seconds", "visual_discovery", "multimodal_scoring",
+                  "grounded_metadata")
 
 
 def settings_snapshot(settings) -> dict:

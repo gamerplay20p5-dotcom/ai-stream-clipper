@@ -25,6 +25,7 @@ class ModelSpec:
     image_side: int = 448  # frames are resized so the longest side is at most this
     max_new_tokens: int = 384
     notes: str = ""
+    backend: str = "openvino"
 
 
 MODELS: dict[str, ModelSpec] = {
@@ -47,10 +48,12 @@ MODELS: dict[str, ModelSpec] = {
         "qwen3-1.7b-int4", "llm", "qwen3-1.7b-int4", "OpenVINO/Qwen3-1.7B-int4-ov", "qwen3", 1.1, 2.0,
         max_new_tokens=256),
     # --- audio ---------------------------------------------------------------------------------
-    "yamnet": ModelSpec("yamnet", "audio", "yamnet", "zeropointnine/yamnet-onnx", "yamnet", 0.02, 0.0),
+    "yamnet": ModelSpec("yamnet", "audio", "yamnet", "zeropointnine/yamnet-onnx", "yamnet", 0.02, 0.0,
+                        backend="onnxruntime"),
     # speaker embeddings (who is talking): WeSpeaker ResNet34 trained on VoxCeleb, Apache-2.0, CPU
     "wespeaker-resnet34": ModelSpec("wespeaker-resnet34", "speaker", "wespeaker-resnet34",
-                                    "Wespeaker/wespeaker-voxceleb-resnet34", "wespeaker", 0.03, 0.0),
+                                    "Wespeaker/wespeaker-voxceleb-resnet34", "wespeaker", 0.03, 0.0,
+                                    backend="onnxruntime"),
 }
 
 

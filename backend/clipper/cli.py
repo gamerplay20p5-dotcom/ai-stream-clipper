@@ -86,6 +86,7 @@ async def _run_worker(roles: list[str], stop_event=None) -> None:
         vram = gpu_memory()
         extra_caps.update({
             "vision_provider": s.vision_provider, "ai_models": models, "vision_concurrency": s.concurrency_vision,
+            "inference_backends": ["openvino"],
             "ai_device": s.openvino_device, "cpu_fallback": s.ai_allow_cpu_fallback,
             "vram_total_gb": round(vram.get("total_bytes", 0) / 1024**3, 2), "gpu_name": vram.get("name", ""),
         })

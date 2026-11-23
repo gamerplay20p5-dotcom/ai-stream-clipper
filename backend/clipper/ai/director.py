@@ -18,6 +18,7 @@ import numpy as np
 from ..analysis import lexicon
 from ..scoring.engine import Word, _snap_end, _snap_start
 from .schemas import DirectorDecision, Evidence, VisualAnalysis
+from .visual_evidence import corroborated_event
 
 VOICE_REACTION = ("laughter", "scream", "shout")
 EDGE_S = 1.5  # arc points closer than this to the analysed window edges are not informative
@@ -34,6 +35,7 @@ class Candidate:
     breakdown: dict = field(default_factory=dict)
     reasons: list[str] = field(default_factory=list)
     kinds: list[str] = field(default_factory=list)
+    visual_evidence: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -127,7 +129,8 @@ def tension_onset(words: list[Word], peak: float, lookback: float = 35.0, max_ga
 def decide(cand: Candidate, words: list[tuple[float, float, str]], acoustic: AcousticTrack,
            visual: VisualAnalysis | None, limits: Limits,
            motion: list[tuple[float, float]] | None = None,
-           context_hint: tuple[float, str] | None = None) -> DirectorDecision:
+           context_hint: tuple[float, str] | None = None,
+           webcam_reaction: dict | None = None) -> DirectorDecision:
     """``context_hint``: ``(t_abs, why)`` from the narrative model (validated upstream)."""
     ws = _words(words)
     ev: list[Evidence] = []
@@ -136,6 +139,7 @@ def decide(cand: Candidate, words: list[tuple[float, float, str]], acoustic: Aco
     peak = cand.peak
     start, end = cand.start, cand.end
     mode = "multimodal" if visual is not None and not visual.fallback else "audio_only"
+    visual_confirmed = bool(cand.visual_evidence) and corroborated_event(visual, peak, start, end)
 
     # ------------------------------------------------------------------ evidence: audio
     voice_reaction, t_voice = (0.0, None)
@@ -164,6 +168,14 @@ def decide(cand: Candidate, words: list[tuple[float, float, str]], acoustic: Aco
         "scream" in cand.kinds or "laughter" in cand.kinds
 
     # ------------------------------------------------------------------ evidence: visual
+    for e in cand.visual_evidence[:4]:
+        ev.append(Evidence(source="visual", t_abs=e["peak"],
+                           detail=f"Hipótese de movimento ({e['signal']}, {e['confidence']:.0%})"))
+    if webcam_reaction:
+        detail = "Mudança sustentada na região da boca após o pico" if webcam_reaction["signal"] == "lower_face" \
+            else "Deslocamento sustentado do rosto na webcam após o pico"
+        ev.append(Evidence(source="visual", t_abs=webcam_reaction["start"],
+                           detail=detail))
     vis_score = None
     if visual is not None and not visual.fallback:
         w0 = visual.window_abs[0]
@@ -189,23 +201,31 @@ def decide(cand: Candidate, words: list[tuple[float, float, str]], acoustic: Aco
         score = base + delta
         reasons.append(f"IA visual ({visual.model}): interesse {visual.interest:.0f}/10, ajuste {delta:+.0f} — "
                        f"{visual.summary[:110]}")
-        if visual.reaction_linked is False and not reaction_present:
+        if visual.reaction_linked is False and not reaction_present and not visual_confirmed:
             score -= 12
             adj.append("Penalidade: a reação não tem relação com o que aparece na tela")
         if visual.arc.complete:
             score += 4
             reasons.append("Começo, desenvolvimento e desfecho visíveis")
-    if acoustic.available and game_sound >= 0.3 and not reaction_present:
+    if acoustic.available and game_sound >= 0.3 and not reaction_present and not visual_confirmed:
         score -= 25
         adj.append("Penalidade: o pico de volume vem do jogo (explosão/tiro) e o streamer não reagiu")
     elif acoustic.available and voice_reaction >= 0.3:
         score += 6
         reasons.append("Reação de voz confirmada pelo classificador acústico")
+    if webcam_reaction and visual_confirmed:
+        score += 3
+        reasons.append("Mudança sustentada na webcam após o acontecimento visual")
     score = float(np.clip(score, 0, 100))
     keep = score >= limits.min_score
 
     # ------------------------------------------------------------------ boundaries
     must_from, must_to = peak - 1.0, peak + 1.5
+    if cand.visual_evidence:
+        must_from = min(must_from, *(e["start"] for e in cand.visual_evidence))
+        must_to = max(must_to, *(e["end"] + 1.0 for e in cand.visual_evidence))
+    if webcam_reaction and visual_confirmed:
+        must_to = max(must_to, webcam_reaction["end"] + 0.5)
     if t_voice is not None and voice_reaction >= 0.3:
         last_voice = acoustic.last_above(VOICE_REACTION, peak - 2.5, peak + 8.0, 0.3) or t_voice
         must_to = max(must_to, last_voice + 1.0)

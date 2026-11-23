@@ -59,6 +59,7 @@ def streamer_info(s: Streamer) -> dict:
         "channel": s.channel,
         "display_name": s.display_name or s.channel,
         "game": (s.preferences or {}).get("game", "GTA V"),
+        "registered_game": (s.preferences or {}).get("game") or "",
     }
 
 
@@ -194,6 +195,7 @@ def register_segments(db: Session, session_id: int, worker_id: str, base_url: st
     from . import entitlements
 
     streamer = db.get(Streamer, sess.streamer_id)
+    prefs = (streamer.preferences or {}) if streamer else {}
     # Same base analysis for every consumer: the profile pinned at the start of the live, not today's settings
     profile = sess.base_profile or {"language": settings.language, "whisper_model": settings.whisper_model}
     if sess.base_profile is None:
@@ -231,6 +233,8 @@ def register_segments(db: Session, session_id: int, worker_id: str, base_url: st
                 "sha256": row.sha256, "segment_url": f"{sess.segment_base_url}/segments/{session_id}/{idx}",
                 "language": profile.get("language", settings.language),
                 "whisper_model": profile.get("whisper_model", settings.whisper_model),
+                "discover_visual": settings.visual_discovery != "off",
+                "webcam_region": prefs.get("webcam_region"),
             },
             idempotency_key=f"audio:{session_id}:{idx}", priority=50, max_attempts=3,
         )
@@ -302,6 +306,12 @@ def post_analysis(db: Session, session_id: int, idx: int, data: dict) -> None:
     if seg is None:
         raise NotFound("segment")
     feats = data.get("features") or {}
+    extra = dict(data.get("extra") or {})
+    # The named field is validated at ingestion, including ordering and finite numbers.
+    extra.pop("visual_motion", None)
+    visual_motion = [e for e in data.get("visual_motion") or [] if e["end"] <= seg.duration + 0.01]
+    if visual_motion:
+        extra["visual_motion"] = visual_motion
     db.execute(delete(AudioFeature).where(AudioFeature.session_id == session_id, AudioFeature.segment_idx == idx))
     db.execute(delete(TranscriptWord).where(TranscriptWord.session_id == session_id, TranscriptWord.segment_idx == idx))
     if data.get("skipped"):
@@ -310,7 +320,7 @@ def post_analysis(db: Session, session_id: int, idx: int, data: dict) -> None:
         db.add(AudioFeature(
             session_id=session_id, segment_idx=idx, start=seg.start, hop=float(feats.get("hop", 0.25)),
             loudness_db=feats.get("loudness_db", []), centroid_hz=feats.get("centroid_hz", []),
-            flux=feats.get("flux", []), extra=data.get("extra") or {},
+            flux=feats.get("flux", []), extra=extra,
             speech_ratio=float(data.get("speech_ratio", 0.0)),
             language=str(data.get("language", ""))[:8],
         ))
@@ -376,11 +386,15 @@ def timeline(db: Session, session_id: int) -> dict:
     t_to = sess.analyzed_until
     t_from = max(0.0, sess.scored_until - TIMELINE_LOOKBACK_S)
     feats = db.scalars(
-        select(AudioFeature).where(AudioFeature.session_id == session_id,
-                                   AudioFeature.start < t_to)
+        select(AudioFeature)
+        .outerjoin(Segment, (Segment.session_id == AudioFeature.session_id)
+                   & (Segment.idx == AudioFeature.segment_idx))
+        .where(AudioFeature.session_id == session_id, AudioFeature.start < t_to,
+               or_(Segment.id.is_(None), Segment.start + Segment.duration >= t_from - 1.0))
         .order_by(AudioFeature.segment_idx)
     ).all()
-    feats = [f for f in feats if f.start + f.hop * len(f.loudness_db or []) >= t_from]
+    feats = [f for f in feats if f.start + f.hop * len(f.loudness_db or []) >= t_from
+             or any(f.start + e["end"] >= t_from for e in (f.extra or {}).get("visual_motion", []))]
     words = db.execute(
         select(TranscriptWord.start, TranscriptWord.end, TranscriptWord.word, TranscriptWord.probability)
         .where(TranscriptWord.session_id == session_id, TranscriptWord.start >= t_from, TranscriptWord.start < t_to)
@@ -406,11 +420,14 @@ def timeline(db: Session, session_id: int) -> dict:
         "final": final,
         "settings": eff,
         "streamer": streamer_info(streamer) if streamer else {},
+        "metadata_language": (next((f.language for f in reversed(feats) if f.language), "pt")
+                              if eff["language"] == "auto" else eff["language"]),
         "features": [{"start": f.start, "hop": f.hop, "loudness_db": f.loudness_db, "centroid_hz": f.centroid_hz,
                       "flux": f.flux, "speech_ratio": f.speech_ratio, "extra": f.extra or {}} for f in feats],
         "words": [[w[0], w[1], w[2], w[3]] for w in words],
         "clips": [{"id": c.id, "start": c.start, "end": c.end, "peak": c.peak, "score": c.score,
-                   "transcript": c.transcript, "kinds": c.kinds or []} for c in clips],
+                   "transcript": c.transcript, "kinds": c.kinds or [],
+                   "visual_evidence": (c.provenance or {}).get("visual_discovery") or []} for c in clips],
     }
 
 
@@ -418,6 +435,10 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
     sess = db.get(StreamSession, session_id)
     if sess is None:
         raise NotFound("session")
+    settings = load_ai_settings(db)
+    if (result.get("visual_discovery_active") and settings.visual_discovery != "on") or (
+            result.get("grounded_metadata_active") and not settings.use_grounded_metadata):
+        raise Conflict("AI settings changed during scoring")
     new_until = float(result.get("scored_until", sess.scored_until))
     if new_until < from_scored_until:
         raise Conflict("scored_until must be monotonic")
@@ -434,7 +455,6 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
         raise Conflict("session was scored concurrently")
     db.refresh(sess)
     _record_scoring_stats(sess, result)
-    settings = load_ai_settings(db)
     for e in result.get("events", []):
         db.add(Event(session_id=session_id, t=float(e["t"]), duration=float(e.get("duration", 0)),
                      kind=str(e["kind"])[:32], strength=float(e.get("strength", 0)), data=e.get("data") or {}))
@@ -496,6 +516,10 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
         if story_action in ("merge", "duplicate"):
             if story_action == "merge" and other is not None:
                 other.start, other.end = c_start, c_end
+                if c.get("visual_evidence"):
+                    previous = (other.provenance or {}).get("visual_discovery") or []
+                    other.provenance = {**(other.provenance or {}),
+                                        "visual_discovery": (previous + c["visual_evidence"])[-8:]}
                 other.reasons = list(dict.fromkeys(list(other.reasons or []) + [
                     f"Sequência unida: novo momento da mesma situação em {float(c['peak']):.0f}s"]))[:14]
             db.add(Candidate(session_id=session_id, streamer_id=sess.streamer_id, peak=float(c["peak"]),
@@ -517,7 +541,10 @@ def post_candidates(db: Session, session_id: int, from_scored_until: float, resu
             caption_style=prefs.get("caption_style") or settings.caption_style,
             layout=prefs.get("layout") or settings.default_layout,
             webcam_region=prefs.get("webcam_region"),
-            version=1, provenance={**prov, "story": {"action": story_action, "situation": sit.kind if sit else None,
+            version=1, provenance={**prov,
+                                   **({"visual_discovery": c["visual_evidence"][-8:]} if c.get("visual_evidence") else {}),
+                                   **({"grounded_metadata": True} if settings.use_grounded_metadata else {}),
+                                   "story": {"action": story_action, "situation": sit.kind if sit else None,
                                                      "related_clip": other.id if other is not None else None}},
             situation_id=sit.id if sit is not None else None,
         )
@@ -625,6 +652,13 @@ def _record_scoring_stats(sess: StreamSession, result: dict) -> None:
         "min_score": result.get("min_score"),
         "last_scored_at": utcnow().isoformat() + "Z",
     })
+    if shadow := result.get("visual_shadow"):
+        previous = st.get("visual_shadow") or {}
+        st["visual_shadow"] = {
+            key: int(previous.get(key, 0)) + shadow[key]
+            for key in ("proposals", "baseline_candidates", "multimodal_candidates")
+        }
+        st["visual_shadow"]["recent"] = (list(previous.get("recent") or []) + shadow["recent"])[-20:]
     sess.stats = st
 
 

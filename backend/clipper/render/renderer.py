@@ -49,6 +49,7 @@ class RenderSpec:
     threads: int = 4
     plan: dict | None = None  # EditPlan (clip-relative times)
     captions: dict | None = None  # CaptionOptions fields (Phase 5 E)
+    encoder: str = "libx264"
 
 
 @dataclass
@@ -397,13 +398,30 @@ async def render(spec: RenderSpec, workdir: Path) -> RenderResult:
         if audio_filters:
             args += ["-af", ",".join(audio_filters)]
         args += ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
-    args += [
-        "-c:v", "libx264", "-preset", spec.preset, "-crf", str(spec.crf), "-profile:v", "high",
-        "-pix_fmt", "yuv420p", "-threads", str(spec.threads), "-movflags", "+faststart",
-        str(out.name),
-    ]
+    software = ["-c:v", "libx264", "-preset", spec.preset, "-crf", str(spec.crf),
+                "-pix_fmt", "yuv420p", "-threads", str(spec.threads)]
+    hardware = {
+        "h264_qsv": ["-c:v", "h264_qsv", "-global_quality", str(spec.crf), "-pix_fmt", "nv12"],
+        "h264_nvenc": ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", str(spec.crf),
+                       "-b:v", "0", "-pix_fmt", "nv12"],
+    }
+    output = ["-profile:v", "high", "-movflags", "+faststart", out.name]
     log.info("rendering clip", extra={"layout": layout, "duration": round(duration, 2), "applied": applied})
-    await media.run(args, cwd=workdir, timeout=max(600, duration * 40))
+    timeout = max(600, duration * 40)
+    encoder = spec.encoder
+    if encoder in hardware:
+        try:
+            await media.run(args + hardware[encoder] + output, cwd=workdir, timeout=timeout)
+        except media.MediaError as exc:
+            log.warning("hardware encoder failed, retrying with libx264",
+                        extra={"encoder": encoder, "err": str(exc)[:250]})
+            applied.append(f"encoder_fallback:{encoder}")
+            encoder = "libx264"
+    else:
+        encoder = "libx264"
+    if encoder == "libx264":
+        await media.run(args + software + output, cwd=workdir, timeout=timeout)
+    applied.append(f"encoder:{encoder}")
 
     thumb = workdir / "thumb.jpg"
     t_thumb = min(max(0.0, spec.peak - spec.start), max(0.0, duration - 0.5))
