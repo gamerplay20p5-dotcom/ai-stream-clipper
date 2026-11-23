@@ -1,0 +1,17 @@
+{
+  "_instrucoes": "Preencha cada campo vazio. Enquanto houver campo vazio, as páginas saem como RASCUNHO e não podem ser publicadas. Depois de aprovado o texto, a publicação exige COMMERCIAL_LEGAL_PUBLISHED=true na 210.",
+  "RAZAO_SOCIAL": "",
+  "NOME_FANTASIA": "HTS",
+  "CNPJ": "",
+  "ENDERECO": "",
+  "EMAIL_CONTATO": "",
+  "EMAIL_PRIVACIDADE": "",
+  "ENCARREGADO": "",
+  "FORO": "",
+  "PRAZO_REEMBOLSO": "",
+  "VIGENCIA": "",
+  "VERSAO": "1.0",
+  "PRAZO_EXCLUSAO_CONTA": "",
+  "BASE_LEGAL_VOZ": "",
+  "_BASE_LEGAL_VOZ": "Decisão jurídica: o art. 11 da LGPD não admite legítimo interesse para dado sensível (biométrico). Opções: consentimento do streamer, desligar perfis de voz nos canais de clientes, ou outra base do art. 11 indicada pelo jurídico."
+}

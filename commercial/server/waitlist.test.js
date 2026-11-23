@@ -66,3 +66,25 @@ test('waitlist validates, deduplicates, persists and limits submissions', async 
   for (let i = 0; i < 5; i++) assert.equal((await post()).status, 202)
   assert.equal((await post()).status, 429)
 })
+
+test('a closed waitlist (no privacy policy and terms yet) collects nothing and says so', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'asc-waitlist-closed-'))
+  const databasePath = join(directory, 'test.sqlite')
+  const { app, close } = createApp({ databasePath, waitlistOpen: false })
+  const server = app.listen(0, '127.0.0.1')
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve))
+    close()
+    await unlink(databasePath)
+    await rmdir(directory)
+  })
+  await once(server, 'listening')
+  const base = `http://127.0.0.1:${server.address().port}`
+  const response = await fetch(`${base}/api/waitlist`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'fan@example.com', plan: 'pro', country: 'BR', platform: 'twitch', language: 'pt-BR', market: 'BR', consent: true }) })
+  assert.equal(response.status, 503)
+  assert.deepEqual(await response.json(), { error: 'waitlist_closed' })
+  assert.equal((await (await fetch(`${base}/api/billing/config`)).json()).waitlist, false)
+  const db = new DatabaseSync(databasePath, { readOnly: true })
+  try { assert.equal(db.prepare('SELECT COUNT(*) AS n FROM waitlist').get().n, 0) } finally { db.close() }
+})

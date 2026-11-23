@@ -115,3 +115,14 @@ def test_patch_notes_list_the_current_version(admin):
     notes = r.json()["notes"]
     assert notes and all({"version", "date", "title", "items"} <= set(n) for n in notes)
     assert notes[0]["version"] == __version__  # every release ships its own note
+
+
+def test_dashboard_and_backend_versions_match():
+    """The dashboard warns when its build differs from the server's version: both must be released together."""
+    import json
+    from pathlib import Path
+
+    from clipper import __version__
+
+    pkg = json.loads((Path(__file__).resolve().parents[1] / "dashboard" / "package.json").read_text(encoding="utf-8"))
+    assert pkg["version"] == __version__

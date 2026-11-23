@@ -23,5 +23,7 @@ export function createMailer(settings) {
     requireTLS: !settings.secure,
     auth: settings.user ? { user: settings.user, pass: settings.pass } : undefined,
   })
-  return message => transport.sendMail({ from: settings.from, ...message })
+  // Payment links must reach the customer exactly as written: no click/open tracking rewrite by the provider
+  // (Mailgun honours X-Mailgun-Track; other servers ignore the header)
+  return message => transport.sendMail({ from: settings.from, ...message, headers: { 'X-Mailgun-Track': 'no', ...message.headers } })
 }
