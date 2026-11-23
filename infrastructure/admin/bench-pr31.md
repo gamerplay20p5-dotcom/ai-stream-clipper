@@ -70,7 +70,7 @@ set -euo pipefail
 AUDIO_ARCHIVE=/absolute/path/to/asc-pr31-audio.tar
 AUDIO_SHA=copy_the_archive_sha256_from_preparation
 SOURCE=/absolute/path/to/reviewed-checkout/infrastructure/admin/asc-ctl
-EXPECTED=3cd0d5d351fd48efd66f2495760fa00f117c591bf2e8e3c6f6497b966edeb8c8
+EXPECTED=3491833a450eeb1e4060520335806969dbb96871bd63f65bb21ff4a0d7f1cec6
 sudo bash -ceu '
   state=/var/lib/asc-ctl/pr31
   install -d -o root -g root -m 0755 "$state"
@@ -97,21 +97,21 @@ sudo -n /usr/local/sbin/asc-ctl version
 
 ### Atualizar a 1.4.0 instalada / Update an existing 1.4.0 installation
 
-Com o bundle já instalado na 201, substitua somente o binário usando o checkout revisado da PR #32. Para desfazer a atualização, restaure `asc-ctl.pre-pr31-cpu-check` com os comandos abaixo.
+Com o bundle já instalado na 201, substitua somente o binário usando o checkout revisado da PR #32. Para desfazer a atualização, restaure `asc-ctl.pre-pr31-peer-health` com os comandos abaixo.
 
-With the bundle already installed on host 201, replace the executable from the reviewed PR #32 checkout. To undo the update, restore `asc-ctl.pre-pr31-cpu-check` using the commands below.
+With the bundle already installed on host 201, replace the executable from the reviewed PR #32 checkout. To undo the update, restore `asc-ctl.pre-pr31-peer-health` using the commands below.
 
 ```bash
 SOURCE=/absolute/path/to/reviewed-checkout/infrastructure/admin/asc-ctl
-EXPECTED=3cd0d5d351fd48efd66f2495760fa00f117c591bf2e8e3c6f6497b966edeb8c8
+EXPECTED=3491833a450eeb1e4060520335806969dbb96871bd63f65bb21ff4a0d7f1cec6
 sudo bash -ceu '
   cd /usr/local/sbin
-  test ! -e asc-ctl.pre-pr31-cpu-check
+  test ! -e asc-ctl.pre-pr31-peer-health
   tmp=$(mktemp .asc-ctl.XXXXXXXX)
   trap "rm -f -- \"$tmp\"" EXIT
   install -o root -g root -m 0755 "$1" "$tmp"
   printf "%s  %s\n" "$2" "$tmp" | sha256sum -c -
-  install -o root -g root -m 0755 asc-ctl asc-ctl.pre-pr31-cpu-check
+  install -o root -g root -m 0755 asc-ctl asc-ctl.pre-pr31-peer-health
   mv -T "$tmp" asc-ctl
 ' _ "$SOURCE" "$EXPECTED" &&
   sudo -n /usr/local/sbin/asc-ctl bench-pr31 --check
@@ -120,7 +120,7 @@ sudo bash -ceu '
 ```bash
 sudo bash -ceu '
   cd /usr/local/sbin
-  install -o root -g root -m 0755 asc-ctl.pre-pr31-cpu-check asc-ctl.rollback.new
+  install -o root -g root -m 0755 asc-ctl.pre-pr31-peer-health asc-ctl.rollback.new
   mv -T asc-ctl.rollback.new asc-ctl
 '
 ```

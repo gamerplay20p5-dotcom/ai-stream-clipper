@@ -3,10 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import signal
+import socketserver
+import subprocess
 import sys
+import threading
 import time
 from contextlib import nullcontext
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -150,6 +155,58 @@ def test_gpu_gate_refuses_foreign_clients_before_and_during_replay(monkeypatch):
     for namespace in (None, "pid:[35]"):
         with pytest.raises(ctl.Denied, match="external client"):
             ctl._bench_no_contention({128}, namespace)
+
+
+@LINUX
+def test_peer_inspect_batch_handles_optional_health_with_the_docker_cli(monkeypatch, tmp_path):
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("Docker CLI is required to exercise the inspect template")
+    peers = {
+        CID: {"Id": CID, "State": {"Status": "running"}, "RestartCount": 0},
+        PEER: {"Id": PEER, "State": {"Status": "running", "Health": {"Status": "healthy"}}, "RestartCount": 2},
+        "d" * 64: {"Id": "d" * 64, "State": {"Status": "exited", "Health": {"Status": "unhealthy"}}, "RestartCount": 3},
+    }
+
+    class DockerAPI(BaseHTTPRequestHandler):
+        def address_string(self):
+            return "unix"
+
+        def do_HEAD(self):
+            self.send_response(200 if self.path == "/_ping" else 404)
+            self.send_header("API-Version", "1.44")
+            self.end_headers()
+
+        def do_GET(self):
+            parts = self.path.split("/")
+            if len(parts) < 4 or parts[-3] != "containers" or parts[-1] != "json" or parts[-2] not in peers:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(peers[parts[-2]]).encode())
+
+    sock = tmp_path / "docker.sock"
+
+    def inspect(*args):
+        # The real CLI formats fixture data from a private socket without a running Docker daemon.
+        result = subprocess.run([docker, "--config", str(tmp_path), "--host", f"unix://{sock}", *args],
+                                env={"PATH": os.defpath}, capture_output=True, text=True, timeout=5)
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    monkeypatch.setattr(ctl, "_bench_docker", inspect)
+    with socketserver.UnixStreamServer(str(sock), DockerAPI) as server:
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
+        thread.start()
+        try:
+            assert ctl._bench_peers(list(peers)) == {
+                CID: "running none 0", PEER: "running healthy 2", "d" * 64: "exited unhealthy 3",
+            }
+        finally:
+            server.shutdown()
+            thread.join()
 
 
 @pytest.mark.parametrize("nodes", [None, {128}], ids=["cpu-check", "gpu-replay"])

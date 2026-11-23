@@ -1103,7 +1103,7 @@ def _bench_host_address() -> None:
         raise Denied("the 201 LAN address is not assigned to this host")
 
 
-BENCH_PEER = '{{.Id}} {{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{.RestartCount}}'
+BENCH_PEER = '{{.Id}} {{.State.Status}} {{with index .State "Health"}}{{.Status}}{{else}}none{{end}} {{.RestartCount}}'
 
 
 def _bench_peers(ids: list[str]) -> dict[str, str]:
