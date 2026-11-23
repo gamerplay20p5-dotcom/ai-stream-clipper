@@ -21,6 +21,7 @@ O SHA-256 esperado é informado junto com cada versão. O instalador confere o h
 | `sudo asc-ctl env-install FILE` / `env-show` / `set-tag TAG` | Configuração em `/etc/asc/asc.env` (root 600), só com variáveis permitidas |
 | `sudo asc-ctl tls-init` (210) / `tls-install-ca FILE` | CA e certificado HTTPS próprios do projeto |
 | `sudo asc-ctl init` / `models` / `gpu-validate` / `test-media-add` / `backup-db` | Diretórios em `/opt/asc`, download de modelos, benchmark da GPU, vídeos de teste, backup do banco |
+| `sudo asc-ctl bench-pr31 [--check]` (201, 1.4.0+) | Replay isolado da PR #31. Veja o [runbook PT-BR/EN](bench-pr31.md) para preparação, instalação manual e rollback |
 | `sudo asc-ctl restore-check FILE` (212, 1.2.2+) | Restaura um backup num PostgreSQL descartável (sem rede, sem porta, removido no fim) e compara as contagens de cada tabela com o banco |
 | `sudo asc-ctl exec asc-<contêiner> -- comando` | Só dentro de contêineres do projeto `asc` |
 
