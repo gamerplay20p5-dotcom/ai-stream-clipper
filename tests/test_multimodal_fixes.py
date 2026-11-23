@@ -173,6 +173,44 @@ def test_channel_pilot_preference_is_validated(admin):
     assert bad.status_code == 422
 
 
+def test_channel_pilot_preserves_legacy_editorial_settings(admin):
+    from clipper.db import session_scope
+    from clipper.models import AppSetting, Streamer
+    from conftest import CSRF
+
+    legacy = {"min_score": 75, "auto_publish": False, "weights": {"surprise": 1.6}, "editor_mode": "off"}
+    with session_scope() as db:
+        row = db.get(AppSetting, "ai")
+        previous = row.value if row is not None else None
+        db.merge(AppSetting(key="ai", value=legacy))
+
+    channel = None
+    try:
+        settings = admin.get("/api/settings").json()
+        assert settings["min_score"] == 75 and settings["auto_publish"] is False
+        assert settings["weights"]["surprise"] == 1.6 and settings["editor_mode"] == "off"
+        assert settings["visual_discovery"] == "off"
+        created = admin.post("/api/streamers", json={"url": "https://www.twitch.tv/piloto_isolado"}, headers=CSRF)
+        assert created.status_code == 201, created.text
+        channel = created.json()["id"]
+        for mode, effective in (("shadow", "shadow"), ("on", "on"), (None, "off")):
+            result = admin.patch(f"/api/streamers/{channel}", json={"preferences": {"visual_discovery": mode}},
+                                 headers=CSRF)
+            assert result.status_code == 200, result.text
+            after = admin.get("/api/settings").json()
+            assert after == settings
+            selected = AISettings.model_validate(after).for_channel(result.json()["preferences"])
+            assert selected.visual_discovery == effective and selected.min_score == 75
+    finally:
+        with session_scope() as db:
+            if previous is not None:
+                db.merge(AppSetting(key="ai", value=previous))
+            else:
+                db.delete(db.get(AppSetting, "ai"))
+            if channel is not None:
+                db.delete(db.get(Streamer, channel))
+
+
 # ---------------------------------------------------------------- P1: audio worker backpressure
 
 class _Ctx:

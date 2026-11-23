@@ -2,6 +2,8 @@
 
 Correções feitas depois da homologação da PR #29, comparadas com o estado da PR em `d66fae8`. As novas opções ficam desligadas por padrão: `visual_discovery=off`, e o canal sem preferência segue o valor global. Pagamentos, cadastro, SMTP e o PostgreSQL de produção não foram alterados.
 
+Para integrar as duas PRs e conduzir o piloto em produção, use o roteiro PT-BR/EN, que preserva `min_score=75` e mantém a publicação pausada. For integration and the production pilot, use the bilingual rollout runbook, which retains `min_score=75` and keeps publishing paused. [Implantação controlada / Controlled rollout](deploys/MULTIMODAL_PR29_PR31.md)
+
 ## Resumo
 
 | Item | Antes (`d66fae8`) | Depois |
