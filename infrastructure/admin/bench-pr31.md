@@ -4,7 +4,7 @@
 
 ## Português (Brasil)
 
-A Intel Arc A750 e o driver são compartilhados. Docker limita CPU, RAM e processos, mas não reserva GPU ou VRAM. Reserve uma janela de baixa atividade e confirme com os responsáveis pelos outros serviços. O comando recusa a partida se já houver um cliente da GPU, inclusive ocioso, e interrompe o benchmark se aparecer outro cliente, um contêiner monitorado mudar de estado ou saúde, ou os recursos do host ficarem abaixo da reserva. A checagem é periódica. Picos entre amostras ou travamentos do driver ainda podem afetar outros serviços. Se a GPU estiver ocupada ou a checagem falhar, aguarde uma janela livre e mantenha os serviços rodando.
+A Intel Arc A750 e o driver são compartilhados. Docker limita CPU, RAM e processos, mas não reserva GPU ou VRAM. Reserve uma janela de baixa atividade para o benchmark e confirme com os responsáveis pelos outros serviços. O benchmark com GPU recusa a partida se já houver um cliente da placa, inclusive ocioso, e é interrompido se surgir concorrência. A checagem é periódica, e picos entre amostras ou travamentos do driver ainda podem afetar outros serviços. O `--check` roda somente em CPU e pode ser executado com a Arc em uso. Ambos os modos verificam a saúde dos workers e as reservas de recursos do host antes e durante a execução.
 
 Use os arquivos preparados em `/home/asc/bench/pr31/`, incluindo o código da PR #31 no commit `33f3e00953c35dfcaf301a086aaf75b1743e31e0`, `manifest.json`, o diretório `out/` gravável por `asc` e `settings-75.json` sem credenciais com `min_score=75` e `whisper_model=small`. Se `media/` estiver ausente, o launcher busca as referências `media/*` no diretório preparado `bench/media/`. O relatório registra ajustes intencionais em `settings_differences`.
 
@@ -14,7 +14,7 @@ A checagem completa usa a imagem existente do `asc-worker-vision` pelo ID local.
 
 ## English
 
-The Intel Arc A750 and its driver are shared. Docker caps CPU, memory and processes but cannot reserve GPU or VRAM. Schedule a low-activity window with the owners of the other services. The command refuses to start while any process holds the GPU, including an idle client. It stops the benchmark if a second client appears, a monitored container changes state or health, or host resources fall below the reserve. Monitoring is periodic. Spikes between samples and driver hangs can still affect services. Wait for a quiet window if the GPU is busy or preflight fails, and leave the services running.
+The Intel Arc A750 and its driver are shared. Docker caps CPU, memory and processes but cannot reserve GPU or VRAM. Schedule a low-activity window for the benchmark with the owners of the other services. GPU replay refuses to start while any process holds the GPU, including an idle client, and stops if another client appears. Monitoring is periodic, and spikes between samples or driver hangs can still affect services. The CPU-only `--check` can run while the Arc is in use. Both modes verify worker health and host resource reserves before and during execution.
 
 Reuse the files under `/home/asc/bench/pr31/`, including PR #31 code at `33f3e00953c35dfcaf301a086aaf75b1743e31e0`, `manifest.json`, an `out/` writable by `asc`, and a credential-free `settings-75.json` with `min_score=75` and `whisper_model=small`. If `media/` is absent, the launcher resolves `media/*` in the prepared `bench/media/` directory. The report records intentional adjustments in `settings_differences`.
 
@@ -70,7 +70,7 @@ set -euo pipefail
 AUDIO_ARCHIVE=/absolute/path/to/asc-pr31-audio.tar
 AUDIO_SHA=copy_the_archive_sha256_from_preparation
 SOURCE=/absolute/path/to/reviewed-checkout/infrastructure/admin/asc-ctl
-EXPECTED=d97456b4ef339882bce46364645717438a8318c35b801e0af6bf0ab41a04d4a9
+EXPECTED=3cd0d5d351fd48efd66f2495760fa00f117c591bf2e8e3c6f6497b966edeb8c8
 sudo bash -ceu '
   state=/var/lib/asc-ctl/pr31
   install -d -o root -g root -m 0755 "$state"
@@ -93,6 +93,36 @@ sudo bash -ceu '
   mv -T asc-ctl.pr31.new asc-ctl
 ' _ "$AUDIO_ARCHIVE" "$AUDIO_SHA" "$SOURCE" "$EXPECTED"
 sudo -n /usr/local/sbin/asc-ctl version
+```
+
+### Atualizar a 1.4.0 instalada / Update an existing 1.4.0 installation
+
+Com o bundle já instalado na 201, substitua somente o binário usando o checkout revisado da PR #32. Para desfazer a atualização, restaure `asc-ctl.pre-pr31-cpu-check` com os comandos abaixo.
+
+With the bundle already installed on host 201, replace the executable from the reviewed PR #32 checkout. To undo the update, restore `asc-ctl.pre-pr31-cpu-check` using the commands below.
+
+```bash
+SOURCE=/absolute/path/to/reviewed-checkout/infrastructure/admin/asc-ctl
+EXPECTED=3cd0d5d351fd48efd66f2495760fa00f117c591bf2e8e3c6f6497b966edeb8c8
+sudo bash -ceu '
+  cd /usr/local/sbin
+  test ! -e asc-ctl.pre-pr31-cpu-check
+  tmp=$(mktemp .asc-ctl.XXXXXXXX)
+  trap "rm -f -- \"$tmp\"" EXIT
+  install -o root -g root -m 0755 "$1" "$tmp"
+  printf "%s  %s\n" "$2" "$tmp" | sha256sum -c -
+  install -o root -g root -m 0755 asc-ctl asc-ctl.pre-pr31-cpu-check
+  mv -T "$tmp" asc-ctl
+' _ "$SOURCE" "$EXPECTED" &&
+  sudo -n /usr/local/sbin/asc-ctl bench-pr31 --check
+```
+
+```bash
+sudo bash -ceu '
+  cd /usr/local/sbin
+  install -o root -g root -m 0755 asc-ctl.pre-pr31-cpu-check asc-ctl.rollback.new
+  mv -T asc-ctl.rollback.new asc-ctl
+'
 ```
 
 ### Verificação / Preflight

@@ -1175,7 +1175,7 @@ def _bench_create(staging: Path, image: str, gid: str, name: str, seconds: int, 
                    "/opt/asc/bin/python3", "-s", "-B", "-u", "-c", PR31_ENTRY] + (["--check"] if check else [])
 
 
-def _bench_watch(cid: str, peers: dict[str, str], nodes: set[int], deadline: float, record: dict) -> int:
+def _bench_watch(cid: str, peers: dict[str, str], nodes: set[int] | None, deadline: float, record: dict) -> int:
     while time.monotonic() < deadline:
         status, pid, rc = _bench_docker("inspect", "--type", "container", "-f",
                                         "{{.State.Status}} {{.State.Pid}} {{.State.ExitCode}}", cid).split()
@@ -1184,14 +1184,15 @@ def _bench_watch(cid: str, peers: dict[str, str], nodes: set[int], deadline: flo
         _bench_capacity(starting=False)
         if shutil.disk_usage(PR31_STATE).free < 4 * GIB:
             raise Denied("free staging disk space fell below the host reserve")
-        namespace = None
-        if pid.isdecimal() and int(pid):
-            try:
-                namespace = os.readlink(f"/proc/{pid}/ns/pid")
-            except FileNotFoundError:
-                pass  # the replay may have exited between Docker inspect and this read
-        count = _bench_no_contention(nodes, namespace)
-        record["peak_gpu_clients"] = max(record.get("peak_gpu_clients", 0), count)
+        if nodes is not None:
+            namespace = None
+            if pid.isdecimal() and int(pid):
+                try:
+                    namespace = os.readlink(f"/proc/{pid}/ns/pid")
+                except FileNotFoundError:
+                    pass  # the replay may have exited between Docker inspect and this read
+            count = _bench_no_contention(nodes, namespace)
+            record["peak_gpu_clients"] = max(record.get("peak_gpu_clients", 0), count)
         record["samples"] += 1
         if status in ("exited", "dead"):
             return int(rc)
@@ -1240,8 +1241,11 @@ def _bench_run(uid: int, gid: int, conf: dict, check: bool, deadline: float, sig
     _bench_host_address()
     _bench_capacity(starting=True)
     _bench_trusted_dir(PR31_MODELS)
-    render_gid, nodes = _bench_gpu(conf)
-    _bench_no_contention(nodes, None)
+    render_gid, gpu_nodes = _bench_gpu(conf)
+    # A CPU-only check has no GPU device. Keep the device and permission preflight for both modes.
+    nodes = None if check else gpu_nodes
+    if nodes is not None:
+        _bench_no_contention(nodes, None)
     image, worker = _bench_image()
     _bench_audio(deadline)
     if shutil.disk_usage(PR31_STATE).free < 8 * GIB:
@@ -1258,7 +1262,8 @@ def _bench_run(uid: int, gid: int, conf: dict, check: bool, deadline: float, sig
             peers = _bench_peers(_bench_docker("ps", "--no-trunc", "-q").splitlines())
             if worker not in peers or any(not s.startswith(("running healthy ", "running none ")) for s in peers.values()):
                 raise Denied("the vision worker disappeared or a running peer is not healthy")
-            _bench_no_contention(nodes, None)
+            if nodes is not None:
+                _bench_no_contention(nodes, None)
             result_dir = staging / "result"
             if not check:
                 result_dir.mkdir(mode=0o700)
@@ -1279,7 +1284,8 @@ def _bench_run(uid: int, gid: int, conf: dict, check: bool, deadline: float, sig
                 record["container_id"] = cid
                 if time.monotonic() >= deadline - 10 or _bench_peers(list(peers)) != peers:
                     raise Denied("deadline or peer state changed before start")
-                _bench_no_contention(nodes, None)
+                if nodes is not None:
+                    _bench_no_contention(nodes, None)
                 _bench_docker("start", cid)
                 code = _bench_watch(cid, peers, nodes, deadline, record)
                 record["exit_code"] = code

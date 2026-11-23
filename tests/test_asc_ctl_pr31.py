@@ -152,11 +152,12 @@ def test_gpu_gate_refuses_foreign_clients_before_and_during_replay(monkeypatch):
             ctl._bench_no_contention({128}, namespace)
 
 
-def test_watch_aborts_on_peer_degradation(monkeypatch):
+@pytest.mark.parametrize("nodes", [None, {128}], ids=["cpu-check", "gpu-replay"])
+def test_watch_aborts_on_peer_degradation(monkeypatch, nodes):
     monkeypatch.setattr(ctl, "_bench_docker", lambda *args: "running 101 0")
     monkeypatch.setattr(ctl, "_bench_peers", lambda ids: {PEER: "running unhealthy 0"})
     with pytest.raises(ctl.Denied, match="peer container"):
-        ctl._bench_watch(CID, {PEER: "running healthy 0"}, {128}, time.monotonic() + 30, {"samples": 0})
+        ctl._bench_watch(CID, {PEER: "running healthy 0"}, nodes, time.monotonic() + 30, {"samples": 0})
 
 
 def test_watch_records_gpu_samples_and_exit_code(monkeypatch):
@@ -172,15 +173,19 @@ def test_watch_records_gpu_samples_and_exit_code(monkeypatch):
         ctl._bench_watch(CID, {}, {128}, time.monotonic() - 1, record)
 
 
-def test_check_and_abort_remove_only_their_sandbox(monkeypatch, tmp_path):
-    calls, reports = [], []
+@pytest.mark.parametrize(("check", "contention_at"), [(True, 1), (False, 1), (False, 2), (False, 3), (False, 4)],
+                         ids=["cpu-check", "gpu-admission", "gpu-after-staging", "gpu-before-start", "gpu-runtime"])
+def test_cpu_check_allows_busy_gpu_and_replay_refuses_it(monkeypatch, tmp_path, check, contention_at):
+    calls, reports, gpu_samples = [], [], []
 
     def docker(*args, **kwargs):
         calls.append(args)
-        return {"ps": PEER, "create": CID, "start": CID, "rm": CID}[args[0]]
+        return {"ps": PEER, "create": CID, "start": CID, "rm": CID,
+                "inspect": "exited 0 0" if check else "running 101 0"}[args[0]]
 
-    def watch(*args):
-        raise ctl.Denied("the shared GPU has an external client")
+    def gpu_clients(nodes):
+        gpu_samples.append(nodes)
+        return {102: "pid:[34]"} if len(gpu_samples) >= contention_at else {}
 
     monkeypatch.setattr(ctl, "PR31_STATE", tmp_path)
     monkeypatch.setattr(ctl, "_bench_host_address", lambda: None)
@@ -188,30 +193,41 @@ def test_check_and_abort_remove_only_their_sandbox(monkeypatch, tmp_path):
     monkeypatch.setattr(ctl, "_bench_capacity", lambda **kwargs: None)
     monkeypatch.setattr(ctl, "_bench_trusted_dir", lambda path: None)
     monkeypatch.setattr(ctl, "_bench_gpu", lambda conf: ("993", {128}))
-    monkeypatch.setattr(ctl, "_bench_no_contention", lambda *args: 0)
+    monkeypatch.setattr(ctl, "_bench_gpu_clients", gpu_clients)
     monkeypatch.setattr(ctl, "_bench_image", lambda: (IMAGE, PEER))
     monkeypatch.setattr(ctl, "_bench_docker", docker)
     monkeypatch.setattr(ctl, "_bench_open_dir", lambda *args, **kwargs: nullcontext(10))
     monkeypatch.setattr(ctl, "_bench_stage", lambda *args: None)
     monkeypatch.setattr(ctl, "_bench_peers", lambda ids: {PEER: "running healthy 0"})
-    monkeypatch.setattr(ctl, "_bench_watch", lambda *args: 0)
     monkeypatch.setattr(ctl, "_bench_publish", lambda fd, name, data, uid, gid: reports.append((name, data)))
     monkeypatch.setattr(os, "chown", lambda *args: None, raising=False)
     monkeypatch.setattr(os, "fstatvfs", lambda fd: SimpleNamespace(f_bavail=ctl.GIB, f_frsize=8), raising=False)
     original_fstat = os.fstat
     monkeypatch.setattr(os, "fstat", lambda fd: SimpleNamespace(st_uid=1234, st_mode=0o700)
                         if fd == 10 else original_fstat(fd))
+    original_readlink = os.readlink
+    monkeypatch.setattr(os, "readlink", lambda path, *args, **kwargs: "pid:[35]" if path == "/proc/101/ns/pid"
+                        else original_readlink(path, *args, **kwargs))
     monkeypatch.setattr(ctl.shutil, "disk_usage", lambda path: SimpleNamespace(free=8 * ctl.GIB))
 
-    assert ctl._bench_run(1234, 1234, CONF_201, True, time.monotonic() + 30, signal) == 0
-    assert [args[0] for args in calls] == ["ps", "create", "start", "rm"]
-    assert calls[1][-1] == "--check" and "--device" not in calls[1] and reports == []
-    assert calls[2:] == [("start", CID), ("rm", "-f", "-v", CID)]
-    calls.clear()
-    monkeypatch.setattr(ctl, "_bench_watch", watch)
-    assert ctl._bench_run(1234, 1234, CONF_201, False, time.monotonic() + 30, signal) == 1
-    assert [args[0] for args in calls] == ["ps", "create", "start", "rm"]
-    assert calls[2:] == [("start", CID), ("rm", "-f", "-v", CID)]
+    deadline = time.monotonic() + 30
+    if check:
+        assert ctl._bench_run(1234, 1234, CONF_201, True, deadline, signal) == 0
+        assert [args[0] for args in calls] == ["ps", "create", "start", "inspect", "rm"]
+        assert calls[1][-1] == "--check" and "--device" not in calls[1]
+        assert calls[-1] == ("rm", "-f", "-v", CID)
+        assert not reports and not gpu_samples
+        return
+    if contention_at <= 2:
+        with pytest.raises(ctl.Denied, match="external client"):
+            ctl._bench_run(1234, 1234, CONF_201, False, deadline, signal)
+        assert calls == ([] if contention_at == 1 else [("ps", "--no-trunc", "-q")])
+        assert not reports and len(gpu_samples) == contention_at
+        return
+    assert ctl._bench_run(1234, 1234, CONF_201, False, deadline, signal) == 1
+    steps = ["ps", "create", "rm"] if contention_at == 3 else ["ps", "create", "start", "inspect", "rm"]
+    assert [args[0] for args in calls] == steps and len(gpu_samples) == contention_at
+    assert calls[-1] == ("rm", "-f", "-v", CID)
     [(name, status)] = reports
     assert name.endswith(".status.json")
     assert status["result"] == "aborted" and status["reason"] == "the shared GPU has an external client"
