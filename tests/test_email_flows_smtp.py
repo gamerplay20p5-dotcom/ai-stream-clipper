@@ -117,3 +117,41 @@ def test_infinitepay_renewal_link_is_emailed_by_the_commercial_service(sink):
     assert "Renove seu plano" in m.message["Subject"]
     assert renewal["link_url"] in m.text, "the renewal e-mail carries the exact InfinitePay link"
     assert m.message["X-Mailgun-Track"] == "no", "links are never rewritten by provider tracking"
+
+
+@pytest.fixture
+def signup_closed(monkeypatch):
+    """Production default: e-mail configured, billing linked, but ASC_SIGNUP_OPEN not set."""
+    from clipper.config import reset_settings_cache
+
+    monkeypatch.setenv("ASC_SIGNUP_OPEN", "false")
+    monkeypatch.setenv("ASC_SIGNUP_ALLOWED_EMAILS", "Controlada@Example.com, outra@example.com")
+    reset_settings_cache()
+    yield
+    reset_settings_cache()
+
+
+def test_configuring_smtp_does_not_open_public_signup(app, smtp_on, signup_closed):
+    anon = TestClient(app)
+    config = anon.get("/api/auth/config").json()
+    assert config["email_enabled"] is True and config["signup_enabled"] is False
+    before = len(smtp_on.messages)
+    r = anon.post("/api/auth/signup", json={"email": f"publico-{uuid.uuid4().hex[:8]}@example.com"})
+    assert r.status_code == 503 and r.json()["detail"] == "cadastro indisponível no momento"
+    assert len(smtp_on.messages) == before, "no e-mail while sign-up is closed"
+    # Password recovery keeps working for existing accounts
+    assert anon.post("/api/auth/forgot", json={"email": "ninguem@example.com"}).json() == {"email_enabled": True}
+
+
+def test_controlled_account_signs_up_while_public_signup_is_closed(app, smtp_on, signup_closed):
+    anon = TestClient(app)
+    assert anon.post("/api/auth/signup", json={"email": "controlada@example.com"}).status_code == 202
+    [m] = [x for x in smtp_on.messages if "controlada@example.com" in x.recipients]
+    assert "Confirme seu e-mail" in m.message["Subject"]
+    assert anon.post("/api/auth/password-link", json={"token": _token(m), "new_password": "acesso-homologado-forte-7"}).status_code == 200
+    me = TestClient(app).post("/api/auth/login", json={"email": "controlada@example.com", "password": "acesso-homologado-forte-7"})
+    assert me.status_code == 200 and me.json()["role"] == "customer"
+    # Recovery for the controlled account
+    anon.post("/api/auth/forgot", json={"email": "controlada@example.com"})
+    reset = smtp_on.messages[-1]
+    assert "Redefinir a senha" in reset.message["Subject"] and "controlada@example.com" in reset.recipients

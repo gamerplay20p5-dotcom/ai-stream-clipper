@@ -6,6 +6,15 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.8.1", "date": "2026-11-22", "title": "Cadastro público só com autorização", "items": [
+        "Configurar o envio de e-mail não abre mais o cadastro público sozinho: ele só abre com ASC_SIGNUP_OPEN=true, depois de publicados os Termos e a Política de Privacidade.",
+        "Enquanto o cadastro está fechado, só os e-mails autorizados pela operação podem criar conta (contas controladas de homologação).",
+        "Confirmação de e-mail e recuperação de senha continuam funcionando para as contas existentes.",
+    ], "title_en": "Public sign-up only when authorised", "items_en": [
+        "Configuring e-mail no longer opens public sign-up by itself: it opens only with ASC_SIGNUP_OPEN=true, after the Terms and Privacy Policy are published.",
+        "While sign-up is closed, only e-mails authorised by operations can create an account (controlled homologation accounts).",
+        "E-mail confirmation and password recovery keep working for existing accounts.",
+    ]},
     {"version": "0.8.0", "date": "2026-11-21", "title": "Base para clientes: assinaturas, lives compartilhadas e publicação por cliente", "items": [
         "Cada live é capturada uma única vez, mesmo quando vários clientes acompanham o mesmo canal; cada um recebe os próprios cortes, com o próprio estilo.",
         "Contas de clientes com plano (Basic, Creator e Pro), horas, canais e lives simultâneas controlados pelo backend.",

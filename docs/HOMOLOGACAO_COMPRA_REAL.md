@@ -13,7 +13,7 @@ A compra é feita por uma pessoa da HTS, com cartão ou Pix próprios. Nada é c
 | --- | --- | --- |
 | 1 | Repasses do Stripe habilitados (conta bancária). Sem isso a compra funciona, mas o dinheiro fica retido | Dono da conta Stripe |
 | 2 | asc-ctl 1.3.1 instalado na 210 (aceita `COMMERCIAL_PAYMENTS_TEST_ACCOUNTS`) | Administrador da 210 |
-| 3 | Conta de cliente de teste: painel → Usuários → novo usuário, papel `customer`, entrega "senha inicial". Anote o **id** da conta | Admin do painel |
+| 3 | Conta de cliente de teste (o painel não cria contas de cliente): autorize o e-mail em `ASC_SIGNUP_ALLOWED_EMAILS` no `asc.env` da 210 e recrie só a `api`. Depois faça o cadastro com esse e-mail, abra o link de confirmação e crie a senha. O cadastro público continua fechado (`ASC_SIGNUP_OPEN=false`). Anote o **id** da conta (painel → Clientes) | Administrador da 210 e a pessoa de teste |
 | 4 | Opcional, para mover o mínimo: cupom de **uso novo**, válido só para Basic, limite total 1 e por cliente 1, expirando no dia seguinte, deixando o valor no mínimo permitido (**R$ 1,00** e **US$ 0,50**, `MIN_CHARGE`). Sem cupom, o Basic custa R$ 59,90 e US$ 19,99 | Admin do painel |
 | 5 | Liberar só essa conta: `COMMERCIAL_PAYMENTS_TEST_ACCOUNTS=<id>` no `/etc/asc/asc.env` e depois `sudo asc-ctl compose up --gpu commercial`. Os pagamentos públicos continuam fechados (`COMMERCIAL_PAYMENTS_OPEN=false`) | Administrador da 210 |
 

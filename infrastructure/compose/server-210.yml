@@ -55,7 +55,9 @@ services:
       options: { max-size: "20m", max-file: "5" }
 
   api:
-    image: ai-stream-clipper:${ASC_IMAGE_TAG:-0.7.0}
+    # The API runs its own tag (0.8.1: sign-up lock) while the other 210 services stay on ASC_IMAGE_TAG.
+    # At the next full release, put the API back on ASC_IMAGE_TAG.
+    image: ai-stream-clipper:${ASC_API_TAG:-0.8.1}
     container_name: asc-api
     <<: *hardening
     command: ["api", "--host", "0.0.0.0", "--port", "8780"]
@@ -78,6 +80,10 @@ services:
       # Billing link to the commercial service (off while ASC_BILLING_SECRET is empty: checkout stays disabled).
       # Takes effect the next time the api container is recreated.
       ASC_BILLING_SECRET: ${ASC_BILLING_SECRET:-}
+      # Public self sign-up stays closed until the terms and privacy policy are published
+      ASC_SIGNUP_OPEN: ${ASC_SIGNUP_OPEN:-false}
+      # While closed: e-mails allowed to sign up (controlled accounts), comma separated
+      ASC_SIGNUP_ALLOWED_EMAILS: ${ASC_SIGNUP_ALLOWED_EMAILS:-}
       ASC_COMMERCIAL_URL: http://commercial:8790
     ports: ["192.168.1.210:8780:8780"]
     volumes: ["asc_clips:/data/storage", "/etc/asc/tls:/tls:ro"]
