@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent } from 'react'
+import { useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import { Check, ChevronDown, Clapperboard, Radio, ScanSearch, Scissors, X } from 'lucide-react'
 import type { Language } from './content'
 import type { Editorial } from './editorial'
@@ -142,27 +142,27 @@ export function Demo({ t, language, caption }: { t: Editorial; language: Languag
   }
 
   return (
-    <section className="demo section-space" id="como-funciona" aria-labelledby="demo-heading" tabIndex={-1}>
+    <section className="demo section-space seam" id="como-funciona" aria-labelledby="demo-heading" tabIndex={-1}>
       <div className="shell demo-layout">
-        <div className="demo-intro">
+        <div className="demo-intro" data-reveal>
           <p className="marker">{demo.marker}</p>
           <h2 id="demo-heading">{demo.title}</h2>
           <p className="lede">{demo.detail}</p>
-          <div className="step-list" role="tablist" aria-label={demo.stepsLabel} aria-orientation="vertical">
+        </div>
+        <div className="step-list" role="tablist" aria-label={demo.stepsLabel} aria-orientation="horizontal" style={{ '--progress': step / (demo.steps.length - 1) } as CSSProperties} data-reveal>
             {demo.steps.map((item, index) => {
               const Icon = stepIcons[index]
               return (
                 <button key={item.title} type="button" role="tab" id={`step-${index}`} aria-selected={step === index} aria-controls={`stage-${index}`}
                   tabIndex={step === index ? 0 : -1} onClick={() => setStep(index)} onKeyDown={event => moveTab(event, index)}
                   ref={element => { tabs.current[index] = element }}>
-                  <span className="step-icon"><Icon size={20} aria-hidden="true" /></span>
-                  <span className="step-text"><strong>{index + 1}. {item.title}</strong><span>{item.detail}</span></span>
+                  <span className="step-icon"><Icon size={18} aria-hidden="true" /></span>
+                  <span className="step-text"><strong><span className="step-no" aria-hidden="true">0{index + 1}</span>{item.title}</strong><span>{item.detail}</span></span>
                 </button>
               )
             })}
-          </div>
         </div>
-        <div className="stage" id="demo-stage">
+        <div className="stage" id="demo-stage" data-reveal>
           <div className="stage-head"><span><img src="/brand.svg" width="18" height="18" alt="" />AI Stream Clipper</span><span>{demo.sample}</span></div>
           {demo.steps.map((item, index) => (
             <div key={item.title} id={`stage-${index}`} role="tabpanel" aria-labelledby={`step-${index}`} hidden={step !== index} className="stage-panel">

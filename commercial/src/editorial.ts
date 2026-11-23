@@ -22,6 +22,21 @@ export const editorial = {
       generate: 'Gerar corte',
       short: 'Short',
       caption: 'A fuga mais insana do dia',
+      engine: {
+        label: 'Demonstração animada: uma live vira um Short em seis etapas',
+        steps: ['Live', 'Análise', 'Destaque', 'Momento', 'Vertical', 'Short pronto'],
+        states: [
+          'A live está no ar e o Clipper acompanha a transmissão',
+          'A IA percorre a linha do tempo lendo imagem, áudio e fala',
+          'Os sinais se concentram em um trecho da live',
+          'A IA marca o momento e dá uma nota a ele',
+          'O enquadramento muda para o formato vertical 9:16',
+          'O Short legendado fica pronto para a sua revisão',
+        ],
+        lanes: ['Imagem', 'Áudio', 'Fala'],
+        moment: 'Momento detectado', score: 'nota', crop: 'Recorte 9:16', ready: 'Pronto para revisar',
+        pause: 'Pausar a demonstração', play: 'Continuar a demonstração', stepLabel: 'Etapas da demonstração animada',
+      },
     },
     benefits: [
       ['Detecção inteligente', 'A IA identifica os momentos que importam'],
@@ -147,6 +162,21 @@ export const editorial = {
       generate: 'Create clip',
       short: 'Short',
       caption: 'The wildest getaway of the day',
+      engine: {
+        label: 'Animated demo: a livestream becomes a Short in six steps',
+        steps: ['Live', 'Scan', 'Spike', 'Moment', 'Vertical', 'Short ready'],
+        states: [
+          'The stream is live and Clipper is following it',
+          'AI scans the timeline reading video, audio and speech',
+          'The signals converge on one stretch of the stream',
+          'AI marks the moment and scores it',
+          'The framing switches to vertical 9:16',
+          'The captioned Short is ready for your review',
+        ],
+        lanes: ['Video', 'Audio', 'Speech'],
+        moment: 'Moment detected', score: 'score', crop: '9:16 crop', ready: 'Ready to review',
+        pause: 'Pause the demo', play: 'Resume the demo', stepLabel: 'Steps of the animated demo',
+      },
     },
     benefits: [
       ['Smart detection', 'AI spots the moments that matter'],

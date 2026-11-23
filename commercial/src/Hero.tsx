@@ -1,6 +1,7 @@
-import { ArrowUpRight, Clock3, Compass, Flame, Gamepad2, Laugh, Layers, Library, Play, Radio, Scissors, Settings, Siren, Zap } from 'lucide-react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { ArrowUpRight, Check, Clock3, Gamepad2, Layers, Pause, Play, Sparkles, Zap } from 'lucide-react'
 import type { Editorial } from './editorial'
-import { Waveform } from './Waveform'
+import { reducedMotion } from './motion'
 
 // Deterministic pseudo-random sequence so the server-rendered and hydrated scene are identical.
 function seeded(seed: number) {
@@ -11,24 +12,21 @@ function seeded(seed: number) {
   }
 }
 
+// The skyline is two <path> elements (towers and lit windows) instead of hundreds of nodes: lighter to hydrate.
 const skyline = (() => {
   const random = seeded(7)
-  const towers: { x: number; w: number; h: number }[] = []
+  let towers = ''
+  let windows = ''
   let x = 560
   while (x < 1640) {
     const w = 26 + random() * 46
     const nearCenter = Math.exp(-(((x - 1180) / 260) ** 2))
     const h = 70 + random() * 120 + nearCenter * 210
-    towers.push({ x, w, h })
-    x += w + 2 + random() * 6
-  }
-  const windows: { x: number; y: number }[] = []
-  for (const tower of towers) {
-    for (let wy = 640 - tower.h + 10; wy < 628; wy += 9) {
-      for (let wx = tower.x + 5; wx < tower.x + tower.w - 5; wx += 8) {
-        if (random() > 0.83) windows.push({ x: wx, y: wy })
-      }
+    towers += `M${x.toFixed(1)} 640v${(-h).toFixed(1)}h${w.toFixed(1)}v${h.toFixed(1)}z`
+    for (let wy = 640 - h + 10; wy < 628; wy += 9) {
+      for (let wx = x + 5; wx < x + w - 5; wx += 8) if (random() > 0.83) windows += `M${wx.toFixed(1)} ${wy.toFixed(1)}h3v4h-3z`
     }
+    x += w + 2 + random() * 6
   }
   return { towers, windows }
 })()
@@ -41,131 +39,158 @@ function Palm({ x, height, lean, scale = 1 }: { x: number; height: number; lean:
     const end = { x: top.x + Math.cos(radians) * length, y: top.y + Math.sin(radians) * length * 0.55 + length * 0.42 }
     const control = { x: top.x + Math.cos(radians) * length * 0.55, y: top.y - 34 * scale + Math.sin(radians) * 20 }
     return `M${top.x} ${top.y} Q${control.x} ${control.y} ${end.x} ${end.y}`
-  })
+  }).join(' ')
   return (
     <g>
       <path d={`M${x - 9 * scale} 900 Q${x + lean * 0.2} ${900 - height * 0.55} ${top.x - 3} ${top.y} L${top.x + 3} ${top.y} Q${x + lean * 0.25 + 6} ${900 - height * 0.55} ${x + 9 * scale} 900 Z`} />
-      {fronds.map(d => <path key={d} d={d} fill="none" stroke="currentColor" strokeWidth={9 * scale} strokeLinecap="round" />)}
-      {fronds.map(d => <path key={`${d}-leaf`} d={d} fill="none" stroke="currentColor" strokeWidth={22 * scale} strokeLinecap="round" strokeDasharray={`2 ${12 * scale}`} opacity=".9" />)}
+      <path d={fronds} fill="none" stroke="currentColor" strokeWidth={9 * scale} strokeLinecap="round" />
+      <path d={fronds} fill="none" stroke="currentColor" strokeWidth={22 * scale} strokeLinecap="round" strokeDasharray={`2 ${12 * scale}`} opacity=".9" />
     </g>
   )
 }
 
-/** Original vector dusk scene: sky, sun, coastal skyline, palms and a helicopter. */
+/** Original vector dusk scene. Layers move a little with the scroll ([data-depth], see motion.ts). */
 function HeroScene() {
   return (
-    <svg className="hero-scene" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
-      <defs>
-        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#0d0a1d" />
-          <stop offset=".22" stopColor="#2a1046" />
-          <stop offset=".44" stopColor="#6b1a5c" />
-          <stop offset=".58" stopColor="#b7306a" />
-          <stop offset=".67" stopColor="#ff5466" />
-          <stop offset=".72" stopColor="#ff8a74" />
-        </linearGradient>
-        <radialGradient id="sun" cx=".5" cy=".5" r=".5">
-          <stop offset="0" stopColor="#ffd0a8" />
-          <stop offset=".55" stopColor="#ff7a6a" />
-          <stop offset="1" stopColor="#ff4f62" stopOpacity="0" />
-        </radialGradient>
-        <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#6a1f4c" />
-          <stop offset=".35" stopColor="#24102a" />
-          <stop offset="1" stopColor="#090b10" />
-        </linearGradient>
-        <filter id="haze" x="-20%" y="-200%" width="140%" height="500%"><feGaussianBlur stdDeviation="14" /></filter>
-      </defs>
-      <rect width="1600" height="900" fill="url(#sky)" />
-      <g fill="#7640c8" opacity=".55" filter="url(#haze)">
-        <ellipse cx="900" cy="180" rx="560" ry="40" />
-        <ellipse cx="1400" cy="250" rx="320" ry="30" />
-      </g>
-      <g fill="#ff7a96" opacity=".45" filter="url(#haze)">
-        <ellipse cx="1080" cy="345" rx="440" ry="22" />
-        <ellipse cx="1360" cy="415" rx="300" ry="16" />
-        <ellipse cx="760" cy="440" rx="300" ry="14" />
-        <ellipse cx="1000" cy="500" rx="380" ry="12" />
-      </g>
-      <circle cx="1210" cy="610" r="150" fill="url(#sun)" opacity=".85" />
-      <rect y="640" width="1600" height="260" fill="url(#sea)" />
-      <g fill="#140b1d">
-        {skyline.towers.map(({ x, w, h }) => <rect key={x} x={x} y={640 - h} width={w} height={h} />)}
-      </g>
-      <g fill="#ff9fb0" opacity=".55">
-        {skyline.windows.map(({ x, y }) => <rect key={`${x}-${y}`} x={x} y={y} width="3" height="4" />)}
-      </g>
-      <g className="helicopter" fill="#120a1a" transform="translate(470 128) scale(1.15)">
-        <ellipse cx="0" cy="0" rx="22" ry="9" />
-        <path d="M-18 -2 L-62 -4 L-62 1 L-18 4 Z" />
-        <rect x="-66" y="-10" width="4" height="12" />
-        <rect x="-44" y="-15" width="88" height="2.5" rx="1" />
-        <rect x="-2" y="-14" width="4" height="6" />
-        <path d="M-14 9 L-16 14 M12 9 L14 14 M-20 14 H20" stroke="#120a1a" strokeWidth="2" />
-      </g>
-      <g color="#06050b" fill="#06050b">
-        <Palm x={70} height={560} lean={60} scale={1.15} />
-        <Palm x={250} height={440} lean={-30} />
-        <Palm x={1560} height={380} lean={-50} scale={.8} />
-      </g>
-    </svg>
+    <div className="hero-scene" aria-hidden="true">
+      <svg viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice" focusable="false">
+        <defs>
+          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#05060b" />
+            <stop offset=".24" stopColor="#1b0d36" />
+            <stop offset=".46" stopColor="#5a1856" />
+            <stop offset=".6" stopColor="#a42a68" />
+            <stop offset=".68" stopColor="#ff5466" />
+            <stop offset=".72" stopColor="#ff9a72" />
+          </linearGradient>
+          <radialGradient id="sun" cx=".5" cy=".5" r=".5">
+            <stop offset="0" stopColor="#ffd9a8" />
+            <stop offset=".55" stopColor="#ff7a6a" />
+            <stop offset="1" stopColor="#ff4f62" stopOpacity="0" />
+          </radialGradient>
+          <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="#5a1c46" />
+            <stop offset=".35" stopColor="#1d0e24" />
+            <stop offset="1" stopColor="#05060b" />
+          </linearGradient>
+        </defs>
+        <rect width="1600" height="900" fill="url(#sky)" />
+        <g className="scene-layer" data-depth="0.08">
+          <circle cx="1210" cy="610" r="150" fill="url(#sun)" opacity=".85" />
+        </g>
+        <rect y="640" width="1600" height="260" fill="url(#sea)" />
+        <g className="scene-layer" data-depth="0.04">
+          <path d={skyline.towers} fill="#120a1b" />
+          <path d={skyline.windows} fill="#ff9fb0" opacity=".5" />
+        </g>
+        <g className="scene-layer" data-depth="-0.05" color="#05060b" fill="#05060b">
+          <Palm x={70} height={560} lean={60} scale={1.15} />
+          <Palm x={250} height={440} lean={-30} />
+          <Palm x={1560} height={380} lean={-50} scale={.8} />
+        </g>
+      </svg>
+    </div>
   )
 }
 
-const momentIcons = [Flame, Siren, Laugh, Compass]
-const sideIcons = [Radio, Scissors, Library, Settings]
-const momentScores = [92, 88, 81, 76]
+// Signal ticks per lane (fractions of the width); they converge on the detected window
+const lanes = [
+  [0.07, 0.19, 0.33, 0.55, 0.59, 0.63, 0.82, 0.93],
+  [0.13, 0.27, 0.41, 0.54, 0.58, 0.65, 0.88],
+  [0.04, 0.22, 0.47, 0.57, 0.61, 0.66, 0.76],
+]
+const moment: [number, number] = [0.52, 0.69]
+// How long each step stays on screen (ms)
+const durations = [1900, 2300, 1700, 1700, 2100, 3600]
+const LAST = durations.length - 1
 
-function ProductPreview({ t }: { t: Editorial }) {
-  const { hero } = t
+/**
+ * The hero's demonstration: a live becomes a Short in six coordinated states. Illustrative (original images, no
+ * real analysis). It plays only while visible, can be paused and stepped by hand, and with reduced motion it opens on
+ * the finished state without autoplay.
+ */
+function Engine({ t }: { t: Editorial['hero'] }) {
+  const e = t.engine
+  const [stage, setStage] = useState(0)
+  const [playing, setPlaying] = useState(true)
+  const [visible, setVisible] = useState(true)
+  const figure = useRef<HTMLElement>(null)
+
+  useEffect(() => {
+    if (reducedMotion()) {
+      setStage(LAST)
+      setPlaying(false)
+    }
+    const node = figure.current
+    if (!node || !('IntersectionObserver' in window)) return
+    const observer = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting), { threshold: 0.25 })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (!playing || !visible) return
+    const timer = window.setTimeout(() => {
+      if (document.visibilityState === 'hidden') return
+      setStage(current => (current + 1) % durations.length)
+    }, durations[stage])
+    return () => window.clearTimeout(timer)
+  }, [stage, playing, visible])
+
+  const inMoment = (position: number) => position >= moment[0] && position <= moment[1]
   return (
-    <figure className="hero-product" aria-label={hero.productLabel}>
-      <div className="device" aria-hidden="true">
-        <aside className="device-side">
-          <span className="device-brand"><img src="/brand.svg" width="20" height="20" alt="" />AI Stream Clipper</span>
-          <ul>{hero.sidebar.map((label, index) => {
-            const Icon = sideIcons[index]
-            return <li key={label} className={index === 0 ? 'is-active' : undefined}><Icon size={14} />{label}</li>
-          })}</ul>
-        </aside>
-        <div className="device-main">
-          <div className="device-bar">
-            <span className="live-badge">{hero.live}</span>
-            <span className="device-title">{hero.liveTitle}</span>
-            <span className="timecode">2:14:36</span>
-          </div>
-          <div className="device-video">
-            <img src="/media/live-wide.webp" srcSet="/media/live-wide-small.webp 640w, /media/live-wide.webp 1280w"
-              sizes="(max-width: 700px) 92vw, (max-width: 1100px) 70vw, 34vw" width="1280" height="720" alt="" fetchPriority="high" />
-          </div>
-          <Waveform className="device-wave" selection={[0.46, 0.66]} />
-          <div className="device-strip">
-            <img src="/media/moment-chase.webp" width="640" height="360" alt="" loading="lazy" />
-            <img src="/media/live-wide-small.webp" width="640" height="360" alt="" className="is-current" />
-            <img src="/media/moment-palms.webp" width="640" height="360" alt="" loading="lazy" />
-          </div>
+    <figure ref={figure} className="engine" data-stage={stage} aria-label={e.label}>
+      <div className="engine-stage">
+      <div className="engine-screen">
+        <div className="engine-bar">
+          <span className="live-badge"><i aria-hidden="true" />{t.live}</span>
+          <span className="engine-title">{t.liveTitle}</span>
+          <span className="timecode">02:14:{String(18 + stage * 2).padStart(2, '0')}</span>
         </div>
-        <div className="device-detect">
-          <p className="detect-title">{hero.detection}</p>
-          <ul>{hero.moments.map((label, index) => {
-            const Icon = momentIcons[index]
-            return <li key={label} className={index === 0 ? 'is-active' : undefined}><Icon size={14} /><span>{label}</span><b>{momentScores[index]}</b></li>
-          })}</ul>
-          <span className="fake-button"><Scissors size={14} />{hero.generate}</span>
+        <div className="engine-video">
+          <img src="/media/live-wide.webp" srcSet="/media/live-wide-small.webp 640w, /media/live-wide.webp 1280w"
+            sizes="(max-width: 760px) 92vw, (max-width: 1200px) 60vw, 46vw" width="1280" height="720" alt="" fetchPriority="high" />
+          <span className="engine-scan" aria-hidden="true" />
+          <span className="engine-crop" aria-hidden="true"><em>{e.crop}</em></span>
+        </div>
+        <div className="engine-timeline" aria-hidden="true">
+          <span className="engine-window" style={{ left: `${moment[0] * 100}%`, width: `${(moment[1] - moment[0]) * 100}%` }}>
+            <em><Sparkles size={12} />{e.moment}<span className="engine-score"> · {e.score} 92</span></em>
+          </span>
+          {e.lanes.map((lane, index) => (
+            <div className="engine-lane" key={lane}>
+              <span>{lane}</span>
+              <div>{lanes[index].map(position => (
+                <i key={position} className={inMoment(position) ? 'is-hit' : undefined} style={{ left: `${position * 100}%`, '--at': position } as CSSProperties} />
+              ))}</div>
+            </div>
+          ))}
+          <span className="engine-playhead" />
         </div>
       </div>
-      {/* Neon "VI" outline from the approved mockup, included at the owner's request (2026-11-20) */}
-      <svg className="neon-vi" viewBox="0 0 200 120" aria-hidden="true" focusable="false">
-        <path d="M8 6h34l30 74 30-74h34l-48 108h-32z" />
-        <path d="M150 6h34v108h-34z" />
-      </svg>
-      <div className="short-card" aria-hidden="true">
-        <span className="short-label">{hero.short} · 0:05</span>
+      <div className="engine-short" aria-hidden="true">
         <img src="/media/short-vertical.webp" width="450" height="800" alt="" />
-        <b className="short-caption">{hero.caption}</b>
-        <span className="short-progress"><Play size={11} fill="currentColor" /><i /><span className="timecode">0:00 / 0:05</span></span>
+        <b className="short-caption">{t.caption}</b>
+        <span className="engine-ready"><Check size={13} />{e.ready}</span>
       </div>
-      <figcaption>{hero.sample}</figcaption>
+      </div>
+      <div className="engine-controls">
+        <ol className="engine-steps" aria-label={e.stepLabel}>
+          {e.steps.map((label, index) => (
+            <li key={label}>
+              <button type="button" aria-current={stage === index ? 'step' : undefined} data-done={index < stage || undefined}
+                onClick={() => { setStage(index); setPlaying(false) }}>
+                <span className="step-dot" aria-hidden="true">{index + 1}</span><span className="step-label">{label}</span>
+              </button>
+            </li>
+          ))}
+        </ol>
+        <button type="button" className="engine-toggle" aria-pressed={!playing} aria-label={playing ? e.pause : e.play} onClick={() => setPlaying(value => !value)}>
+          {playing ? <Pause size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}
+        </button>
+      </div>
+      <p className="sr-only" aria-live="polite">{playing ? '' : e.states[stage]}</p>
+      <figcaption>{t.sample}</figcaption>
     </figure>
   )
 }
@@ -179,21 +204,21 @@ export function Hero({ t, join }: { t: Editorial; join: string }) {
       <div className="hero-grid shell">
         <div className="hero-copy">
           <p className="hero-status"><Gamepad2 size={15} aria-hidden="true" />{t.hero.status}</p>
-          <h1 id="hero-heading">{t.hero.title[0]} <span>{t.hero.title[1]}</span></h1>
+          <h1 id="hero-heading"><span>{t.hero.title[0]}</span> <span>{t.hero.title[1]}</span></h1>
           <p className="hero-lede">{t.hero.detail}</p>
           <div className="hero-actions">
             <a className="button primary" href="#acesso">{join}<ArrowUpRight size={17} aria-hidden="true" /></a>
             <a className="button ghost" href="#como-funciona"><span className="play-dot"><Play size={12} fill="currentColor" aria-hidden="true" /></span>{t.hero.action}</a>
           </div>
         </div>
-        <ProductPreview t={t} />
+        <Engine t={t.hero} />
       </div>
-      <ul className="benefits shell" role="list">
+      <ul className="benefits shell" role="list" data-reveal>
         {t.benefits.map(([title, detail], index) => {
           const Icon = benefitIcons[index]
           return (
-            <li key={title}>
-              {Icon ? <Icon size={24} aria-hidden="true" /> : <span className="hd-mark" aria-hidden="true">HD</span>}
+            <li key={title} data-reveal-item>
+              {Icon ? <Icon size={20} aria-hidden="true" /> : <span className="hd-mark" aria-hidden="true">HD</span>}
               <p><strong>{title}</strong><span>{detail}</span></p>
             </li>
           )

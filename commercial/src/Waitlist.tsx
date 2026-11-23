@@ -61,8 +61,8 @@ export function Waitlist({ copy, language, market, interest, onInterest, marker,
   }
 
   return (
-    <section className="waitlist section-space" id="acesso" aria-labelledby="waitlist-heading" tabIndex={-1}>
-      <div className="shell waitlist-inner">
+    <section className="waitlist section-space seam" id="acesso" aria-labelledby="waitlist-heading" tabIndex={-1}>
+      <div className="shell waitlist-inner" data-reveal>
         <div className="waitlist-intro">
           <p className="marker">{marker}</p>
           <h2 id="waitlist-heading">{t.title}</h2>

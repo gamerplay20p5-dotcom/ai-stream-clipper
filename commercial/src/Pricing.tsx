@@ -10,6 +10,7 @@ interface Props {
   onInterest: (plan: PlanId) => void
   billing: BillingConfig
   language: Language
+  interest?: PlanId | ''
 }
 
 export function MarketSwitch({ market, onMarket, label }: Pick<Props, 'market' | 'onMarket'> & { label: string }) {
@@ -37,7 +38,7 @@ function planFeatures(id: PlanId, t: Copy['pricing']) {
   ]
 }
 
-export function Pricing({ copy, market, onMarket, onInterest, billing, language }: Props) {
+export function Pricing({ copy, market, onMarket, onInterest, billing, language, interest = '' }: Props) {
   const t = copy.pricing
   const b = copy.billing
   const enabled = billing.markets[market] && Boolean(billing.appUrl)
@@ -62,25 +63,26 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
   ]
 
   return (
-    <section className="pricing section-space" id="planos" aria-labelledby="pricing-heading" tabIndex={-1}>
+    <section className="pricing section-space seam" id="planos" aria-labelledby="pricing-heading" tabIndex={-1}>
       <div className="shell">
-        <div className="pricing-head">
+        <div className="pricing-head" data-reveal>
           <div className="section-head">
             <h2 id="pricing-heading" className="slashed">{t.title}</h2>
             <p className="lede">{t.detail}</p>
           </div>
           <MarketSwitch market={market} onMarket={onMarket} label={copy.nav.market} />
         </div>
-        <div className="plan-grid">
+        <div className="plan-grid" data-reveal>
           {planIds.map(id => {
             const plan = plans[id]
             const price = formatPrice(id, market)
             return (
-              <article className={`plan-card plan-${id}`} key={id} aria-labelledby={`plan-${id}-name`}>
+              <article className={`plan-card plan-${id}${interest === id ? ' is-selected' : ''}`} key={id} aria-labelledby={`plan-${id}-name`} data-reveal-item>
                 {id === 'creator' ? <span className="plan-badge"><Sparkles size={12} aria-hidden="true" />{t.highlight}</span> : null}
                 <h3 id={`plan-${id}-name`}>{id === 'pro' ? <Crown size={18} aria-hidden="true" /> : null}{plan.name}</h3>
                 <p className="plan-tagline">{t.plans[id].tagline}</p>
                 <p className="price"><span className="price-symbol">{price.symbol}</span><strong>{price.amount}</strong><span className="price-period">{t.perMonth}</span></p>
+                <hr className="plan-rule" />
                 <ul className="plan-features" role="list">
                   {planFeatures(id, t).map(item => <li key={item}><Check size={16} aria-hidden="true" />{item}</li>)}
                 </ul>
@@ -105,7 +107,7 @@ export function Pricing({ copy, market, onMarket, onInterest, billing, language 
           <p>{t.publishNote}</p>
           <p>{t.provisional}</p>
         </div>
-        <div className="comparison">
+        <div className="comparison" data-reveal>
           <h3 id="compare-heading">{t.compare}</h3>
           <div className="table-wrap">
             <table aria-labelledby="compare-heading">
