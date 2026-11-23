@@ -1,4 +1,5 @@
 import { ArrowRight, Plus, Trash2 } from 'lucide-react'
+import type { CSSProperties } from 'react'
 import type { Editorial } from './editorial'
 
 // Event ticks per signal lane (fractions of the width); they converge on the selected window.
@@ -12,15 +13,15 @@ const selected = [0.51, 0.69]
 export function Features({ t }: { t: Editorial }) {
   const { signals, framing, library, export: exporting } = t.features
   return (
-    <section id="recursos" className="features section-space" aria-labelledby="features-heading" tabIndex={-1}>
+    <section id="recursos" className="features section-space seam" aria-labelledby="features-heading" tabIndex={-1}>
       <div className="shell">
-        <div className="section-head">
+        <div className="section-head" data-reveal>
           <p className="marker">{t.features.marker}</p>
           <h2 id="features-heading">{t.features.title}</h2>
           <p className="lede">{t.features.detail}</p>
         </div>
         <div className="feature-grid">
-          <article className="feature feature-signals">
+          <article className="feature feature-signals" data-reveal>
             <div className="feature-copy"><h3>{signals.title}</h3><p>{signals.detail}</p></div>
             <figure className="signal-board" aria-label={`${signals.lanes.join(', ')}: ${signals.selected}`}>
               <div className="signal-tracks">
@@ -28,14 +29,14 @@ export function Features({ t }: { t: Editorial }) {
                 {signals.lanes.map((lane, index) => (
                   <div className="signal-lane" key={lane}>
                     <span>{lane}</span>
-                    <div aria-hidden="true">{lanes[index].map(position => <i key={position} className={position >= selected[0] && position <= selected[1] ? 'is-hit' : undefined} style={{ left: `${position * 100}%` }} />)}</div>
+                    <div aria-hidden="true">{lanes[index].map(position => <i key={position} className={position >= selected[0] && position <= selected[1] ? 'is-hit' : undefined} style={{ left: `${position * 100}%`, '--at': position } as CSSProperties} />)}</div>
                   </div>
                 ))}
               </div>
             </figure>
           </article>
 
-          <article className="feature feature-framing">
+          <article className="feature feature-framing" data-reveal>
             <figure className="framing-pair" role="img" aria-label={framing.alt}>
               <span className="framing-source"><img src="/media/moment-palms.webp" width="640" height="360" alt="" loading="lazy" /><i /></span>
               <ArrowRight size={18} aria-hidden="true" />
@@ -44,7 +45,7 @@ export function Features({ t }: { t: Editorial }) {
             <div className="feature-copy"><h3>{framing.title}</h3><p>{framing.detail}</p></div>
           </article>
 
-          <article className="feature feature-library">
+          <article className="feature feature-library" data-reveal>
             <div className="feature-copy"><h3>{library.title}</h3><p>{library.detail}</p></div>
             <div className="library-panel">
               <ul role="list">
@@ -61,7 +62,7 @@ export function Features({ t }: { t: Editorial }) {
             </div>
           </article>
 
-          <article className="feature feature-export">
+          <article className="feature feature-export" data-reveal>
             <div className="feature-copy"><h3>{exporting.title}</h3><p>{exporting.detail}</p></div>
             <dl className="format-list">
               {exporting.formats.map(([format, plan]) => <div key={format} className={format === '4K' ? 'is-pro' : undefined}><dt>{format}</dt><dd>{plan}</dd></div>)}
@@ -80,14 +81,14 @@ export function Features({ t }: { t: Editorial }) {
 
 export function Questions({ t }: { t: Editorial['faq'] }) {
   return (
-    <section id="faq" className="faq section-space" aria-labelledby="faq-heading" tabIndex={-1}>
+    <section id="faq" className="faq section-space seam" aria-labelledby="faq-heading" tabIndex={-1}>
       <div className="shell faq-layout">
-        <div className="section-head">
+        <div className="section-head" data-reveal>
           <p className="marker">{t.marker}</p>
           <h2 id="faq-heading">{t.title}</h2>
           <p className="lede">{t.detail}</p>
         </div>
-        <div className="faq-list">
+        <div className="faq-list" data-reveal>
           {t.items.map(([question, answer]) => (
             <details key={question}><summary>{question}<Plus size={18} aria-hidden="true" /></summary><p>{answer}</p></details>
           ))}

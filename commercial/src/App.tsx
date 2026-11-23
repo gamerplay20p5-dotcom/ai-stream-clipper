@@ -9,6 +9,7 @@ import { Features, Questions } from './Sections'
 import { Pricing } from './Pricing'
 import { Waitlist } from './Waitlist'
 import { useBillingConfig } from './billing'
+import { startMotion } from './motion'
 
 export function App({ initial }: { initial: Preferences }) {
   const [{ language, market }, setPreferences] = useState(initial)
@@ -16,6 +17,9 @@ export function App({ initial }: { initial: Preferences }) {
   const copy = content[language]
   const t = editorial[language]
   const billing = useBillingConfig()
+
+  // Reveal on scroll, header state, current section and parallax (no effect with reduced motion)
+  useEffect(() => startMotion(), [])
 
   useEffect(() => {
     document.documentElement.lang = language
@@ -42,7 +46,7 @@ export function App({ initial }: { initial: Preferences }) {
         <Hero t={t} join={copy.join} />
         <Demo t={t} language={language} caption={t.hero.caption} />
         <Features t={t} />
-        <Pricing copy={copy} market={market} onMarket={next => updatePreferences(language, next)} onInterest={setInterest} billing={billing} language={language} />
+        <Pricing copy={copy} market={market} onMarket={next => updatePreferences(language, next)} onInterest={setInterest} billing={billing} language={language} interest={interest} />
         <Questions t={t.faq} />
         <Waitlist copy={copy} language={language} market={market} interest={interest} onInterest={setInterest} marker={t.waitlistMarker} open={billing.waitlist} />
       </main>

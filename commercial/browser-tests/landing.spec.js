@@ -174,7 +174,7 @@ test('captures the required widths and checks WCAG rules across languages and UI
       expect(texts.filter(text => /[.!]\s*$/.test(text.trim()))).toEqual([])
     }
     const overlap = await page.evaluate(() => {
-      const device = document.querySelector('.device').getBoundingClientRect()
+      const device = document.querySelector('.engine-screen').getBoundingClientRect()
       return [...document.querySelectorAll('.hero h1, .hero h1 span')].some(element => {
         const range = document.createRange()
         range.selectNodeContents(element)
@@ -223,7 +223,7 @@ test('records initial-load metrics and defers the demo video', async ({ page, br
     await document.fonts.ready
     return {
       ...window.previewMetrics,
-      source: document.querySelector('.device-video img').currentSrc.split('/').at(-1),
+      source: document.querySelector('.engine-video img').currentSrc.split('/').at(-1),
       requestedDemoVideo: performance.getEntriesByType('resource').some(entry => entry.name.endsWith('.mp4')),
     }
   })

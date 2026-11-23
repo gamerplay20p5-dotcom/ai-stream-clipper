@@ -1,0 +1,36 @@
+{
+ "mobile": {
+  "fcp": 2984,
+  "lcp": 2984,
+  "cls": 0,
+  "tbt": 1106,
+  "load": 3014,
+  "totalKb": 553,
+  "kb": {
+   "script": 285,
+   "stylesheet": 39,
+   "image": 65,
+   "font": 52,
+   "document": 111,
+   "media": 0,
+   "other": 1
+  }
+ },
+ "desktop": {
+  "fcp": 660,
+  "lcp": 660,
+  "cls": 0.011,
+  "tbt": 70,
+  "load": 615,
+  "totalKb": 645,
+  "kb": {
+   "script": 285,
+   "stylesheet": 39,
+   "image": 158,
+   "font": 52,
+   "document": 111,
+   "media": 0,
+   "other": 1
+  }
+ }
+}
