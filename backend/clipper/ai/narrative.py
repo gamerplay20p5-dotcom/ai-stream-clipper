@@ -82,7 +82,7 @@ def write(manager: ModelManager | None, backend: str, *, vision_model: str | Non
     try:
         import openvino_genai as ov_genai
 
-        pipe, device = manager.acquire(key, cpu_only=cpu_only)
+        pipe, device = manager.acquire(key, cpu_only=True) if cpu_only else manager.acquire(key)
         t0 = time.monotonic()  # generation latency only (load time is tracked by the manager)
         cfg = ov_genai.GenerationConfig()
         cfg.max_new_tokens = 320

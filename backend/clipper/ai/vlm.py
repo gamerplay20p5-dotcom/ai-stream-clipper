@@ -276,7 +276,7 @@ class VLMAnalyzer:
                 max_frames: int | None = None, setup_t: float | None = None, *,
                 classify_event: bool = False, evidence_window: tuple[float, float] | None = None,
                 cpu_only: bool = False) -> VisualAnalysis:
-        pipe, device = self.manager.acquire(self.key, cpu_only=cpu_only)
+        pipe, device = self.manager.acquire(self.key, cpu_only=True) if cpu_only else self.manager.acquire(self.key)
         st = self.manager.stat(self.key)
         budget = min(16, max_frames or self.spec.max_frames)
         anchors = (peak_t, evidence_window[0] - 0.5, evidence_window[1] + 0.5) if evidence_window else ()
