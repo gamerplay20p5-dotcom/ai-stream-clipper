@@ -6,6 +6,13 @@ Every release adds one entry here (kept in the code so it ships with the version
 from __future__ import annotations
 
 NOTES: list[dict] = [
+    {"version": "0.8.2", "date": "2026-11-23", "title": "IA multimodal e controles de produção", "items": [
+        "A descoberta visual pode ser avaliada em um canal por vez, com a configuração global desligada.",
+        "A atualização preserva o cadastro controlado e o vínculo de cobrança com o serviço comercial.",
+    ], "title_en": "Multimodal AI and production controls", "items_en": [
+        "Visual discovery can be evaluated one channel at a time while the global setting is off.",
+        "The update preserves controlled sign-up and the link to the billing service.",
+    ]},
     {"version": "0.8.1", "date": "2026-11-22", "title": "Cadastro público só com autorização", "items": [
         "Configurar o envio de e-mail não abre mais o cadastro público sozinho: ele só abre com ASC_SIGNUP_OPEN=true, depois de publicados os Termos e a Política de Privacidade.",
         "Enquanto o cadastro está fechado, só os e-mails autorizados pela operação podem criar conta (contas controladas de homologação).",

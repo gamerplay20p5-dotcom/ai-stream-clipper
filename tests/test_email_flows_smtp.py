@@ -132,20 +132,29 @@ def signup_closed(monkeypatch):
 
 
 def test_configuring_smtp_does_not_open_public_signup(app, smtp_on, signup_closed):
+    from sqlalchemy import select
+
+    from clipper.db import session_scope
+    from clipper.models import User
+
     anon = TestClient(app)
     config = anon.get("/api/auth/config").json()
     assert config["email_enabled"] is True and config["signup_enabled"] is False
     before = len(smtp_on.messages)
-    r = anon.post("/api/auth/signup", json={"email": f"publico-{uuid.uuid4().hex[:8]}@example.com"})
+    email = f"publico-{uuid.uuid4().hex[:8]}@example.com"
+    r = anon.post("/api/auth/signup", json={"email": email})
     assert r.status_code == 503 and r.json()["detail"] == "cadastro indisponível no momento"
     assert len(smtp_on.messages) == before, "no e-mail while sign-up is closed"
+    with session_scope() as db:
+        assert db.scalar(select(User.id).where(User.email == email)) is None
     # Password recovery keeps working for existing accounts
     assert anon.post("/api/auth/forgot", json={"email": "ninguem@example.com"}).json() == {"email_enabled": True}
 
 
 def test_controlled_account_signs_up_while_public_signup_is_closed(app, smtp_on, signup_closed):
     anon = TestClient(app)
-    assert anon.post("/api/auth/signup", json={"email": "controlada@example.com"}).status_code == 202
+    assert anon.post("/api/auth/signup", json={"email": " Controlada@EXAMPLE.com "}).status_code == 202
+    assert anon.get("/api/auth/config").json()["signup_enabled"] is False
     [m] = [x for x in smtp_on.messages if "controlada@example.com" in x.recipients]
     assert "Confirme seu e-mail" in m.message["Subject"]
     assert anon.post("/api/auth/password-link", json={"token": _token(m), "new_password": "acesso-homologado-forte-7"}).status_code == 200

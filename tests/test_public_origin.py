@@ -26,7 +26,8 @@ def mail(client, monkeypatch):  # client: starts the app (database) for the sess
     sent = []
     monkeypatch.setattr(accounts, "smtp_ready", lambda db: True)
     monkeypatch.setattr(accounts, "send_mail", lambda db, to, subject, text: sent.append((to, text)))
-    return sent
+    yield sent
+    reset_settings_cache()
 
 
 def _admin(app) -> TestClient:

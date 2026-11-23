@@ -136,13 +136,19 @@ def test_infinitepay_payment_activates_and_unpaid_charge_does_not(app, client, c
 
 
 def test_closed_payments_refuse_checkout_through_the_panel(app, client, commercial):
-    commercial(False)
+    from clipper import billing_link
+
+    control = commercial(False)
+    assert billing_link.configured()
     _, c = customer(app)
     for market in ("US", "BR"):
         r = c.post("/api/account/checkout", json={"plan": "basic", "market": market}, headers=CSRF)
         assert r.status_code == 503
         assert r.json()["detail"] == "pagamentos indisponíveis no momento"
     assert sub_state(c)["entitled"] is False
+    assert _control(control, "/state", {"refs": [{"provider": "stripe", "subscription_ref": "sub_existing"}]}) == {
+        "items": []
+    }
 
 
 @pytest.mark.parametrize("plan,channels", [("basic", 1), ("creator", 2), ("pro", 4)])

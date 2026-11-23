@@ -46,9 +46,7 @@ contêiner `asc-api` é recriado (`sudo asc-ctl compose up --gpu api`).
 Como administrador na 210 (gera 64 caracteres aleatórios e não mostra o valor):
 
 ```
-sudo sh -c 'f=/etc/asc/asc.env; grep -q "^ASC_BILLING_SECRET=" "$f" && echo "já existe" || { [ -n "$(tail -c1 "$f")" ] && echo >> "$f"; printf "ASC_BILLING_SECRET=%s
-" "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d " 
-")" >> "$f"; echo "adicionado"; }; stat -c "%U %a" "$f"'
+sudo sh -c 'f=/etc/asc/asc.env; grep -q "^ASC_BILLING_SECRET=" "$f" && echo "já existe" || { [ -n "$(tail -c1 "$f")" ] && echo >> "$f"; printf "ASC_BILLING_SECRET=%s\n" "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d "[:space:]")" >> "$f"; echo "adicionado"; }; stat -c "%U %a" "$f"'
 ```
 
 Depois, recrie só `api` e `commercial` (`sudo asc-ctl compose up --gpu api commercial`).

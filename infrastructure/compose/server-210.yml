@@ -56,7 +56,7 @@ services:
 
   api:
     # The API runs its own tag (0.8.1: sign-up lock; image 0.8.1-r2 = 2nd build, dashboard also 0.8.1) while the other 210 services stay on ASC_IMAGE_TAG.
-    # At the next full release, put the API back on ASC_IMAGE_TAG.
+    # Keep ASC_API_TAG independent so the API and dashboard can be rolled back separately.
     image: ai-stream-clipper:${ASC_API_TAG:-0.8.1-r2}
     container_name: asc-api
     <<: *hardening

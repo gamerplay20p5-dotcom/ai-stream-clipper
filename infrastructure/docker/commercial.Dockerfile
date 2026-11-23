@@ -3,8 +3,10 @@
 #
 #   docker build -f infrastructure/docker/commercial.Dockerfile -t ai-stream-clipper-commercial:1.0.0 .
 
+ARG COMMERCIAL_IMAGE=node:24.13.0-bookworm-slim
+
 # ---------- build: prerendered landing (dist/) ----------
-FROM node:24.13.0-bookworm-slim AS build
+FROM ${COMMERCIAL_IMAGE} AS build
 WORKDIR /src
 COPY commercial/package.json commercial/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -12,7 +14,7 @@ COPY commercial/ ./
 RUN npm run build && npm prune --omit=dev --no-audit --no-fund
 
 # ---------- runtime ----------
-FROM node:24.13.0-bookworm-slim AS runtime
+FROM ${COMMERCIAL_IMAGE} AS runtime
 ENV NODE_ENV=production \
     COMMERCIAL_HOST=0.0.0.0 \
     COMMERCIAL_PORT=8790 \

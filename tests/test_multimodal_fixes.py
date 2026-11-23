@@ -173,9 +173,13 @@ def test_channel_pilot_preference_is_validated(admin):
     assert bad.status_code == 422
 
 
-def test_channel_pilot_preserves_legacy_editorial_settings(admin):
+async def test_channel_pilot_preserves_legacy_editorial_settings(admin, app):
+    import httpx
+
+    from clipper.config import get_settings
     from clipper.db import session_scope
-    from clipper.models import AppSetting, Streamer
+    from clipper.models import AppSetting, Streamer, StreamSession, Worker
+    from clipper.workers.client import InternalClient
     from conftest import CSRF
 
     legacy = {"min_score": 75, "auto_publish": False, "weights": {"surprise": 1.6}, "editor_mode": "off"}
@@ -184,31 +188,52 @@ def test_channel_pilot_preserves_legacy_editorial_settings(admin):
         previous = row.value if row is not None else None
         db.merge(AppSetting(key="ai", value=legacy))
 
-    channel = None
+    channels = []
+    worker_id = "release-pilot-scoring"
+    worker = InternalClient("http://testserver", get_settings().internal_secret, worker_id,
+                            transport=httpx.ASGITransport(app=app))
     try:
         settings = admin.get("/api/settings").json()
         assert settings["min_score"] == 75 and settings["auto_publish"] is False
         assert settings["weights"]["surprise"] == 1.6 and settings["editor_mode"] == "off"
         assert settings["visual_discovery"] == "off"
-        created = admin.post("/api/streamers", json={"url": "https://www.twitch.tv/piloto_isolado"}, headers=CSRF)
-        assert created.status_code == 201, created.text
-        channel = created.json()["id"]
+        sessions = []
+        for name in ("piloto_isolado", "controle_isolado"):
+            created = admin.post("/api/streamers", json={"url": f"https://www.twitch.tv/{name}"}, headers=CSRF)
+            assert created.status_code == 201, created.text
+            channels.append(created.json()["id"])
+            with session_scope() as db:
+                session = StreamSession(streamer_id=channels[-1])
+                db.add(session)
+                db.flush()
+                sessions.append(session.id)
+
+        assert (await worker.post("/internal/workers/register", {"roles": ["scoring"]}))["roles"] == ["scoring"]
+        assert await worker.post("/internal/workers/heartbeat") == {"ok": True}
+        pilot_timeline, control_timeline = [f"/internal/sessions/{sid}/timeline" for sid in sessions]
+        assert admin.get(pilot_timeline).status_code == 401
+
         for mode, effective in (("shadow", "shadow"), ("on", "on"), (None, "off")):
-            result = admin.patch(f"/api/streamers/{channel}", json={"preferences": {"visual_discovery": mode}},
+            result = admin.patch(f"/api/streamers/{channels[0]}", json={"preferences": {"visual_discovery": mode}},
                                  headers=CSRF)
             assert result.status_code == 200, result.text
-            after = admin.get("/api/settings").json()
-            assert after == settings
-            selected = AISettings.model_validate(after).for_channel(result.json()["preferences"])
-            assert selected.visual_discovery == effective and selected.min_score == 75
+            assert admin.get("/api/settings").json() == settings
+            pilot = (await worker.get(pilot_timeline))["settings"]
+            control = (await worker.get(control_timeline))["settings"]
+            assert pilot == {**control, "visual_discovery": effective}
+            assert control["visual_discovery"] == "off"
+            assert pilot["min_score"] == 75 and pilot["auto_publish"] is False
     finally:
+        await worker.aclose()
         with session_scope() as db:
             if previous is not None:
                 db.merge(AppSetting(key="ai", value=previous))
             else:
                 db.delete(db.get(AppSetting, "ai"))
-            if channel is not None:
+            for channel in channels:
                 db.delete(db.get(Streamer, channel))
+            if registered := db.get(Worker, worker_id):
+                db.delete(registered)
 
 
 # ---------------------------------------------------------------- P1: audio worker backpressure

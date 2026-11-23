@@ -1,5 +1,7 @@
 # Implantação controlada das PRs #29 e #31 / Controlled rollout of PRs #29 and #31
 
+Para implantar a release que também incorpora a API 0.8.1-r2 e o comercial, use o roteiro da release unificada. / Use the unified release runbook when deploying the release that also incorporates API 0.8.1-r2 and the commercial service. [Release unificada 0.8.2 / Unified release 0.8.2](UNIFIED_RELEASE.md)
+
 [PT-BR](#pt-br) · [English](#english) · [Comandos / Commands](#comandos--commands)
 
 ## PT-BR
